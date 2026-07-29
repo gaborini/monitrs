@@ -34,4 +34,4 @@ work yet, regardless of what the source contains.
 * Relicensed from GPL-3.0 to dual MIT OR Apache-2.0, matching the Rust ecosystem
   norm and the project's dependency license policy.
 
-[Unreleased]: https://github.com/monitrs/monitrs/commits/main
+[Unreleased]: https://github.com/gaborini/monitrs/commits/main

@@ -15,8 +15,8 @@ edition = "2024"
 rust-version = "1.95"
 license = "MIT OR Apache-2.0"
 authors = ["monitrs contributors"]
-repository = "https://github.com/monitrs/monitrs"
-homepage = "https://github.com/monitrs/monitrs"
+repository = "https://github.com/gaborini/monitrs"
+homepage = "https://github.com/gaborini/monitrs"
 keywords = ["monitoring", "tui", "system", "process", "htop"]
 categories = ["command-line-utilities"]
 

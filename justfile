@@ -38,8 +38,15 @@ doc:
 deny:
     cargo deny check
 
+# Parse every GitHub workflow file. Requires PyYAML.
+#
+# Worth running before every push: an unparseable workflow fails with no line
+# number and only after the push, reported merely as "a workflow file issue".
+check-workflows:
+    python3 .github/scripts/check_workflows.py
+
 # Everything CI runs, in CI order.
-ci: fmt-check check clippy test doc deny
+ci: check-workflows fmt-check check clippy test doc deny
     @echo "all quality gates passed"
 
 # cargo run -p monitrs

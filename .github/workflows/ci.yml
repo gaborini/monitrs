@@ -2,7 +2,7 @@ name: CI
 
 on:
   push:
-    branches: [main]
+    branches: [main, "feat/**"]
   pull_request:
   workflow_dispatch:
 
@@ -20,7 +20,18 @@ env:
   RUST_BACKTRACE: 1
 
 jobs:
-  # Formatting is cheap and unambiguous, so it gates everything else.
+  # A workflow that does not parse fails with no line number and only after a
+  # push, so this runs first and says exactly which file and line is wrong.
+  workflows:
+    name: workflow files parse
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+      - run: python3 -m pip install --quiet pyyaml
+      - run: python3 .github/scripts/check_workflows.py
+
+  # Formatting is cheap and unambiguous, so it gates the expensive jobs.
   fmt:
     name: rustfmt
     runs-on: ubuntu-24.04
@@ -80,16 +91,11 @@ jobs:
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
       - uses: dtolnay/rust-toolchain@4cda84d5c5c54efe2404f9d843567869ab1699d4 # stable
       - name: cargo tree -p crossterm
+        run: cargo tree -p crossterm --workspace || true
+      - name: exactly one crossterm version must resolve
         run: |
-          cargo tree -p crossterm --workspace > crossterm-tree.txt || true
-          cat crossterm-tree.txt
           versions=$(cargo metadata --format-version 1 --all-features \
-            | python3 -c "
-import json,sys
-meta = json.load(sys.stdin)
-found = sorted({p['version'] for p in meta['packages'] if p['name'] == 'crossterm'})
-print(' '.join(found))
-")
+            | python3 .github/scripts/crate_versions.py crossterm)
           echo "resolved crossterm versions: ${versions}"
           count=$(echo "${versions}" | wc -w | tr -d ' ')
           if [ "${count}" -ne 1 ]; then
