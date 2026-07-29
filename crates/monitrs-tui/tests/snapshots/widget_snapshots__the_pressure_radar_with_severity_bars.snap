@@ -1,0 +1,8 @@
+---
+source: crates/monitrs-tui/tests/widget_snapshots.rs
+expression: text_of(&buffer)
+---
+|X CPU     critical      91% [###########################=--]|
+|! MEM     watch     9.3 GiB [#####################=--------]|
+|? NET     n/a         18M/s [..............................]|
+|? PSI-IO  n/a           n/a [..............................]|

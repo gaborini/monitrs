@@ -1,0 +1,12 @@
+---
+source: crates/monitrs-tui/tests/widget_snapshots.rs
+expression: text_of(&buffer)
+---
+|X CPU     critical      91%                                                 |
+|  busy >= 85% sustained for 10 of 15 samples (held 00:12)                   |
+|! MEM     watch     9.3 GiB                                                 |
+|  available < 15% of total for 10 of 15 samples                             |
+|? NET     n/a         18M/s                                                 |
+|  utilization requires a known link speed                                   |
+|? PSI-IO  n/a           n/a                                                 |
+|  Linux PSI is not available here                                           |

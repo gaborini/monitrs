@@ -1,0 +1,8 @@
+---
+source: crates/monitrs-tui/tests/widget_snapshots.rs
+expression: text_of(&buffer)
+---
+|rustc         PID 31842    CPU  287%     +167%  vs 15s                |
+|postgres      PID 1221     CPU  54%        +0%                        |
+|WindowServer  PID 507      CPU  21%        +0%                        |
+|gone          PID 7777     CPU ?n/a                                   |

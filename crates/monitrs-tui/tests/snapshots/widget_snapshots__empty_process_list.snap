@@ -1,0 +1,10 @@
+---
+source: crates/monitrs-tui/tests/widget_snapshots.rs
+expression: text_of(&buffer)
+---
+|      PID USER     S   CPU%  MEM%   RSS  READ/s WRITE/s      AGE NAME                     |
+|                                                                                          |
+|                                                                                          |
+|                                                                                          |
+|                                                                                          |
+|                                                                                          |

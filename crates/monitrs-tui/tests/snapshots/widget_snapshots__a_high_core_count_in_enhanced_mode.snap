@@ -1,0 +1,6 @@
+---
+source: crates/monitrs-tui/tests/widget_snapshots.rs
+expression: text_of(&buffer)
+---
+|CORES 256/3 ▃▃▃▃▃▃▃▃▃▃▃▃▃▃▃▃▃▃▃▃▃▃▃▃▃▃▃▃▃▃▃▃▃▃▃▃▃▃▃▃▃▃▃▃▃▃▃▃▃▃▃▃▃▃▃▃▃▃▃▃▃▃▃▃▃▃▃▃▃▃▃▃▃▃▃▃▃▃▃▃▃▃▃▃▃▃  |
+|                                                                                                    |

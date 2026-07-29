@@ -1,0 +1,16 @@
+---
+source: crates/monitrs-tui/tests/widget_snapshots.rs
+expression: text_of(&buffer)
+---
+|CPU   91% [################################=---]|
+|CPU   91% [##################=-]                |
+|CPU   91% [#######=]                            |
+|CPU   91% [#=]                                  |
+|CPU   91%                                       |
+|CPU                                             |
+|CPU                                             |
+|                                                |
+|MEM !permission denied [.......................]|
+|MEM ! n/a [........]                            |
+|MEM ! n/a                                       |
+|MEM                                             |

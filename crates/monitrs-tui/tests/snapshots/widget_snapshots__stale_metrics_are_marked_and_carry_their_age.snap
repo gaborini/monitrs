@@ -1,0 +1,10 @@
+---
+source: crates/monitrs-tui/tests/widget_snapshots.rs
+expression: text
+---
+|CPU ~44% ~00:05 [###############################=----------------------------------------]|
+|MEM ~71% ~00:05 [###################################################=--------------------]|
+|CPU                                                :---====+++***###%%%%%###***+++====---:|
+|      PID USER     S   CPU%  MEM%   RSS  READ/s WRITE/s      AGE NAME                     |
+|    31842 gabor    S  ~120%  8.1%  2.6G   21M/s   42M/s    01:08 rustc                    |
+|     1221 postgres S   ~54%  3.0%  982M  7.7M/s   15M/s    01:08 postgres                 |

@@ -17,6 +17,12 @@ tracing.workspace = true
 unicode-width.workspace = true
 
 [dev-dependencies]
+# Test-only. §17.3 requires UI snapshots of states a real machine cannot be put
+# into on demand, and §17.5 requires a deterministic fake collector rather than
+# hand-built snapshots; `FakeCollector` is that fake. This is a dev-dependency
+# only, so §10.1's dependency direction (monitrs-tui -> monitrs-core, and nothing
+# about how /proc is parsed) still holds for the shipped library.
+monitrs-collectors.workspace = true
 insta.workspace = true
 proptest.workspace = true
 

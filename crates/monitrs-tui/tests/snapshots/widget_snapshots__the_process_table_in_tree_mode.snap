@@ -1,0 +1,12 @@
+---
+source: crates/monitrs-tui/tests/widget_snapshots.rs
+expression: text_of(&buffer)
+---
+|      PID USER     S   CPU%  MEM%   RSS  READ/s WRITE/s  THR      AGE NAME                          |
+|        1 gabor    S   0.1%  0.1%   32M  256K/s  512K/s    4    01:03 launchd                       |
+|      500 gabor    S   1.0%  0.1%   32M  256K/s  512K/s    4    01:03 ├─ sshd                       |
+|      501 gabor    S   2.0%  0.1%   32M  256K/s  512K/s    4    01:03 │ └─ bash                     |
+|▸     502 gabor    S   9.0%  0.1%   32M  256K/s  512K/s    4    01:03 │   └─ cargo                  |
+|      503 gabor    S   287%  0.1%   32M  256K/s  512K/s    4    01:03 │     └─ rustc                |
+|      600 gabor    S     0%  0.1%   32M  256K/s  512K/s    4    01:03 └─ cron                       |
+|                                                                                                    |

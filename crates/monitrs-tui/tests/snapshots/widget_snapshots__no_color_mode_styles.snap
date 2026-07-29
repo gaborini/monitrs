@@ -1,0 +1,8 @@
+---
+source: crates/monitrs-tui/tests/widget_snapshots.rs
+expression: styles_of(&buffer)
+---
+ 0: 1xReset/Reset/DIM 1xReset/Reset/NONE 7xReset/Reset/DIM 1xReset/Reset/NONE 8xReset/Reset/DIM 1xReset/Reset/NONE 1xReset/Reset/DIM 1xReset/Reset/NONE 6xReset/Reset/DIM 1xReset/Reset/NONE 5xReset/Reset/DIM 1xReset/Reset/NONE 5xReset/Reset/DIM 1xReset/Reset/NONE 7xReset/Reset/DIM 1xReset/Reset/NONE 7xReset/Reset/DIM 1xReset/Reset/NONE 24xReset/Reset/DIM
+ 1: 2xReset/Reset/REVERSED 7xReset/Reset/DIM | REVERSED 10xReset/Reset/REVERSED 1xReset/Reset/DIM | REVERSED 20xReset/Reset/REVERSED 7xReset/Reset/BOLD | REVERSED 1xReset/Reset/REVERSED 7xReset/Reset/BOLD | REVERSED 25xReset/Reset/REVERSED
+ 2: 2xReset/Reset/NONE 7xReset/Reset/DIM 10xReset/Reset/NONE 1xReset/Reset/DIM 20xReset/Reset/NONE 7xReset/Reset/BOLD 1xReset/Reset/NONE 7xReset/Reset/BOLD 25xReset/Reset/NONE
+ 3: 2xReset/Reset/NONE 7xReset/Reset/DIM 10xReset/Reset/NONE 1xReset/Reset/DIM 20xReset/Reset/NONE 7xReset/Reset/BOLD 1xReset/Reset/NONE 7xReset/Reset/BOLD 25xReset/Reset/NONE

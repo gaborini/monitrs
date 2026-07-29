@@ -1,0 +1,14 @@
+---
+source: crates/monitrs-tui/tests/widget_snapshots.rs
+expression: text
+---
+|CPU !permission denied [.................................................................]|
+|MEM   71% [#######################################################=----------------------]|
+|? CPU     n/a           n/a                                                               |
+|! MEM     watch     9.3 GiB                                                               |
+|? NET     n/a         18M/s                                                               |
+|? PSI-IO  n/a           n/a                                                               |
+|      PID USER     S   CPU%  MEM%   RSS  READ/s WRITE/s      AGE NAME                     |
+|    31842 gabor    S   120%  8.1%  2.6G     n/a     n/a    01:03 rustc                    |
+|     1221 postgres S    54%  3.0%  982M     n/a     n/a    01:03 postgres                 |
+|      507 gabor    S    21%  4.1%  1.3G     n/a     n/a    01:03 WindowServer             |

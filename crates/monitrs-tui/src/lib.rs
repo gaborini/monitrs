@@ -61,6 +61,7 @@ pub mod keymap;
 pub mod layout;
 pub mod terminal;
 pub mod theme;
+pub mod widgets;
 
 pub use action::{Action, Effect, Effects, Seek, SignalKind, SortField, ViewId};
 pub use event::{Event, Key, KeyPress, TerminalEvent};

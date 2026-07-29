@@ -1,0 +1,12 @@
+---
+source: crates/monitrs-tui/tests/widget_snapshots.rs
+expression: text
+---
+|CPU .warming up [........................................................................]|
+|MEM .warming up [........................................................................]|
+|CPU                                                                                       |
+|? CPU     n/a           n/a                                                               |
+|? MEM     n/a           n/a                                                               |
+|      PID USER     S   CPU%  MEM%   RSS  READ/s WRITE/s      AGE NAME                     |
+|    31842 gabor    S    n/a  8.1%  2.6G     n/a     n/a    01:00 rustc                    |
+|     1221 postgres S    n/a  3.0%  982M     n/a     n/a    01:00 postgres                 |

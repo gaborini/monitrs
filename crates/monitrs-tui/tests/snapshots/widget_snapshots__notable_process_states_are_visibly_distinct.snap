@@ -1,0 +1,13 @@
+---
+source: crates/monitrs-tui/tests/widget_snapshots.rs
+expression: combined
+---
+|      PID USER     S   CPU%  MEM%   RSS  READ/s WRITE/s  THR      AGE NAME                          |
+|      100 gabor    S   3.0%  0.1%   32M  256K/s  512K/s    4    01:03 healthy                       |
+|Z     200 gabor    Z     0%  0.1%   32M  256K/s  512K/s    4    01:03 defunct                       |
+|D     300 gabor    D     0%  0.1%   32M  256K/s  512K/s    4    01:03 blocked-on-nfs                |
+---
+|      PID   CPU% NAME         |
+|      100   3.0% healthy      |
+|Z     200     0% defunct      |
+|D     300     0% blocked-on...|

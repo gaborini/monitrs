@@ -1,0 +1,8 @@
+---
+source: crates/monitrs-tui/tests/widget_snapshots.rs
+expression: text_of(&buffer)
+---
+|      PID USER     S   CPU%  MEM%   RSS  READ/s WRITE/s  THR      AGE NAME                          |
+|     4242 gabor    S    42%  1.6%  512M  4.0M/s  8.0M/s    4    01:03 日本語のプロセス名            |
+|     4243 gabor    S   7.5%  0.2%   64M  512K/s  1.0M/s    4    01:03 ascii-sibling                 |
+|                                                                                                    |

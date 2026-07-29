@@ -1,0 +1,13 @@
+---
+source: crates/monitrs-tui/tests/widget_snapshots.rs
+expression: text_of(&buffer)
+---
+|      PID USER     S   CPU%  MEM%   RSS  READ/s WRITE/s  THR      AGE NAME                          |
+|      100 gabor    S   1.0%  0.0%  1.0K  8.2K/s   16K/s    4    01:03 just-under-kib                |
+|      101 gabor    S   1.0%  0.0%  1.0K  8.2K/s   16K/s    4    01:03 exactly-kib                   |
+|      102 gabor    S   1.0%  0.0%  1.0M  8.2K/s   16K/s    4    01:03 just-under-mib                |
+|      103 gabor    S   1.0%  0.0%  1.0M  8.2K/s   16K/s    4    01:03 exactly-mib                   |
+|      104 gabor    S   1.0%  3.1%  1.1G  8.4M/s   17M/s    4    01:03 just-under-gib                |
+|      105 gabor    S   1.0%  3.1%  1.1G  8.4M/s   17M/s    4    01:03 exactly-gib                   |
+|      106 gabor    S   1.0% 53...   18E  144P/s  288P/s    4    01:03 largest-possible              |
+|                                                                                                    |
