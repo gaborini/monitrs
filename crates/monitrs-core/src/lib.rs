@@ -30,6 +30,7 @@
 // so the allowance is scoped to `cfg(test)` only (§18.2: narrow allowances).
 #![cfg_attr(test, allow(clippy::expect_used, clippy::unwrap_used))]
 
+pub mod history;
 pub mod model;
 pub mod process;
 pub mod rates;
