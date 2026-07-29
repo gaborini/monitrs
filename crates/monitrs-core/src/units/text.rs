@@ -105,7 +105,7 @@ pub fn truncate_tail(text: &str, max_width: usize, ellipsis: Ellipsis) -> String
 }
 
 /// Truncates from the middle, keeping both ends:
-/// `/Users/lg/pgit/monitrs/target/debug/monitrs` -> `/Users/lg/.../monitrs`.
+/// `/opt/build/monitrs/target/debug/monitrs` -> `/opt/buil.../monitrs`.
 ///
 /// Used for full command lines and paths, where the leading directory and the
 /// trailing file or argument both carry information (§5.4).
@@ -195,10 +195,10 @@ mod tests {
 
     #[test]
     fn middle_truncation_keeps_both_ends() {
-        let path = "/Users/lg/pgit/monitrs/target/debug/monitrs";
+        let path = "/opt/build/monitrs/target/debug/monitrs";
         let out = truncate_middle(path, 20, Ellipsis::Ascii);
         assert_eq!(display_width(&out), 20, "{out:?}");
-        assert!(out.starts_with("/Users"), "{out:?}");
+        assert!(out.starts_with("/opt"), "{out:?}");
         assert!(out.ends_with("monitrs"), "{out:?}");
         assert!(out.contains("..."), "{out:?}");
     }

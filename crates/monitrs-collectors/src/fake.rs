@@ -951,7 +951,7 @@ impl SnapshotSource for FakeCollector {
             });
 
         let mut detail = ProcessDetail::pending(identity, SystemTime::UNIX_EPOCH);
-        detail.working_directory = MetricState::Available("/Users/gabor/pgit/monitrs".into());
+        detail.working_directory = MetricState::Available("/Users/dev/pgit/monitrs".into());
         detail.root = MetricState::Available("/".into());
         detail.open_files = MetricState::Available(42);
         detail.sockets = MetricState::Available(3);
