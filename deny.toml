@@ -16,8 +16,17 @@ ignore = []
 
 [licenses]
 version = 2
-# Every entry must be redistributable under a dual MIT/Apache-2.0 binary
-# release (§13, §19.2). Copyleft licenses are absent on purpose.
+# Every entry must be redistributable inside a dual MIT/Apache-2.0 binary release
+# (§13, §19.2). Strong copyleft — GPL, AGPL, LGPL as a sole license — is absent on
+# purpose and is what forced the relicensing recorded in ADR 0002.
+#
+# MPL-2.0 is allowed, and the distinction matters. It is *file-level* copyleft: its
+# obligation is to publish modifications to the MPL-licensed files themselves, and
+# §3.2 explicitly permits distributing the executable under different terms. It
+# does not reach our code. Exactly one crate in the graph is MPL-only —
+# `option-ext`, reached through `directories`, which §13 itself names as the
+# preferred crate for config directories — and monitrs does not modify it.
+# `termina` is `MIT OR MPL-2.0` and is taken as MIT.
 allow = [
     "MIT",
     "MIT-0",
@@ -30,8 +39,13 @@ allow = [
     "Unicode-3.0",
     "Unicode-DFS-2016",
     "CC0-1.0",
+    "MPL-2.0",
 ]
 confidence-threshold = 0.93
+# An entry that nothing currently uses is not a problem — it means one fewer
+# surprise when a dependency changes. Without this, every unused entry above
+# becomes a warning and buries the one line that matters.
+unused-allowed-license = "allow"
 
 [bans]
 multiple-versions = "warn"

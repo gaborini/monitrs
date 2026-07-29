@@ -12,7 +12,6 @@ repository.workspace = true
 monitrs-core.workspace = true
 sysinfo.workspace = true
 thiserror.workspace = true
-tracing.workspace = true
 
 [target.'cfg(target_os = "macos")'.dependencies]
 libc = { workspace = true, optional = true }

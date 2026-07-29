@@ -239,3 +239,40 @@ against.
 
 **Revisit if** a real-world process name renders visibly wrongly rather than
 merely imperfectly.
+
+---
+
+## 0014 — MPL-2.0 is allowed in the dependency graph; strong copyleft is not
+
+**Accepted.** Refines 0002, whose "no copyleft license" wording was too broad.
+
+`cargo deny check` rejected the build over one crate: `option-ext` 0.2.0, MPL-2.0,
+reached through `dirs-sys` from `directories` — which §13 itself names as the
+preferred crate for configuration directories.
+
+MPL-2.0 is allowed. The distinction from GPL is not a technicality:
+
+* MPL is **file-level** copyleft. Its obligation is to publish modifications to the
+  MPL-licensed files themselves. It does not reach code that merely links against
+  them.
+* §3.2 explicitly permits distributing the executable under different terms,
+  provided recipients' rights to the MPL source are not restricted. They are not:
+  the source is on crates.io, and monitrs does not modify it.
+
+So a dual MIT/Apache-2.0 release containing this crate is sound. Exactly one crate
+in the resolved graph is MPL-only; `termina` is `MIT OR MPL-2.0` and resolves as
+MIT.
+
+**Strong copyleft remains disallowed** — GPL, AGPL, and LGPL as a sole license.
+That is the constraint that forced the relicensing in 0002, and it is unchanged.
+
+The alternatives were considered and rejected: dropping `directories` would
+contradict §13's explicit crate choice, and hand-rolling the config path would trade
+a real licensing non-problem for platform-specific code to maintain.
+
+`unused-allowed-license = "allow"` was set at the same time. Without it, every
+forward-looking entry in the allow list becomes a warning and buries the one line
+that matters — which is exactly what happened on the first run.
+
+**Revisit if** a future dependency is MPL-only *and* monitrs needs to modify it,
+which would bring the file-level obligation into play for the first time.
