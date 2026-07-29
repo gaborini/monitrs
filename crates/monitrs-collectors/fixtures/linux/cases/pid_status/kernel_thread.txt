@@ -1,0 +1,13 @@
+Name:	kthreadd
+Umask:	0000
+State:	S (sleeping)
+Tgid:	2
+Pid:	2
+PPid:	0
+Uid:	0	0	0	0
+Gid:	0	0	0	0
+FDSize:	64
+Kthread:	1
+Threads:	1
+voluntary_ctxt_switches:	12043
+nonvoluntary_ctxt_switches:	3

@@ -1,0 +1,36 @@
+Name:	rustc
+Umask:	0022
+State:	R (running)
+Tgid:	4242
+Ngid:	0
+Pid:	4242
+PPid:	1221
+TracerPid:	0
+Uid:	1000	1000	1000	1000
+Gid:	1000	1000	1000	1000
+FDSize:	256
+Groups:	4 24 27 1000
+NStgid:	4242
+NSpid:	4242
+NSpgid:	4242
+NSsid:	4242
+Kthread:	0
+VmPeak:	 2831156 kB
+VmSize:	 2764644 kB
+VmLck:	       0 kB
+VmPin:	       0 kB
+VmHWM:	  680000 kB
+VmRSS:	  625664 kB
+RssAnon:	  600000 kB
+RssFile:	   25664 kB
+RssShmem:	       0 kB
+VmData:	 1800000 kB
+VmStk:	     132 kB
+VmExe:	    1024 kB
+VmLib:	   62000 kB
+VmPTE:	    2048 kB
+VmSwap:	   10240 kB
+Threads:	9
+SigQ:	0/128145
+voluntary_ctxt_switches:	48213
+nonvoluntary_ctxt_switches:	1204

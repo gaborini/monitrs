@@ -1,0 +1,8 @@
+Name:	rustc
+Umask:	0022
+State:	R (running)
+Tgid:	4242
+Ngid:	0
+Pid:	4242
+PPid:	1221
+Uid:	1000	1000	100

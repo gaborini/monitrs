@@ -1,0 +1,11 @@
+Name:	((weird) name) with spaces
+State:	S (sleeping)
+Tgid:	9182
+Pid:	9182
+PPid:	1
+Uid:	1000	1000	1000	1000
+Gid:	1000	1000	1000	1000
+Kthread:	0
+VmSize:	  120563 kB
+VmRSS:	    4096 kB
+Threads:	4

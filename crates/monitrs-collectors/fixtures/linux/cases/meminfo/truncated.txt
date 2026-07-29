@@ -1,0 +1,3 @@
+MemTotal:       32784156 kB
+MemFree:         1204988 kB
+MemAvai
