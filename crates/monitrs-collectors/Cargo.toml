@@ -1,0 +1,31 @@
+[package]
+name = "monitrs-collectors"
+description = "Platform collectors (sysinfo baseline, Linux /proc, macOS native) for monitrs"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+
+[dependencies]
+monitrs-core.workspace = true
+sysinfo.workspace = true
+thiserror.workspace = true
+tracing.workspace = true
+
+[target.'cfg(target_os = "macos")'.dependencies]
+libc = { workspace = true, optional = true }
+
+[dev-dependencies]
+monitrs-core = { workspace = true, features = ["serde"] }
+
+[features]
+default = ["linux-native", "macos-native"]
+# Native /proc and /sys enrichment beyond the sysinfo baseline. No-op off Linux.
+linux-native = []
+# Documented libc/sysctl enrichment beyond the sysinfo baseline. No-op off macOS.
+macos-native = ["dep:libc"]
+
+[lints]
+workspace = true

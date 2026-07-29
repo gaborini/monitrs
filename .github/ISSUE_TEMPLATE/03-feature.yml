@@ -1,0 +1,45 @@
+name: Feature request
+description: Suggest something monitrs should do.
+labels: [enhancement]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Some things are deliberately out of scope for v1 and will be closed as
+        such: Windows support, a resident daemon, persisting history across
+        launches, eBPF in the default binary, per-process network attribution,
+        packet capture, running shell commands from configuration, and killing
+        process trees with one keypress. See `docs/architecture.md`.
+
+  - type: textarea
+    id: problem
+    attributes:
+      label: What problem are you trying to solve
+      description: >
+        Describe the situation you are in, not the feature. The best solution is
+        often not the one first imagined.
+    validations:
+      required: true
+
+  - type: textarea
+    id: proposal
+    attributes:
+      label: What you have in mind
+    validations:
+      required: true
+
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: What you tried instead
+      description: Existing keys, filters, config, or other tools.
+
+  - type: checkboxes
+    id: constraints
+    attributes:
+      label: Does this fit monitrs's constraints
+      options:
+        - label: It works without root, or degrades honestly without it.
+        - label: It needs no network access and sends no telemetry.
+        - label: It can be rendered legibly at 80x24 and without color.
+        - label: It does not require a metric the OS cannot actually provide.

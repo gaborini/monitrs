@@ -1,0 +1,25 @@
+[package]
+name = "monitrs-core"
+description = "Platform-neutral data model, rate engine, history ring, and diagnostics for monitrs"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+
+[dependencies]
+serde = { workspace = true, optional = true }
+thiserror.workspace = true
+unicode-width.workspace = true
+
+[dev-dependencies]
+proptest.workspace = true
+serde_json.workspace = true
+
+[features]
+default = []
+serde = ["dep:serde"]
+
+[lints]
+workspace = true

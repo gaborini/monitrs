@@ -1,0 +1,48 @@
+[package]
+name = "monitrs"
+description = "A fast, keyboard-first system cockpit for Linux and macOS"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+homepage.workspace = true
+keywords.workspace = true
+categories.workspace = true
+readme = "../../README.md"
+
+[[bin]]
+name = "monitrs"
+path = "src/main.rs"
+
+[dependencies]
+monitrs-core = { workspace = true, features = ["serde"] }
+monitrs-collectors.workspace = true
+monitrs-tui.workspace = true
+
+clap.workspace = true
+clap_complete.workspace = true
+clap_mangen.workspace = true
+color-eyre.workspace = true
+crossbeam-channel.workspace = true
+crossterm.workspace = true
+directories.workspace = true
+ratatui.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+toml.workspace = true
+tracing.workspace = true
+tracing-appender.workspace = true
+tracing-subscriber.workspace = true
+
+[dev-dependencies]
+insta.workspace = true
+
+[features]
+default = ["linux-native", "macos-native"]
+linux-native = ["monitrs-collectors/linux-native"]
+macos-native = ["monitrs-collectors/macos-native"]
+
+[lints]
+workspace = true

@@ -1,0 +1,116 @@
+[workspace]
+resolver = "3"
+members = [
+    "crates/monitrs-core",
+    "crates/monitrs-collectors",
+    "crates/monitrs-tui",
+    "crates/monitrs",
+]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2024"
+# MSRV. Raised to 1.95 by `sysinfo` 0.39, which is the highest floor in the
+# resolved graph. Verified by the `msrv` CI job, not by assumption.
+rust-version = "1.95"
+license = "MIT OR Apache-2.0"
+authors = ["monitrs contributors"]
+repository = "https://github.com/monitrs/monitrs"
+homepage = "https://github.com/monitrs/monitrs"
+keywords = ["monitoring", "tui", "system", "process", "htop"]
+categories = ["command-line-utilities"]
+
+[workspace.dependencies]
+# --- internal ---
+monitrs-core = { version = "0.1.0", path = "crates/monitrs-core" }
+monitrs-collectors = { version = "0.1.0", path = "crates/monitrs-collectors" }
+monitrs-tui = { version = "0.1.0", path = "crates/monitrs-tui" }
+
+# --- terminal ---
+# `crossterm_0_29` is ratatui 0.30's compatibility feature. Pinning it here is
+# what guarantees the workspace resolves exactly one crossterm major version;
+# `cargo tree -p crossterm` is asserted in CI (see .github/workflows/ci.yml).
+ratatui = { version = "0.30.2", default-features = false, features = [
+    "crossterm_0_29",
+    "layout-cache",
+    "underline-color",
+] }
+crossterm = { version = "0.29.0", default-features = false, features = ["events"] }
+
+# --- system metrics ---
+# `multithread` (rayon) is deliberately omitted: §16.3 forbids optimizing on
+# intuition. Revisit only if profiling at 10k processes shows refresh is the
+# bottleneck.
+sysinfo = { version = "0.39.6", default-features = false, features = [
+    "system",
+    "disk",
+    "network",
+    "user",
+    "component",
+] }
+libc = "0.2.189"
+
+# --- cli / config ---
+clap = { version = "4.6.4", features = ["derive", "wrap_help"] }
+clap_complete = "4.6.4"
+clap_mangen = "0.2.32"
+serde = { version = "1.0.229", features = ["derive"] }
+serde_json = "1.0.151"
+toml = { version = "1.1.4", default-features = false, features = ["parse", "serde"] }
+directories = "6.0.0"
+
+# --- errors / logging ---
+thiserror = "2.0.19"
+color-eyre = { version = "0.6.5", default-features = false }
+tracing = { version = "0.1.44", default-features = false, features = ["std", "attributes"] }
+tracing-subscriber = { version = "0.3.23", default-features = false, features = [
+    "fmt",
+    "ansi",
+    "env-filter",
+    "registry",
+] }
+tracing-appender = "0.2.5"
+
+# --- plumbing ---
+crossbeam-channel = "0.5.16"
+unicode-width = "0.2.2"
+
+# --- dev ---
+insta = { version = "1.48.0", features = ["yaml"] }
+proptest = "1.11.0"
+criterion = { version = "0.8.2", default-features = false, features = ["cargo_bench_support"] }
+
+# Lints shared by every crate. `unsafe_code` is intentionally NOT set here:
+# monitrs-core and monitrs-tui `#![forbid(unsafe_code)]` at the crate root, and
+# monitrs-collectors needs narrowly scoped FFI (§15.3).
+[workspace.lints.rust]
+missing_debug_implementations = "warn"
+rust_2018_idioms = "warn"
+unreachable_pub = "warn"
+unused_qualifications = "warn"
+
+[workspace.lints.clippy]
+# Correctness-oriented lints only. §18.2 forbids blanket pedantic lints, so
+# `cast_precision_loss` and `indexing_slicing` are deliberately absent: they
+# fire on every u64->f64 percentage and every slice window in this codebase and
+# would only generate noisy `allow` attributes.
+all = { level = "warn", priority = -1 }
+cast_possible_truncation = "warn"
+cast_possible_wrap = "warn"
+cast_sign_loss = "warn"
+float_cmp = "warn"
+undocumented_unsafe_blocks = "deny"
+unwrap_used = "warn"
+expect_used = "warn"
+
+[profile.release]
+lto = "thin"
+codegen-units = 1
+strip = "symbols"
+# `panic` is deliberately left at the default "unwind": terminal restoration
+# depends on unwinding through the panic hook (§19.4, §14.3).
+
+[profile.bench]
+inherits = "release"
+debug = true
+strip = "none"

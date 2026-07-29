@@ -1,0 +1,187 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+# §18.4: least privilege. No job here needs to write anything.
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  CARGO_TERM_COLOR: always
+  CARGO_INCREMENTAL: 0
+  RUST_BACKTRACE: 1
+
+jobs:
+  # Formatting is cheap and unambiguous, so it gates everything else.
+  fmt:
+    name: rustfmt
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+      - uses: dtolnay/rust-toolchain@4cda84d5c5c54efe2404f9d843567869ab1699d4 # stable
+        with:
+          components: rustfmt
+      - run: cargo fmt --all -- --check
+
+  test:
+    name: test (${{ matrix.name }})
+    needs: fmt
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: linux-x86_64
+            runner: ubuntu-24.04
+          - name: macos-arm64
+            runner: macos-15
+          # §4 lists macOS x86_64 as Tier 1. GitHub's Intel macOS runners are
+          # being retired, so it is covered as a cross-compile in `build` below
+          # and by a real run only if an Intel runner is available.
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+      - uses: dtolnay/rust-toolchain@4cda84d5c5c54efe2404f9d843567869ab1699d4 # stable
+        with:
+          components: clippy
+      - uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32 # v2
+        with:
+          key: ${{ matrix.name }}
+      - run: cargo check --workspace --all-targets
+      - run: cargo clippy --workspace --all-targets --all-features -- -D warnings
+      - run: cargo test --workspace --all-features
+      - run: cargo doc --workspace --no-deps
+        env:
+          RUSTDOCFLAGS: -D warnings
+
+      # §17.6: platform smoke tests must run on real runners. They are marked
+      # `#[ignore]` so a developer's `cargo test` stays hermetic and fast.
+      - name: platform smoke tests
+        run: cargo test --workspace --all-features -- --ignored --test-threads=1
+
+  # §13 requires an explicit check that the workspace resolves exactly one
+  # crossterm major version, because ratatui 0.30 selects it via a feature and a
+  # mismatch produces confusing type errors rather than a clear failure.
+  crossterm-version:
+    name: single crossterm version
+    needs: fmt
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+      - uses: dtolnay/rust-toolchain@4cda84d5c5c54efe2404f9d843567869ab1699d4 # stable
+      - name: cargo tree -p crossterm
+        run: |
+          cargo tree -p crossterm --workspace > crossterm-tree.txt || true
+          cat crossterm-tree.txt
+          versions=$(cargo metadata --format-version 1 --all-features \
+            | python3 -c "
+import json,sys
+meta = json.load(sys.stdin)
+found = sorted({p['version'] for p in meta['packages'] if p['name'] == 'crossterm'})
+print(' '.join(found))
+")
+          echo "resolved crossterm versions: ${versions}"
+          count=$(echo "${versions}" | wc -w | tr -d ' ')
+          if [ "${count}" -ne 1 ]; then
+            echo "::error::expected exactly one crossterm version, resolved ${count}: ${versions}"
+            exit 1
+          fi
+
+  msrv:
+    name: MSRV
+    needs: fmt
+    runs-on: ubuntu-24.04
+    timeout-minutes: 25
+    # RUSTUP_TOOLCHAIN takes precedence over rust-toolchain.toml, which pins
+    # `stable` for development. Without this the job would silently test stable.
+    env:
+      RUSTUP_TOOLCHAIN: 1.95.0
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+      - uses: dtolnay/rust-toolchain@4cda84d5c5c54efe2404f9d843567869ab1699d4 # stable
+        with:
+          toolchain: 1.95.0
+      - uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32 # v2
+        with:
+          key: msrv
+      - name: verify the declared rust-version is the real one
+        run: |
+          rustc --version
+          cargo check --workspace --all-targets --all-features
+      - run: cargo test --workspace --all-features
+
+  build:
+    name: build ${{ matrix.target }}
+    needs: fmt
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - target: x86_64-unknown-linux-gnu
+            runner: ubuntu-24.04
+          - target: aarch64-unknown-linux-gnu
+            runner: ubuntu-24.04-arm
+          # Tier 2, best-effort static binary (§4).
+          - target: x86_64-unknown-linux-musl
+            runner: ubuntu-24.04
+          - target: aarch64-unknown-linux-musl
+            runner: ubuntu-24.04-arm
+          - target: aarch64-apple-darwin
+            runner: macos-15
+          - target: x86_64-apple-darwin
+            runner: macos-15
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+      - uses: dtolnay/rust-toolchain@4cda84d5c5c54efe2404f9d843567869ab1699d4 # stable
+        with:
+          targets: ${{ matrix.target }}
+      - uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32 # v2
+        with:
+          key: build-${{ matrix.target }}
+      - name: install musl tooling
+        if: endsWith(matrix.target, '-musl')
+        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends musl-tools
+      - run: cargo build --locked --release --target ${{ matrix.target }}
+
+  deny:
+    name: cargo-deny
+    needs: fmt
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+      - uses: dtolnay/rust-toolchain@4cda84d5c5c54efe2404f9d843567869ab1699d4 # stable
+      - uses: taiki-e/install-action@065d6a08a14e61e89fb0a4c10eecdbdef39c7d8e # v2
+        with:
+          tool: cargo-deny
+      - run: cargo deny check
+
+  # §18.2: deny unused dependencies. Runs on nightly because `cargo udeps`
+  # requires it, and is advisory rather than blocking for that reason.
+  unused-deps:
+    name: unused dependencies (advisory)
+    needs: fmt
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    continue-on-error: true
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+      - uses: dtolnay/rust-toolchain@4cda84d5c5c54efe2404f9d843567869ab1699d4 # stable
+        with:
+          toolchain: nightly
+      - uses: taiki-e/install-action@065d6a08a14e61e89fb0a4c10eecdbdef39c7d8e # v2
+        with:
+          tool: cargo-udeps
+      - run: cargo +nightly udeps --workspace --all-targets --all-features

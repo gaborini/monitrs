@@ -1,0 +1,9 @@
+# Development toolchain. This pins the *development* channel only.
+#
+# NOTE for CI: this file overrides `cargo +<version>`. The MSRV job must set the
+# `RUSTUP_TOOLCHAIN` environment variable instead, which takes precedence over
+# rust-toolchain.toml. See .github/workflows/ci.yml.
+[toolchain]
+channel = "stable"
+components = ["rustfmt", "clippy"]
+profile = "minimal"

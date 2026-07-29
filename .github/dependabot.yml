@@ -1,0 +1,21 @@
+version: 2
+updates:
+  - package-ecosystem: cargo
+    directory: /
+    schedule:
+      interval: weekly
+    open-pull-requests-limit: 5
+    groups:
+      # A single PR per ecosystem area keeps review focused and avoids six
+      # separate PRs that each need the full CI matrix.
+      patch-and-minor:
+        applies-to: version-updates
+        update-types: [patch, minor]
+
+  # §18.4 pins actions to commit SHAs, which means they cannot be updated by
+  # reading a tag. Dependabot understands pinned SHAs and will bump them.
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+    open-pull-requests-limit: 5

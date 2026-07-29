@@ -1,0 +1,84 @@
+name: Bug report
+description: Something in monitrs does not work.
+labels: [bug]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        If a *number* looks wrong rather than the program misbehaving, please use
+        the "Incorrect metric" template instead — those need different details.
+
+  - type: textarea
+    id: what-happened
+    attributes:
+      label: What happened
+      description: What you did, what you expected, and what you got.
+    validations:
+      required: true
+
+  - type: textarea
+    id: reproduce
+    attributes:
+      label: Steps to reproduce
+      placeholder: |
+        1. Launch `monitrs --ascii`
+        2. Press `/` and type `rustc`
+        3. ...
+    validations:
+      required: true
+
+  - type: input
+    id: version
+    attributes:
+      label: monitrs version
+      description: Output of `monitrs --version`.
+    validations:
+      required: true
+
+  - type: dropdown
+    id: os
+    attributes:
+      label: Operating system
+      options: [Linux, macOS, Other]
+    validations:
+      required: true
+
+  - type: input
+    id: os-detail
+    attributes:
+      label: OS version and architecture
+      placeholder: "macOS 26.5.2 arm64, or Debian 13 x86_64"
+    validations:
+      required: true
+
+  - type: input
+    id: terminal
+    attributes:
+      label: Terminal, multiplexer, and size
+      description: A surprising number of rendering bugs are terminal-specific.
+      placeholder: "Ghostty 1.2 inside tmux 3.5, 120x40, over SSH"
+    validations:
+      required: true
+
+  - type: textarea
+    id: environment
+    attributes:
+      label: Relevant environment
+      placeholder: "TERM=, COLORTERM=, LANG=, NO_COLOR="
+
+  - type: textarea
+    id: config
+    attributes:
+      label: Configuration
+      description: Output of `monitrs config path` and the contents, if you have one.
+      render: toml
+
+  - type: checkboxes
+    id: privacy
+    attributes:
+      label: Before you submit
+      options:
+        - label: >
+            I have removed anything sensitive. Process command lines can contain
+            credentials, and monitrs never asks you to include them.
+          required: true

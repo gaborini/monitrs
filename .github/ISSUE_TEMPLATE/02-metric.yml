@@ -1,0 +1,62 @@
+name: Incorrect metric
+description: A number monitrs reports disagrees with another tool or with reality.
+labels: [metric]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Before filing, please skim [`docs/metrics.md`](../../docs/metrics.md).
+        Many apparent disagreements are real definitional differences that monitrs
+        documents deliberately — for example, Linux `used` memory excludes page
+        cache, and process CPU is normalized so one busy core reads 100%.
+
+        Reporting one anyway is fine. Knowing you have read the definition tells
+        us whether the bug is in the number or in how we explain it.
+
+  - type: input
+    id: metric
+    attributes:
+      label: Which metric
+      placeholder: "process RSS, memory available, disk busy, network rx rate"
+    validations:
+      required: true
+
+  - type: textarea
+    id: comparison
+    attributes:
+      label: What monitrs shows vs what you expected
+      description: >
+        Include the other tool's exact output and how you invoked it, so the two
+        definitions can be compared rather than guessed at.
+      placeholder: |
+        monitrs:  MEM 71%  22.8/32.0 GiB
+        free -h:  used 8.1Gi, available 21Gi
+        Taken within a second of each other on an otherwise idle system.
+    validations:
+      required: true
+
+  - type: textarea
+    id: raw
+    attributes:
+      label: Raw source data if you can capture it
+      description: >
+        On Linux, the relevant `/proc` or `/sys` file. On macOS, the equivalent
+        tool output. This is usually what settles the question.
+      render: text
+
+  - type: input
+    id: os-detail
+    attributes:
+      label: OS version and architecture
+    validations:
+      required: true
+
+  - type: checkboxes
+    id: context
+    attributes:
+      label: Context
+      options:
+        - label: Running inside a container or VM
+        - label: Running with elevated privileges
+        - label: The value was marked stale, warming up, or `n/a`
+        - label: I have read the definition in docs/metrics.md

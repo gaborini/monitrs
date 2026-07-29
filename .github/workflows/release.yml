@@ -1,0 +1,225 @@
+name: Release
+
+on:
+  push:
+    tags: ["v[0-9]+.[0-9]+.[0-9]+*"]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Tag to build, for a dry run
+        required: true
+
+# §18.4: least privilege at the top, escalated only in the job that needs it.
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: always
+  CARGO_INCREMENTAL: 0
+
+jobs:
+  # A tag that does not build, or whose version disagrees with Cargo.toml, must
+  # fail before any artifact exists — a half-published release is worse than none.
+  verify:
+    name: verify the tag
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+      - uses: dtolnay/rust-toolchain@4cda84d5c5c54efe2404f9d843567869ab1699d4 # stable
+
+      - name: the tag must match the workspace version
+        id: version
+        run: |
+          tag="${{ github.event.inputs.tag || github.ref_name }}"
+          version="${tag#v}"
+          manifest=$(cargo metadata --format-version 1 --no-deps \
+            | python3 -c "
+import json,sys
+packages = json.load(sys.stdin)['packages']
+binary = next(p for p in packages if p['name'] == 'monitrs')
+print(binary['version'])
+")
+          echo "tag=${tag} manifest=${manifest}"
+          if [ "${version}" != "${manifest}" ]; then
+            echo "::error::tag ${tag} does not match Cargo.toml version ${manifest}"
+            exit 1
+          fi
+          echo "version=${version}" >> "$GITHUB_OUTPUT"
+
+      - name: the changelog must describe this version
+        run: |
+          version="${{ steps.version.outputs.version }}"
+          if ! grep -qE "^## \[?${version}\]?" CHANGELOG.md; then
+            echo "::error::CHANGELOG.md has no section for ${version}"
+            exit 1
+          fi
+
+      - run: cargo fmt --all -- --check
+      - run: cargo clippy --workspace --all-targets --all-features -- -D warnings
+      - run: cargo test --workspace --all-features --locked
+
+  build:
+    name: ${{ matrix.target }}
+    needs: verify
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 45
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - target: x86_64-unknown-linux-gnu
+            runner: ubuntu-24.04
+          - target: aarch64-unknown-linux-gnu
+            runner: ubuntu-24.04-arm
+          - target: x86_64-unknown-linux-musl
+            runner: ubuntu-24.04
+          - target: aarch64-unknown-linux-musl
+            runner: ubuntu-24.04-arm
+          - target: x86_64-apple-darwin
+            runner: macos-15
+          - target: aarch64-apple-darwin
+            runner: macos-15
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+      - uses: dtolnay/rust-toolchain@4cda84d5c5c54efe2404f9d843567869ab1699d4 # stable
+        with:
+          targets: ${{ matrix.target }}
+      - uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32 # v2
+        with:
+          key: release-${{ matrix.target }}
+
+      - name: install musl tooling
+        if: endsWith(matrix.target, '-musl')
+        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends musl-tools
+
+      # --locked so the published binary is built from the committed Cargo.lock
+      # and is reproducible from the tag.
+      - run: cargo build --release --locked --target ${{ matrix.target }}
+
+      - name: the binary must actually run on this target
+        # Cross-built binaries cannot be executed here; native ones must be.
+        if: matrix.target != 'x86_64-apple-darwin'
+        run: |
+          ./target/${{ matrix.target }}/release/monitrs --version
+          ./target/${{ matrix.target }}/release/monitrs --help > /dev/null
+
+      - name: assemble the archive
+        id: archive
+        shell: bash
+        run: |
+          set -euo pipefail
+          version="${{ needs.verify.outputs.version }}"
+          target="${{ matrix.target }}"
+          stage="monitrs-${version}-${target}"
+          mkdir -p "${stage}/completions" "${stage}/man"
+
+          cp "target/${target}/release/monitrs" "${stage}/"
+          cp README.md LICENSE-MIT LICENSE-APACHE "${stage}/"
+
+          # §19.2 requires a changelog *excerpt*, not the whole file: the section
+          # for this version, ending at the next heading.
+          python3 - "${version}" > "${stage}/CHANGELOG-excerpt.md" <<'PY'
+          import re, sys
+          version = sys.argv[1]
+          text = open('CHANGELOG.md', encoding='utf-8').read()
+          pattern = re.compile(
+              rf'^## \[?{re.escape(version)}\]?.*?(?=^## |\Z)',
+              re.M | re.S,
+          )
+          match = pattern.search(text)
+          sys.stdout.write(match.group(0).strip() if match else f'## {version}\n')
+          PY
+
+          # Generated from the same binary that ships, so they cannot disagree
+          # with its actual flags.
+          binary="target/${target}/release/monitrs"
+          if [ "${target}" = "x86_64-apple-darwin" ]; then
+            # Cross-built: generate with a host build of the same commit instead.
+            cargo build --release --locked
+            binary="target/release/monitrs"
+          fi
+          for shell in bash zsh fish powershell elvish; do
+            "${binary}" completions "${shell}" > "${stage}/completions/monitrs.${shell}"
+          done
+          "${binary}" manpage > "${stage}/man/monitrs.1"
+
+          tar czf "${stage}.tar.gz" "${stage}"
+          shasum -a 256 "${stage}.tar.gz" > "${stage}.tar.gz.sha256"
+          echo "name=${stage}" >> "$GITHUB_OUTPUT"
+
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: ${{ steps.archive.outputs.name }}
+          path: |
+            ${{ steps.archive.outputs.name }}.tar.gz
+            ${{ steps.archive.outputs.name }}.tar.gz.sha256
+          if-no-files-found: error
+          retention-days: 7
+
+  publish:
+    name: publish
+    needs: [verify, build]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    # Only this job writes, and only to releases and attestations.
+    permissions:
+      contents: write
+      id-token: write
+      attestations: write
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+
+      - uses: actions/download-artifact@018cc2cf5baa6db3ef3c5f8a56943fffe632ef53 # v6
+        with:
+          path: artifacts
+          merge-multiple: true
+
+      - name: collect the checksums into one file
+        run: |
+          cd artifacts
+          cat ./*.sha256 | sed 's|  \./|  |' > SHA256SUMS
+          rm -f ./*.sha256
+          echo "--- SHA256SUMS ---"
+          cat SHA256SUMS
+          ls -la
+
+      # §18.4: produce provenance if the release tooling supports it. This lets a
+      # user verify an archive was built by this workflow from this commit.
+      - uses: actions/attest-build-provenance@977bb373ede98d70efdf65b84cb5f73e068dcc2a # v3
+        with:
+          subject-path: artifacts/*.tar.gz
+
+      - name: extract the release notes
+        run: |
+          python3 - "${{ needs.verify.outputs.version }}" > release-notes.md <<'PY'
+          import re, sys
+          version = sys.argv[1]
+          text = open('CHANGELOG.md', encoding='utf-8').read()
+          pattern = re.compile(rf'^## \[?{re.escape(version)}\]?.*?(?=^## |\Z)', re.M | re.S)
+          match = pattern.search(text)
+          body = match.group(0).strip() if match else f'## {version}'
+          print(body)
+          print()
+          print('## Verifying a download')
+          print()
+          print('```sh')
+          print('sha256sum --check --ignore-missing SHA256SUMS')
+          print('gh attestation verify monitrs-*.tar.gz --repo ${{ github.repository }}')
+          print('```')
+          PY
+
+      - uses: softprops/action-gh-release@3bb12739c298aeb8a4eeaf626c5b8d85266b0e65 # v2
+        # A dry run must never publish.
+        if: github.event_name == 'push'
+        with:
+          body_path: release-notes.md
+          files: |
+            artifacts/*.tar.gz
+            artifacts/SHA256SUMS
+          fail_on_unmatched_files: true
+          # Pre-1.0 tags are marked as pre-releases so nobody mistakes 0.1.0 for
+          # a stability promise.
+          prerelease: ${{ startsWith(needs.verify.outputs.version, '0.') }}
