@@ -56,7 +56,14 @@ clap_complete = "4.6.4"
 clap_mangen = "0.2.32"
 serde = { version = "1.0.229", features = ["derive"] }
 serde_json = "1.0.151"
-toml = { version = "1.1.4", default-features = false, features = ["parse", "serde"] }
+# `display` is needed to *write* TOML: `config init` renders a starter file, and
+# the round-trip test proves what it writes can be read back.
+toml = { version = "1.1.4", default-features = false, features = [
+    "std",
+    "parse",
+    "display",
+    "serde",
+] }
 directories = "6.0.0"
 
 # --- errors / logging ---

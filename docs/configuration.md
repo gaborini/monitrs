@@ -1,0 +1,237 @@
+# Configuration
+
+monitrs is useful with no configuration at all, and **does not create a
+configuration file on first launch**. If you never run `config init`, no file
+exists and the built-in defaults apply.
+
+```sh
+monitrs config path            # where monitrs looks, and whether a file is there
+monitrs config init            # write a documented starter file (never overwrites)
+monitrs config init ./my.toml  # ...somewhere else
+monitrs config check           # validate without launching
+monitrs config check ./my.toml
+```
+
+## Where the file lives
+
+Search order:
+
+1. `--config <PATH>`, if given. A path you name that does not exist is an
+   **error** — falling back to defaults would hide a typo.
+2. The platform's user configuration directory:
+   * Linux: `$XDG_CONFIG_HOME/monitrs/monitrs.toml`, else
+     `~/.config/monitrs/monitrs.toml`
+   * macOS: `~/Library/Application Support/monitrs/monitrs.toml`
+3. Built-in defaults.
+
+`--no-config` skips steps 1 and 2 entirely.
+
+Files written by `config init` are `0600` — owner-only — because configuration
+sits next to things that can contain paths and filters you may not want readable.
+
+## Rules
+
+* **CLI flags override file values.** Not "not given" — actually given. A flag you
+  omit leaves the file's value alone.
+* **An invalid value names its exact key**, and *every* problem is reported at
+  once, so fixing three mistakes takes one run:
+
+  ```
+  monitrs: 3 problem(s) in ./my.toml:
+    sampling.interval: must be between 250ms and 1m, got 50ms
+    sampling.history: must be between 30s and 1h, got 5s
+    processes.sort: "entropy" is not a sortable column; expected one of cpu, memory, ...
+  ```
+
+* **An unknown key is rejected, not ignored** — a silently ignored key is a
+  setting you believe is in effect. Near misses get a suggestion:
+
+  ```
+  unknown field `intervall`, expected one of `interval`, `history`, ...
+  did you mean `interval`?
+  ```
+
+* **Reload is atomic.** The whole candidate file is parsed and validated before
+  anything replaces the running configuration, so a typo cannot leave monitrs
+  half-reconfigured. Settings that changed but cannot take effect until restart
+  (currently `display.mouse` and `config_version`) are reported rather than
+  silently dropped.
+* **Configuration is data.** Nothing in it is ever executed, and there are no
+  pre- or post-action hooks.
+* **Environment variable interpolation is not supported** in v1. `${HOME}` is used
+  literally, and monitrs warns when it sees `${` rather than letting you assume
+  otherwise.
+
+## Units
+
+Durations: `250ms`, `1s`, `30s`, `5m`, `1h`. A bare number is rejected — `1` is
+ambiguous between a second and a millisecond.
+
+Sizes: `512kB`, `32MiB`, `1.5GiB`, or a bare number meaning bytes. Both families
+are accepted regardless of `display.units`; the `i` is what distinguishes them
+(`MiB` is 1024², `MB` is 1000²). A single decimal fraction is applied with integer
+arithmetic, so `1.5GiB` is exactly 1610612736 bytes.
+
+## Every key
+
+### Top level
+
+| Key | Default | Meaning |
+|---|---|---|
+| `config_version` | `1` | Schema version. A file from a newer monitrs is refused with an explanation rather than misread. |
+
+### `[sampling]`
+
+| Key | Default | Range | Meaning |
+|---|---|---|---|
+| `interval` | `"1s"` | 250ms–1m | Fast tier: CPU, memory, processes, network and disk counters. |
+| `history` | `"5m"` | 30s–1h | How far back Time Lens can scrub. Must be at least one `interval`. |
+| `medium_interval` | `"5s"` | ≥ `interval` | Filesystem capacity, static device state, sensors. |
+| `slow_interval` | `"30s"` | ≥ `interval` | Users, device lists, static metadata. |
+| `max_history_memory` | `"32MiB"` | ≥ 1MiB | Ceiling for the history ring. If `interval` and `history` would need more, history is shortened and monitrs tells you it was clamped. |
+
+Shortening `interval` makes the machine work harder for finer resolution; 250 ms
+is the floor because below it the OS's own CPU accounting is too coarse to be
+meaningful.
+
+### `[display]`
+
+| Key | Default | Values |
+|---|---|---|
+| `glyphs` | `"auto"` | `auto` \| `unicode` \| `ascii` |
+| `color` | `"auto"` | `auto` \| `truecolor` \| `256` \| `16` \| `off` |
+| `theme` | `"default-dark"` | `default-dark` \| `default-light` \| `high-contrast` |
+| `units` | `"iec"` | `iec` (KiB, MiB) \| `si` (kB, MB) |
+| `process_cpu_normalization` | `"core"` | `core` \| `machine` |
+| `mouse` | `false` | |
+| `show_per_core` | `false` | |
+| `show_kernel_threads` | `false` | Linux only |
+| `command_column` | `"auto"` | `auto` \| `name` \| `full` |
+
+`glyphs = "auto"` uses Unicode on a UTF-8 locale and falls back to strict 7-bit
+ASCII otherwise. `color = "auto"` honours the `NO_COLOR` convention; passing
+`--color` explicitly on the command line overrides `NO_COLOR`, since an explicit
+flag is a clearer statement of intent than an environment variable.
+
+`process_cpu_normalization` is the one to know about: `core` means one core is
+100%, so a process using four cores reads `400%`. `machine` means the whole
+machine is 100% and nothing exceeds it. See [`metrics.md`](metrics.md).
+
+### `[processes]`
+
+| Key | Default | Meaning |
+|---|---|---|
+| `sort` | `"cpu"` | `cpu`, `memory`, `read`, `write`, `pid`, `name`, `age`, `user`, `state`, `threads`, `virtual` |
+| `descending` | `true` | |
+| `tree` | `false` | Start in tree mode. |
+| `filter` | `""` | Initial plain-text filter. |
+| `top_contributors_per_metric` | `10` | 1–100. How many contributors each history sample keeps per metric, for spike attribution. Higher costs memory per sample and raises evidence coverage. |
+
+### `[diagnostics]`
+
+| Key | Default | Meaning |
+|---|---|---|
+| `enabled` | `true` | |
+| `cpu_watch_percent` | `80` | Must be below `cpu_critical_percent`. |
+| `cpu_critical_percent` | `95` | |
+| `memory_watch_available_percent` | `15` | |
+| `memory_critical_available_percent` | `5` | Must be **below** `memory_watch_available_percent`. |
+| `sustained_samples` | `10` | 1–600. How many recent samples must agree before a signal escalates. |
+
+The memory thresholds run the opposite way to the CPU ones, because *less*
+available memory is worse. Getting that backwards is the easiest mistake in the
+file, so it is validated: `memory_critical_available_percent` must be the smaller
+number.
+
+`sustained_samples` is the hysteresis that stops the radar flapping between amber
+and green once per second. Lowering it makes monitrs twitchier, not more accurate.
+
+### `[keys]`
+
+Rebinds the built-in keys for a documented subset of actions. Each entry
+*replaces* the default binding.
+
+```toml
+[keys]
+quit = ["q", "ctrl-c"]
+help = ["?"]
+filter = ["/"]
+pause = ["space"]
+live = ["L"]
+```
+
+Key names: a single character, or `enter`, `esc`, `tab`, `backtab`, `backspace`,
+`delete`, `insert`, `space`, `left`, `right`, `up`, `down`, `home`, `end`,
+`pageup`, `pagedown`, `f1`–`f24`. Prefix with `ctrl-`, `alt-`, or `shift-`.
+
+Two things worth knowing:
+
+* **A bare character is case-sensitive.** `g` and `G` are different keys and are
+  bound to different actions, so monitrs will not quietly lower-case them.
+  `shift-a` and `A` are the same key press, because that is what the terminal
+  reports.
+* **Binding one key to two actions is rejected**, naming the key and both
+  actions. It is not resolved by precedence, because which one wins would be
+  invisible.
+
+## A complete example
+
+This is what `monitrs config init` writes, minus the comments. Every value is the
+built-in default, so a file identical to this one changes nothing.
+
+```toml
+config_version = 1
+
+[sampling]
+interval = "1s"
+history = "5m"
+medium_interval = "5s"
+slow_interval = "30s"
+max_history_memory = "32MiB"
+
+[display]
+glyphs = "auto"
+color = "auto"
+theme = "default-dark"
+units = "iec"
+process_cpu_normalization = "core"
+mouse = false
+show_per_core = false
+show_kernel_threads = false
+command_column = "auto"
+
+[processes]
+sort = "cpu"
+descending = true
+tree = false
+filter = ""
+top_contributors_per_metric = 10
+
+[diagnostics]
+enabled = true
+cpu_watch_percent = 80
+cpu_critical_percent = 95
+memory_watch_available_percent = 15
+memory_critical_available_percent = 5
+sustained_samples = 10
+```
+
+## Command-line equivalents
+
+| Flag | Key |
+|---|---|
+| `--interval <DURATION>` | `sampling.interval` |
+| `--history <DURATION>` | `sampling.history` |
+| `--glyphs <MODE>`, `--ascii` | `display.glyphs` |
+| `--color <MODE>`, `--no-color` | `display.color` |
+| `--theme <NAME>` | `display.theme` |
+| `--units <FAMILY>` | `display.units` |
+| `--mouse` | `display.mouse` |
+| `--per-core` | `display.show_per_core` |
+| `--sort <FIELD>` | `processes.sort` |
+| `--tree` | `processes.tree` |
+| `--filter <TEXT>` | `processes.filter` |
+
+`--config <PATH>`, `--no-config`, and `--debug-log <PATH>` have no file
+equivalents by design: where to read configuration from cannot itself be
+configured, and a log destination is a per-invocation decision.

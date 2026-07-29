@@ -15,10 +15,11 @@ use clap::{CommandFactory as _, Parser as _};
 use monitrs_collectors::{CommonCollector, DueTiers, SampleTick, SnapshotSource as _};
 
 mod cli;
+mod config;
 mod export;
 mod runtime;
 
-use cli::{Cli, Command, SnapshotFormat};
+use cli::{Cli, Command, ConfigCommand, SnapshotFormat};
 use export::{RedactionPolicy, SnapshotExport};
 
 /// Exit code for a usage error, matching the convention `clap` itself uses.
@@ -73,10 +74,7 @@ fn run(cli: &Cli) -> color_eyre::Result<ExitCode> {
             Ok(ExitCode::SUCCESS)
         }
 
-        Some(Command::Config(_)) => Err(color_eyre::eyre::eyre!(
-            "configuration handling is not available in this build. \
-             CHANGELOG.md lists what currently works."
-        )),
+        Some(Command::Config(command)) => run_config(command),
 
         Some(Command::Snapshot {
             format,
@@ -171,6 +169,72 @@ fn restrict_to_user(_path: &std::path::Path) -> std::io::Result<()> {
     Ok(())
 }
 
+fn run_config(command: &ConfigCommand) -> color_eyre::Result<ExitCode> {
+    match command {
+        ConfigCommand::Path => {
+            let Some(path) = config::default_path() else {
+                return Err(color_eyre::eyre::eyre!(
+                    "this platform provides no user configuration directory; \
+                     use --config <PATH> to name a file explicitly"
+                ));
+            };
+            // Printing whether it exists matters: §12 says monitrs does not create
+            // the file, so "not present" is the normal state and should not read
+            // as a fault.
+            let state = if path.is_file() {
+                "present"
+            } else {
+                "not present"
+            };
+            println!("{} ({state})", path.display());
+            Ok(ExitCode::SUCCESS)
+        }
+
+        ConfigCommand::Init { path } => {
+            let target = match path {
+                Some(path) => path.clone(),
+                None => config::default_path().ok_or_else(|| {
+                    color_eyre::eyre::eyre!(
+                        "this platform provides no user configuration directory; \
+                         pass a path: monitrs config init <PATH>"
+                    )
+                })?,
+            };
+            config::init_file(&target)?;
+            println!("wrote {}", target.display());
+            println!("every value in it is the built-in default, so nothing changed yet");
+            Ok(ExitCode::SUCCESS)
+        }
+
+        ConfigCommand::Check { path } => {
+            let target = match path {
+                Some(path) => path.clone(),
+                None => match config::default_path() {
+                    Some(path) if path.is_file() => path,
+                    Some(path) => {
+                        println!(
+                            "{} is not present; built-in defaults are valid",
+                            path.display()
+                        );
+                        return Ok(ExitCode::SUCCESS);
+                    }
+                    None => {
+                        return Err(color_eyre::eyre::eyre!(
+                            "this platform provides no user configuration directory; \
+                             pass a path: monitrs config check <PATH>"
+                        ));
+                    }
+                },
+            };
+            let (_, warnings) = config::read_and_validate(&target)?;
+            println!("{} is valid", target.display());
+            for warning in &warnings {
+                println!("warning: {warning}");
+            }
+            Ok(ExitCode::SUCCESS)
+        }
+    }
+}
 
 #[cfg(test)]
 mod tests {
