@@ -38,7 +38,15 @@ tracing-appender.workspace = true
 tracing-subscriber.workspace = true
 
 [dev-dependencies]
+criterion.workspace = true
 insta.workspace = true
+
+# The reference workload of §16.1 and §16.3's benchmark list. Lives here rather
+# than in monitrs-core because realistic input comes from the fake collector, and
+# monitrs-core must not depend on the collectors even for dev (§10.1).
+[[bench]]
+name = "pipeline"
+harness = false
 
 [features]
 default = ["linux-native", "macos-native"]
