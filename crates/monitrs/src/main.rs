@@ -16,6 +16,7 @@ use monitrs_collectors::{CommonCollector, DueTiers, SampleTick, SnapshotSource a
 
 mod cli;
 mod export;
+mod runtime;
 
 use cli::{Cli, Command, SnapshotFormat};
 use export::{RedactionPolicy, SnapshotExport};
