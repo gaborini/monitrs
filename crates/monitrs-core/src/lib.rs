@@ -31,6 +31,7 @@
 #![cfg_attr(test, allow(clippy::expect_used, clippy::unwrap_used))]
 
 pub mod model;
+pub mod process;
 pub mod rates;
 pub mod units;
 
