@@ -55,6 +55,7 @@
 #![cfg_attr(test, allow(clippy::expect_used, clippy::unwrap_used))]
 
 pub mod action;
+pub mod app;
 pub mod event;
 pub mod glyphs;
 pub mod keymap;
