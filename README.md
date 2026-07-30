@@ -7,9 +7,10 @@ terminal monitors, what it was doing thirty seconds ago. Pause the timeline,
 scrub back to a spike, and see which processes were most strongly correlated
 with it.
 
-> **Status: pre-release.** This is a `0.1.0` in progress. Sections marked
-> _pending_ are not yet true, and this README will not claim otherwise. See
-> [`CHANGELOG.md`](CHANGELOG.md) for what actually works today.
+> **Status: pre-release.** `0.1.0` is written and its release notes are in
+> [`CHANGELOG.md`](CHANGELOG.md), but it has not been tagged, so there is nothing to
+> download yet. Everything this README describes works from a checkout; where a
+> claim has a caveat, the caveat is stated next to it rather than left out.
 
 ## Demo
 
@@ -135,11 +136,9 @@ provides right now.
 
 ## Install
 
-_Pending for `0.1.0`._ Release archives and SHA-256 checksums are produced by the
-release workflow; install instructions will be added once they have been verified
-on the target systems rather than merely written down.
+### From a checkout
 
-Building from a checkout works today, and the interface launches:
+Works today, and is what every measurement in this README was taken from:
 
 ```sh
 cargo build --release
@@ -148,6 +147,31 @@ cargo build --release
 
 `q` quits. See [`docs/troubleshooting.md`](docs/troubleshooting.md) if a number
 surprises you.
+
+### From a release archive
+
+_No release is published yet_ — `0.1.0` has not been tagged. When it is, the
+workflow builds one archive per target (`x86_64` and `aarch64` for Linux glibc,
+Linux musl, and macOS), each carrying the binary, both licences, this README, an
+excerpt of the changelog for that version, shell completions for bash, zsh, fish,
+PowerShell and elvish, and a manpage. Installing one means verifying it and putting
+the binary somewhere on your `PATH`:
+
+```sh
+# Replace the version and target with the archive you downloaded.
+shasum -a 256 -c monitrs-0.1.0-aarch64-apple-darwin.tar.gz.sha256
+tar xzf monitrs-0.1.0-aarch64-apple-darwin.tar.gz
+install -m 755 monitrs-0.1.0-aarch64-apple-darwin/monitrs ~/.local/bin/monitrs
+```
+
+Releases also carry a build attestation, so `gh attestation verify
+monitrs-*.tar.gz --repo gaborini/monitrs` confirms the archive came from this
+repository's workflow rather than from someone else.
+
+Honest caveat: the assembly and these steps have been carried out by hand for
+`aarch64-apple-darwin` only — checksum verified, binary run, manpage rendered,
+completions parsed. The other five archives are built by CI and nobody has run them
+on their own hardware yet.
 
 ## Keys
 
@@ -248,18 +272,29 @@ convenience only; nothing requires it. See
 
 ## Performance
 
-Engineering budgets are recorded in
-[`docs/architecture.md`](docs/architecture.md); they are **budgets, not
-measurements**.
+Measured, with the machine and the command recorded in
+[`docs/benchmarks.md`](docs/benchmarks.md). These are from a 12-core Mac running
+about a thousand processes, which is five times §16.1's 200-process reference
+workload, so read them as a hard case rather than a flattering one:
 
-Component benchmarks that *have* been measured — with the reference machine and
-the exact command — are in [`docs/benchmarks.md`](docs/benchmarks.md). Two results
-worth knowing: history seeking is constant time regardless of how far back you
-scrub, and at the reference workload the sampling loop is bound by OS reads rather
-than by anything monitrs computes.
+| Budget | Measured |
+|---|---|
+| frame render below 16 ms at 160×48 | median 200 µs, p95 353 µs |
+| input-to-visible-response below 50 ms | median 417 µs, p95 486 µs |
+| sample collection below 200 ms p95 | median 156 ms, p95 172 ms |
+| resident memory below 50 MiB | median 29 MiB, peak 31 MiB |
+| no unbounded growth | 30-minute soak: resident size fell, descriptors flat, nothing dropped |
+| **idle self CPU below 1% median, 2% p95** | **median 4.3%, p95 17.8% — fails** |
 
-The end-to-end budgets (idle CPU, resident memory, input latency, frame time) are
-not measured yet and this README will not publish a number until they are.
+The last row is the honest one. monitrs' own computation is about 35 µs per tick;
+the cost is OS reads, and on this host the process table and the disk counters cost
+29 ms and 34 ms respectively every second. `docs/benchmarks.md` breaks it down read
+by read and says what would close it. A twelve-hour soak has not been run, and no
+soak has been run on Linux.
+
+Two component results worth knowing: history seeking is constant time regardless of
+how far back you scrub, and the sampling loop is bound by OS reads rather than by
+anything monitrs computes.
 
 ## License
 
