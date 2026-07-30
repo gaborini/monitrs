@@ -45,9 +45,12 @@ jobs:
           echo "version=${version}" >> "$GITHUB_OUTPUT"
 
       - name: the changelog must describe this version
+        # `--check-date` warns, and only warns, when the section's heading is not dated
+        # today: writing notes one day and tagging the next is ordinary, and a hard
+        # check there would teach people to backdate the heading instead.
         run: |
           python3 .github/scripts/changelog_excerpt.py \
-            "${{ steps.version.outputs.version }}" > /dev/null
+            "${{ steps.version.outputs.version }}" --check-date > /dev/null
 
       - run: cargo fmt --all -- --check
       - run: cargo clippy --workspace --all-targets --all-features -- -D warnings
