@@ -36,8 +36,9 @@ use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::time::{Duration, Instant, SystemTime};
 
 use crossbeam_channel::{Receiver, Sender, TrySendError};
-use monitrs_collectors::{SampleTick, SnapshotSource, TierIntervals, TierScheduler};
+use monitrs_collectors::{DueTiers, SampleTick, SnapshotSource, TierIntervals, TierScheduler};
 use monitrs_core::SystemSnapshot;
+use monitrs_core::diagnostics::{PressureEngine, Thresholds};
 use monitrs_core::model::ProcessIdentity;
 use monitrs_tui::event::{Event, TerminalEvent};
 
@@ -47,6 +48,39 @@ use monitrs_tui::event::{Event, TerminalEvent};
 /// snapshot four ticks old it is worthless, and the memory it occupies is not.
 /// Large enough that a burst of keypresses is never lost.
 pub(crate) const EVENT_CHANNEL_CAPACITY: usize = 64;
+
+/// A one-shot request that the sampler collect now rather than on schedule.
+///
+/// §6.2 binds `r` to "force refresh". The sampler owns its own clock, so the only
+/// way to reach it from the UI thread without a second channel is a flag it checks
+/// each pass. Consumed by the read, so one keypress produces one extra sample
+/// rather than a burst.
+#[derive(Clone, Debug, Default)]
+pub(crate) struct SampleRequest(Arc<AtomicBool>);
+
+impl SampleRequest {
+    /// A request that has not been made.
+    pub(crate) fn new() -> Self {
+        Self(Arc::new(AtomicBool::new(false)))
+    }
+
+    /// Asks for one extra sample.
+    ///
+    /// Called from the interactive event loop. The soak harness includes this
+    /// module by path without that loop, so it is dead there and nowhere else.
+    #[allow(
+        dead_code,
+        reason = "called by the interactive loop, not by the soak harness"
+    )]
+    pub(crate) fn request(&self) {
+        self.0.store(true, Ordering::Release);
+    }
+
+    /// Takes the request, clearing it.
+    pub(crate) fn take(&self) -> bool {
+        self.0.swap(false, Ordering::AcqRel)
+    }
+}
 
 /// The signal every worker watches to know it should stop.
 ///
@@ -319,6 +353,8 @@ pub(crate) fn spawn_sampler_thread<Cfg, S>(
     sender: EventSender<Cfg>,
     shutdown: Shutdown,
     intervals: TierIntervals,
+    forced: SampleRequest,
+    thresholds: Thresholds,
 ) -> std::io::Result<()>
 where
     Cfg: Send + 'static,
@@ -326,12 +362,23 @@ where
 {
     workers.spawn("monitrs-sampler", move || {
         let mut scheduler = TierScheduler::new(intervals);
+        // The Pressure Radar is derived here rather than in the collector: a
+        // collector reports measurements, and deciding that 91% CPU is `critical`
+        // is policy (§2.3). The engine keeps its own hysteresis state, which is why
+        // it lives with the sampler and not with the frame.
+        let mut pressure = PressureEngine::new(thresholds);
         let mut sequence = 0u64;
         let mut previous: Option<Instant> = None;
 
         while !shutdown.is_triggered() {
             let now = Instant::now();
-            let due = scheduler.due_at(now);
+            // A forced refresh collects the fast tier out of turn; the schedule is
+            // then marked complete, so `r` brings the next scheduled sample forward
+            // rather than adding one on top of it.
+            let mut due = scheduler.due_at(now);
+            if forced.take() {
+                due = DueTiers::ALL;
+            }
             if !due.any() {
                 // Sleep in short slices so shutdown is noticed promptly even when
                 // the next tier is a long way off.
@@ -352,10 +399,13 @@ where
             };
 
             match source.sample(&tick) {
-                Ok(snapshot) => {
+                Ok(mut snapshot) => {
                     scheduler.mark_completed(due, now);
                     previous = Some(now);
                     sequence = sequence.saturating_add(1);
+                    // Filled in before the snapshot is published, so the UI never
+                    // sees a snapshot whose radar disagrees with its own metrics.
+                    snapshot.pressure = pressure.observe(&snapshot);
                     if !sender.send(Event::Snapshot(Arc::new(snapshot))) {
                         break;
                     }
@@ -602,6 +652,8 @@ mod tests {
             sender,
             shutdown.clone(),
             TierIntervals::derived_from(Duration::from_millis(250)),
+            SampleRequest::new(),
+            Thresholds::default(),
         )
         .expect("spawns");
         assert_eq!(workers.len(), 1);
@@ -664,6 +716,8 @@ mod tests {
             sender,
             shutdown.clone(),
             TierIntervals::derived_from(Duration::from_millis(250)),
+            SampleRequest::new(),
+            Thresholds::default(),
         )
         .expect("spawns");
 
@@ -706,6 +760,8 @@ mod tests {
             sender,
             shutdown.clone(),
             TierIntervals::derived_from(Duration::from_millis(250)),
+            SampleRequest::new(),
+            Thresholds::default(),
         )
         .expect("spawns");
 
