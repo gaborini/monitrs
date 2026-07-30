@@ -52,6 +52,7 @@ pub mod error;
 pub mod fake;
 pub mod linux;
 pub mod macos;
+pub mod selfstat;
 pub mod source;
 pub mod tier;
 
