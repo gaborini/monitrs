@@ -12,16 +12,18 @@ terminal. What is still missing before `0.1.0`:
 
 * **No twelve-hour soak is on record.** The harness exists and scales
   (see [`soak-testing.md`](soak-testing.md)); the run has not been done, and §16.1's
-  no-unbounded-growth claim is unproven until it is.
-* **The end-to-end budgets of §16.1 are unmeasured** — idle self CPU, resident
-  memory, input-to-visible-response, and frame render time. Component benchmarks are
-  in [`benchmarks.md`](benchmarks.md); those are not the same thing.
+  no-unbounded-growth claim is unproven until it is. A 60-second idle run does show
+  the descriptor count flat at 10, which is evidence but not the gate.
+* **The idle self-CPU budget of §16.1 is not met.** Measured on a 12-core Mac with
+  about a thousand processes: median 4.3%, p95 17.8%, against a budget of 1% and 2%.
+  The other five measurable budgets pass — frame render, input latency, collection
+  p95, resident memory, descriptor growth — and
+  [`benchmarks.md`](benchmarks.md#the-161-end-to-end-budgets) has the numbers, the
+  per-read breakdown showing where the time goes, and what it would take to fix.
+  This is the one item on this list that is a *product* problem rather than a
+  procedural one.
 * **No release archive has been built or run on a target machine**, so the install
   instructions in `README.md` remain unwritten rather than untested.
-* **README has no real screenshot or demo.** §20.1 forbids a fabricated one, so the
-  section stays marked pending until one is captured from the running binary.
-* **Renice is not implemented** on either platform; the key reports that honestly
-  rather than appearing to work.
 
 So this file is currently a **procedure, not a plan**. It is complete and it is
 followed as written, but the [§23 gate](#the-23-gate-for-010) at the bottom is what
@@ -394,9 +396,13 @@ ticked with evidence — a test, a recorded measurement, or a named machine.
 - [ ] **release archives and checksums are published.** The workflow does this; it
       has not yet run for a real tag.
 - [ ] **default settings remain below the memory and CPU budgets on the reference
-      workload.** Resident memory and descriptors are covered by the soak harness;
-      **idle CPU and frame time are not measured yet** — both need the interactive
-      runtime. Per-function costs are in [`benchmarks.md`](benchmarks.md).
+      workload.** Frame time, input latency, collection p95, resident memory and
+      descriptor growth are measured and pass; **idle self CPU does not** — 4.3%
+      median against a 1% budget on a thousand-process host. Nothing has been
+      measured on §16.1's actual reference workload (8 CPUs, 200 processes), where
+      the per-process costs would be about five times smaller. Numbers, breakdown and
+      the two commands that produce them are in
+      [`benchmarks.md`](benchmarks.md#the-161-end-to-end-budgets).
 - [ ] **every claim in the README is supported by a test or a documented
       measurement.** Check §20.1's required contents are present and true: value
       proposition, a real screenshot or recording, honest differentiation, supported

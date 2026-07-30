@@ -75,9 +75,16 @@ fn the_binary_reaches_its_collector_only_through_the_platform_factory() {
 /// On a platform with a native layer, the factory must actually return it.
 ///
 /// Complements the source scan: the scan proves the binary calls the factory, and
-/// this proves the factory hands back more than the baseline. Written against
-/// capabilities rather than a type name because capabilities are what the rest of
-/// the program reacts to (§4).
+/// this proves the factory hands back more than the baseline. Compared against a
+/// live [`CommonCollector`] rather than against a hard-coded list of flags, because
+/// which capabilities a native layer wins is platform-specific *and*
+/// machine-specific — a container without `/proc/pressure` resolves different ones
+/// from a desktop kernel, and a list written on a Mac fails on both.
+///
+/// Both collectors are sampled twice first. Capabilities are not all known at
+/// construction: the Linux layer declares most of its during `apply`, which is the
+/// honest order — it declares what it *actually* read, not what the platform usually
+/// provides (§4). A test that asked before sampling would compare two half-answers.
 #[test]
 #[cfg_attr(
     not(any(
@@ -87,31 +94,57 @@ fn the_binary_reaches_its_collector_only_through_the_platform_factory() {
     ignore = "no native layer in this build, so the baseline is the correct answer"
 )]
 fn the_platform_factory_returns_more_than_the_baseline() {
+    use monitrs_collectors::CommonCollector;
     use monitrs_core::model::CapabilityState;
 
-    let collector = platform_collector().expect("the platform collector must construct");
-    let capabilities = collector.capabilities();
+    fn capabilities_after_two_samples(
+        collector: &mut impl SnapshotSource,
+    ) -> Vec<(&'static str, CapabilityState)> {
+        let mut tick = SampleTick::first(std::time::Instant::now(), std::time::SystemTime::now());
+        let _ = collector.sample(&tick).expect("a first sample");
+        std::thread::sleep(std::time::Duration::from_millis(300));
+        tick = tick.advance(
+            std::time::Instant::now(),
+            std::time::SystemTime::now(),
+            DueTiers::ALL,
+        );
+        let snapshot = collector.sample(&tick).expect("a second sample");
+        snapshot.capabilities.entries().to_vec()
+    }
 
-    // Every native layer resolves at least one thing the baseline cannot. Which
-    // ones differ is platform-specific, so the assertion is on the union rather
-    // than on a single flag: a build where none of these improved is a build
-    // running on the baseline.
-    let improved = [
-        capabilities.cpu_breakdown,
-        capabilities.per_process_open_files,
-        capabilities.swap_activity,
-        capabilities.linux_psi,
-        capabilities.cgroup_limits,
-    ]
-    .into_iter()
-    .filter(|state| matches!(state, CapabilityState::Available))
-    .count();
+    let mut baseline = CommonCollector::new().expect("the baseline must construct");
+    let mut platform = platform_collector().expect("the platform collector must construct");
+    let bare = capabilities_after_two_samples(&mut baseline);
+    let native = capabilities_after_two_samples(&mut platform);
+
+    let mut gained = Vec::new();
+    let mut lost = Vec::new();
+    for ((name, bare_state), (native_name, native_state)) in bare.iter().zip(native.iter()) {
+        assert_eq!(name, native_name, "the entry order must be stable");
+        let was = matches!(bare_state, CapabilityState::Available);
+        let is = matches!(native_state, CapabilityState::Available);
+        if is && !was {
+            gained.push(*name);
+        }
+        if was && !is {
+            lost.push((*name, *bare_state, *native_state));
+        }
+    }
 
     assert!(
-        improved > 0,
-        "the native layer resolves none of the capabilities the baseline cannot; \
-         `platform_collector` is handing back the baseline. Capabilities: \
-         {capabilities:?}"
+        !gained.is_empty(),
+        "the native layer resolves nothing the baseline could not; `platform_collector` \
+         is handing back the baseline.\n  baseline: {bare:?}\n  native:   {native:?}"
+    );
+    // §9.2's enrichment upgrades and does not downgrade. A capability the baseline
+    // could report and the native layer cannot is a regression, not a platform fact.
+    assert!(
+        lost.is_empty(),
+        "the native layer took capabilities away from the baseline: {lost:?}"
+    );
+    println!(
+        "native layer resolves {} more capabilities: {gained:?}",
+        gained.len()
     );
 }
 

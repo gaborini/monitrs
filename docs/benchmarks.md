@@ -4,10 +4,9 @@
 results are stored — or at minimum that the reference machine and command are
 documented. This file is that record.
 
-**These are measurements of specific functions, not of the running application.**
-The end-to-end budgets in [`architecture.md`](architecture.md) — idle CPU,
-resident memory, input latency, frame time — are still budgets. They require the
-interactive runtime and a soak test, and this file will not pretend otherwise.
+Two kinds of measurement live here: the microbenchmarks of specific functions
+(`cargo bench`), and the end-to-end §16.1 budgets, which are measured against the
+live collector and the assembled renderer. Both sections say what they do not cover.
 
 ## Reference machine
 
@@ -137,6 +136,77 @@ no OS reads. It is a floor for the sampling loop, not a prediction of it: the
 live `sysinfo` collector's cost is dominated by reading `/proc` or calling
 `sysctl`, which this cannot model.
 
+## The §16.1 end-to-end budgets
+
+Six of the eight are now measured on this machine. §16.1's last line says these are
+"engineering budgets, not marketing claims, until measured reproducibly", so here is
+the measurement, including the one that fails.
+
+Frame time, input latency and collection come from
+`crates/monitrs/tests/capture.rs` (`cargo test -p monitrs --release --test capture
+-- --ignored --nocapture`), against the live platform collector on the real
+renderer. Self CPU, resident memory and file descriptors come from
+`scripts/measure-overhead.py`, which drives the release binary on a pty and samples
+`ps` and `lsof` from outside — measuring monitrs' own cost with monitrs' own
+collector would be measuring the thing with itself.
+
+| §16.1 target | Measured | |
+|---|---|---|
+| ordinary frame render below 16 ms at 160×48 | median 200 µs, p95 353 µs, max 410 µs | pass, by a factor of 45 |
+| input-to-visible-response below 50 ms | median 417 µs, p95 486 µs | pass, by a factor of 100 |
+| sample collection below 200 ms p95 | median 156 ms, p95 172 ms | pass, with little room |
+| resident memory below 50 MiB | median 29 MiB, max 31 MiB | pass |
+| no unbounded file-descriptor growth | 10 open files at the start, 10 after 60 s | pass over a minute; the 12-hour run is still owed |
+| idle self CPU median below 1%, p95 below 2% | **median 4.3%, p95 17.8%** | **fails** |
+| no unbounded memory growth over 12 hours | not run | — |
+| no redraw busy loop | not measured as such | — |
+
+The workload matters and is not the reference one: §16.1 specifies 8 logical CPUs
+and 200 processes, and this machine has 12 CPUs and about a thousand processes. The
+collection figure is therefore against a workload five times larger than the budget
+assumes, which is why it is quoted as passing "with little room" rather than
+comfortably.
+
+### Where the idle CPU goes
+
+Not into monitrs' own computation. A fast tick's pure computation is about 35 µs
+(see the microbenchmarks below); the OS reads are three orders of magnitude more
+expensive. Measured individually against 981 processes, 2 disks, 25 thermal
+components and 21 interfaces:
+
+| Read | Cost | Tier |
+|---|---|---|
+| `sysinfo` process refresh | 29 ms | fast |
+| `Disks::refresh(false)` | 34 ms | fast |
+| `Disks::refresh(true)` | 25 ms | medium |
+| `Components::refresh` (temperatures) | 85 ms | medium |
+| `Users::refresh` | 30 ms | slow |
+| `Networks::refresh` | 0.85 ms | fast |
+| global CPU + memory | 0.09 ms | fast |
+
+A fast tick is therefore about 64 ms, which at the default one-second interval is
+6% of one core — the measured median. The 5-second medium tick adds temperatures and
+a second disk walk, which is the p95.
+
+Three things follow, and none of them is a micro-optimisation:
+
+1. **Asking `sysinfo` for fewer process fields does not help.** Requesting nothing at
+   all still costs 26 ms of the 29: the enumeration dominates, not the fields.
+2. **`Disks::refresh(false)` is not the cheap call its name suggests** — it costs more
+   than `refresh(true)` did on this machine. The `false` only keeps the device list
+   from changing shape mid-tier. The fast tier now skips it when the medium tier ran
+   in the same tick, which was reading the same counters twice.
+3. **On macOS the process table is enumerated twice.** The native layer walks
+   `kern.proc.all` itself and then overwrites the baseline's table; `sysinfo`'s 29 ms
+   walk survives only to supply command lines and user names. Sourcing those natively
+   too — the macOS layer already has `read_process_arguments` — would remove most of
+   the fast tick's cost. That is the one change with a real chance of reaching the 1%
+   budget, and it is not a small one: the merge semantics that keep a refused read
+   reported as refused rather than as zero all live in that path.
+
+Until that is done, the honest statement is the one in the table: five budgets are
+met, idle CPU is not, and the reason is measured rather than guessed.
+
 ## What is not measured yet
 
 Named here so their absence is not mistaken for a passing grade:
@@ -145,9 +215,12 @@ Named here so their absence is not mistaken for a passing grade:
   benchmark does not.
 * Diagnostic-rule evaluation.
 * ASCII and Unicode graph generation.
-* The end-to-end §16.1 budgets: idle self CPU, resident memory, input-to-visible
-  response, frame render time, sample collection p95 against the live collector.
-* The 12-hour soak test for unbounded memory and file-descriptor growth.
+* The 12-hour soak test for unbounded memory and file-descriptor growth. The
+  harness exists (`crates/monitrs/tests/soak.rs`); the run has not happened.
+* The end-to-end numbers above on the §16.1 reference workload — 8 CPUs and 200
+  processes — rather than on this machine.
+* Whether anything constitutes a redraw busy loop, as opposed to the idle-redraw
+  interval the reducer enforces.
 
 ## Reading these numbers
 

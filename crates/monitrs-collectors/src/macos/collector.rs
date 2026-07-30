@@ -341,6 +341,37 @@ impl MacosCollector {
             snapshot.cpu = observed.merge_into(baseline);
         }
     }
+
+    /// Writes the capabilities this collector determines onto the baseline's.
+    ///
+    /// Only its own fields, which is the whole point. Assigning the entire structure
+    /// — which is what this used to do — replaced what the *baseline* had just
+    /// established during this very sample with a copy taken at construction, before
+    /// the baseline had read anything. On a Mac with both, `filesystem capacity` and
+    /// `temperatures` were reported as `Unknown`: §9.2's enrichment upgrades and does
+    /// not downgrade, and a wholesale assignment cannot tell the difference.
+    ///
+    /// Listing the owned fields explicitly is deliberate. A field that appears here
+    /// is one this layer answers for; a field that does not is the baseline's, and
+    /// adding a capability to the model without deciding which of the two owns it now
+    /// leaves it with the baseline rather than silently blanking it.
+    fn declare_capabilities(&self, into: &mut monitrs_core::model::CapabilitySnapshot) {
+        into.cpu_breakdown = self.capabilities.cpu_breakdown;
+        into.per_core_cpu = self.capabilities.per_core_cpu;
+        into.per_process_threads = self.capabilities.per_process_threads;
+        into.per_process_open_files = self.capabilities.per_process_open_files;
+        into.per_process_sockets = self.capabilities.per_process_sockets;
+        into.per_process_io = self.capabilities.per_process_io;
+        into.process_signals = self.capabilities.process_signals;
+        into.renice = self.capabilities.renice;
+        into.disk_busy = self.capabilities.disk_busy;
+        into.linux_psi = self.capabilities.linux_psi;
+        into.cgroup_limits = self.capabilities.cgroup_limits;
+        into.kernel_threads = self.capabilities.kernel_threads;
+        into.network_link_speed = self.capabilities.network_link_speed;
+        into.battery = self.capabilities.battery;
+        into.swap_activity = self.capabilities.swap_activity;
+    }
 }
 
 impl SnapshotSource for MacosCollector {
@@ -349,7 +380,12 @@ impl SnapshotSource for MacosCollector {
     }
 
     fn capabilities(&self) -> monitrs_core::model::CapabilitySnapshot {
-        self.capabilities
+        // Started from the baseline's *current* answer, so a caller that asks between
+        // samples gets what the baseline has established rather than what it had not
+        // yet read when this collector was built.
+        let mut capabilities = self.baseline.capabilities();
+        self.declare_capabilities(&mut capabilities);
+        capabilities
     }
 
     fn sample(&mut self, tick: &SampleTick) -> Result<SystemSnapshot, CollectorError> {
@@ -382,7 +418,7 @@ impl SnapshotSource for MacosCollector {
         // is coming, for a value this kernel has no concept of. §4 has a state for
         // exactly this, and it is the one the capability flag already declares.
         snapshot.pressure.psi = MetricState::Unsupported;
-        snapshot.capabilities = self.capabilities;
+        self.declare_capabilities(&mut snapshot.capabilities);
         Ok(snapshot)
     }
 

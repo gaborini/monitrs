@@ -222,7 +222,17 @@ impl CommonCollector {
         };
     }
 
-    fn refresh_fast(&mut self) {
+    /// Refreshes the fast tier.
+    ///
+    /// `disks_already_refreshed` is set when the medium tier ran in the same tick.
+    /// Measured on macOS, `Disks::refresh(false)` costs as much as
+    /// `Disks::refresh(true)` — about 34 ms against a thousand-process, two-disk
+    /// machine — because `sysinfo` walks the devices either way. The `false` was
+    /// meant to make the fast path cheap and does not, so on a combined tick the two
+    /// calls read the same counters twice for nothing. Skipping the second is free:
+    /// `sample` runs the tiers slow, medium, fast, so the medium refresh has already
+    /// happened and its counters are from this tick.
+    fn refresh_fast(&mut self, disks_already_refreshed: bool) {
         self.system.refresh_cpu_usage();
         self.system
             .refresh_memory_specifics(MemoryRefreshKind::everything());
@@ -253,9 +263,13 @@ impl CommonCollector {
         }
 
         self.networks.refresh(true);
-        // `false`: the device list belongs to the medium tier. Refreshing it here
-        // would turn a fast tick into a full device enumeration.
-        self.disks.refresh(false);
+        if !disks_already_refreshed {
+            // `false`: the device list belongs to the medium tier, and asking for it
+            // here would add a device enumeration to the answer. It does not make the
+            // call cheap — see this function's own note — it only keeps the list from
+            // changing shape between tiers.
+            self.disks.refresh(false);
+        }
     }
 
     fn cpu(&self, tick: &SampleTick) -> CpuSnapshot {
@@ -870,7 +884,7 @@ impl SnapshotSource for CommonCollector {
             self.refresh_medium();
         }
         if tick.due.contains(Tier::Fast) {
-            self.refresh_fast();
+            self.refresh_fast(tick.due.contains(Tier::Medium));
         }
 
         let load = System::load_average();
