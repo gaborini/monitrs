@@ -729,8 +729,17 @@ const DEFAULT_LIGHT: Theme = Theme {
     text: TokenColors::new(0x001f_2430, 236, Color::Black),
     muted: TokenColors::new(0x005c_6370, 244, Color::DarkGray),
     accent: TokenColors::new(0x001f_5fbf, 25, Color::Blue),
-    good: TokenColors::new(0x001f_7a3f, 28, Color::Green),
-    watch: TokenColors::new(0x008a_5a00, 130, Color::Yellow),
+    // The indexed and named colors are darker than the hue the true-color value
+    // names, and deliberately so. On a light background the accessibility review
+    // measured palette index 28 (`#008700`) at 4.05:1 against `surface` and ANSI
+    // `Green` at 2.16:1 against `base` — a `normal` label nobody can read. Of the
+    // sixteen ANSI names only `Black`, `Blue`, `Red`, and `Magenta` clear 4.5:1 on
+    // a light background, so `good` takes `Blue` and `watch` takes `Magenta`
+    // rather than the green and yellow that a dark theme can afford (§5.2:
+    // information must survive at every depth). See
+    // `tests/accessibility.rs::every_theme_meets_the_contrast_floor_it_promises`.
+    good: TokenColors::new(0x001f_7a3f, 22, Color::Blue),
+    watch: TokenColors::new(0x008a_5a00, 94, Color::Magenta),
     critical: TokenColors::new(0x00a3_162b, 124, Color::Red),
     selection: TokenColors::new(0x00c9_d8f2, 152, Color::Cyan),
     border: TokenColors::new(0x00c3_c7d1, 250, Color::Gray),
@@ -755,7 +764,14 @@ const HIGH_CONTRAST: Theme = Theme {
     good: TokenColors::new(0x0000_ff00, 46, Color::LightGreen),
     watch: TokenColors::new(0x00ff_ff00, 226, Color::LightYellow),
     critical: TokenColors::new(0x00ff_0000, 196, Color::LightRed),
-    selection: TokenColors::new(0x0000_00c0, 19, Color::Blue),
+    // A mid-blue rather than the near-black `#0000c0` this theme used to carry.
+    // Blue contributes only 7% of relative luminance, so a saturated dark blue
+    // band measured 1.6–2.2:1 against this theme's black `base`: the selected row
+    // was a band you could not see in the one theme whose entire purpose is
+    // separation. `#5555ff` keeps white text at 5.09:1 *and* lifts the band itself
+    // to 4.13:1 against `base`, which is close to the arithmetic best possible for
+    // white-on-blue-on-black (both ratios cannot exceed 4.58:1 at once).
+    selection: TokenColors::new(0x0055_55ff, 62, Color::LightBlue),
     border: TokenColors::new(0x00ff_ffff, 231, Color::White),
     focus_border: TokenColors::new(0x00ff_ff00, 226, Color::LightYellow),
     stale: TokenColors::new(0x00c0_c0c0, 250, Color::Gray),

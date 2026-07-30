@@ -597,9 +597,12 @@ mod tests {
         assert_ne!(warming_line, normal_line);
         assert!(warming_line.starts_with('?'), "{warming_line:?}");
         assert!(normal_line.starts_with('.'), "{normal_line:?}");
-        // The eight-cell state column degrades `warming up` to `n/a`; a wider
+        // The eight-cell state column degrades `warming up` to its abbreviation
+        // rather than to `n/a` — a radar full of `n/a` at startup cannot be told
+        // from one on a machine that supports none of these signals. A wider
         // column shows the reason in full (§5.1's placeholder ladder).
-        assert!(warming_line.contains("n/a"), "{warming_line:?}");
+        assert!(warming_line.contains("warming"), "{warming_line:?}");
+        assert!(!warming_line.contains("n/a"), "{warming_line:?}");
         let wide = RadarRow::new(ascii(), &warming)
             .with_state_width(12)
             .line(48);

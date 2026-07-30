@@ -434,6 +434,11 @@ fn rate_line(
     for (direction, state) in [first, second] {
         let display = states::describe_byte_rate(&state, units);
         row.push(direction, presentation.style(Token::Muted));
+        // An explicit separator rather than one borrowed from the value field's
+        // right-alignment padding: the field is exactly as wide as the widest rate
+        // it can hold, so a value that uses all of it — `1023K/s`, or the
+        // `warming` placeholder — would otherwise run straight into the `rx`.
+        row.pad(1);
         row.push_field(
             &display.fitted(usize::from(RATE_VALUE_WIDTH), presentation.glyphs()),
             RATE_VALUE_WIDTH,
@@ -469,6 +474,8 @@ fn interface_line(
     for (direction, rate) in [("rx", interface.rx), ("tx", interface.tx)] {
         let display = states::describe_byte_rate(&rate, units);
         row.push(direction, presentation.style(Token::Muted));
+        // See `rate_line`: the separator cannot come from the padding.
+        row.pad(1);
         row.push_field(
             &display.fitted(usize::from(RATE_VALUE_WIDTH), presentation.glyphs()),
             RATE_VALUE_WIDTH,

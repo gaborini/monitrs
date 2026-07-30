@@ -1,6 +1,5 @@
 ---
 source: crates/monitrs-tui/tests/view_snapshots.rs
-assertion_line: 751
 expression: "text_of(&frame(&state, ascii()))"
 ---
 |+ monitrs  host:dev-mbp  [>LIVE]  1s  lag 1400ms  up 3d 04:12 -------------- 00:00:23Z --+|
@@ -13,18 +12,18 @@ expression: "text_of(&frame(&state, ascii()))"
 ||  uptime       3d 04:12 (booted 00:00:00Z)                                              ||
 ||  cpu          8 logical, 8 physical                                                    ||
 |+ SELECTED PROCESS ---------------------------------------------------- 6 of 12 lines ---+|
-||  identity     1 (start key 1)                                                          ||
-||  name         launchd                                                                  ||
-||  executable   /usr/bin/launchd                                                         ||
-||  command      /sbin/launchd                                                            ||
+||  identity     31842 (start key 900100)                                                 ||
+||  name         rustc                                                                    ||
+||  executable   /usr/bin/rustc                                                           ||
+||  command      cargo build --release                                                    ||
 ||  state        sleeping                                                                 ||
 ||  user         gabor                                                                    ||
 |+ DIAGNOSTICS --------------------------------------------------------- 7 of 27 lines ---+|
 ||PRESSURE                                                                                ||
 ||? NET     link speed unknown       18M/s                                                ||
-||? PSI-CPU warming up                 n/a                                                ||
-||? PSI-MEM warming up                 n/a                                                ||
-||? PSI-IO  warming up                 n/a                                                ||
+||? PSI-CPU warming up             warming                                                ||
+||? PSI-MEM warming up             warming                                                ||
+||? PSI-IO  warming up             warming                                                ||
 ||UNAVAILABLE METRICS                                                                     ||
 ||  - CPU time breakdown      unsupported                                                 ||
 |+----------------------------------------------------------------------------------------+|

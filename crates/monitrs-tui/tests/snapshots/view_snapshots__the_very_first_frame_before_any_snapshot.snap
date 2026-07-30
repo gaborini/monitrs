@@ -1,6 +1,5 @@
 ---
 source: crates/monitrs-tui/tests/view_snapshots.rs
-assertion_line: 598
 expression: "text_of(&frame(&state, ascii()))"
 ---
 |+ monitrs  host:unknown  [>LIVE]  1s  up.warming up -------------------------------------------------------------------------- --:--:--Z --+|

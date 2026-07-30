@@ -1,6 +1,5 @@
 ---
 source: crates/monitrs-tui/tests/view_snapshots.rs
-assertion_line: 488
 expression: "styles_of(&frame(&state, no_color()))"
 ---
  0: 1xReset/Reset/DIM 8xReset/Reset/BOLD | DIM 91xReset/Reset/DIM
@@ -13,11 +12,11 @@ expression: "styles_of(&frame(&state, no_color()))"
  7: 1xReset/Reset/DIM 1xReset/Reset/NONE 5xReset/Reset/DIM 92xReset/Reset/NONE 1xReset/Reset/DIM
  8: 87xReset/Reset/BOLD 9xReset/Reset/BOLD | DIM 4xReset/Reset/BOLD
  9: 1xReset/Reset/BOLD 1xReset/Reset/DIM 1xReset/Reset/NONE 7xReset/Reset/DIM 1xReset/Reset/NONE 8xReset/Reset/DIM 1xReset/Reset/NONE 1xReset/Reset/DIM 1xReset/Reset/NONE 6xReset/Reset/DIM 1xReset/Reset/NONE 5xReset/Reset/DIM 1xReset/Reset/NONE 5xReset/Reset/DIM 1xReset/Reset/NONE 7xReset/Reset/DIM 1xReset/Reset/NONE 7xReset/Reset/DIM 1xReset/Reset/NONE 4xReset/Reset/DIM 1xReset/Reset/NONE 8xReset/Reset/DIM 1xReset/Reset/NONE 28xReset/Reset/DIM 1xReset/Reset/BOLD
-10: 1xReset/Reset/BOLD 2xReset/Reset/NONE 7xReset/Reset/DIM 10xReset/Reset/NONE 1xReset/Reset/DIM 78xReset/Reset/NONE 1xReset/Reset/BOLD
+10: 1xReset/Reset/BOLD 2xReset/Reset/REVERSED 7xReset/Reset/DIM | REVERSED 10xReset/Reset/REVERSED 1xReset/Reset/DIM | REVERSED 78xReset/Reset/REVERSED 1xReset/Reset/BOLD
 11: 1xReset/Reset/BOLD 2xReset/Reset/NONE 7xReset/Reset/DIM 10xReset/Reset/NONE 1xReset/Reset/DIM 78xReset/Reset/NONE 1xReset/Reset/BOLD
 12: 1xReset/Reset/BOLD 2xReset/Reset/NONE 7xReset/Reset/DIM 10xReset/Reset/NONE 1xReset/Reset/DIM 78xReset/Reset/NONE 1xReset/Reset/BOLD
 13: 1xReset/Reset/BOLD 2xReset/Reset/NONE 7xReset/Reset/DIM 10xReset/Reset/NONE 1xReset/Reset/DIM 78xReset/Reset/NONE 1xReset/Reset/BOLD
-14: 1xReset/Reset/BOLD 2xReset/Reset/REVERSED 7xReset/Reset/DIM | REVERSED 10xReset/Reset/REVERSED 1xReset/Reset/DIM | REVERSED 78xReset/Reset/REVERSED 1xReset/Reset/BOLD
+14: 1xReset/Reset/BOLD 2xReset/Reset/NONE 7xReset/Reset/DIM 10xReset/Reset/NONE 1xReset/Reset/DIM 78xReset/Reset/NONE 1xReset/Reset/BOLD
 15: 1xReset/Reset/BOLD 98xReset/Reset/NONE 1xReset/Reset/BOLD
 16: 1xReset/Reset/BOLD 98xReset/Reset/NONE 1xReset/Reset/BOLD
 17: 1xReset/Reset/BOLD 98xReset/Reset/NONE 1xReset/Reset/BOLD

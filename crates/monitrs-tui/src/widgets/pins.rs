@@ -473,7 +473,10 @@ mod tests {
             .with_baseline(MetricState::WarmingUp);
         assert_eq!(pin.delta_points(), None);
         let text = pin.delta_text(DELTA_WIDTH, GlyphSet::ascii());
-        assert_eq!(text, "n/a", "seven cells cannot hold `warming up`");
+        assert_eq!(
+            text, "warming",
+            "seven cells cannot hold `warming up`, but they can say which              kind of unknown this is"
+        );
         assert!(!text.contains('0'), "{text:?}");
     }
 

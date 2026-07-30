@@ -1,6 +1,5 @@
 ---
 source: crates/monitrs-tui/tests/view_snapshots.rs
-assertion_line: 541
 expression: text
 ---
 |+ monitrs  host:dev-mbp  [>LIVE]  1s  lag 1400ms  up 3d 04:12 ---------------------------------------------------------------- 00:00:23Z --+|
@@ -8,11 +7,11 @@ expression: text
 || MEM   71% [##############################################################=-------------------------]  23G/32G  swap 205M/2.0G            ||
 |+ SYSTEM ------------------------------------------ 22 of 23 lines ---+ DIAGNOSTICS -------------------------------------------------------+|
 ||  host         dev-mbp                                               |PRESSURE                                                            ||
-||  os           fake-os 1.0                                           |? CPU     permission denied          n/a                            ||
+||  os           fake-os 1.0                                           |? CPU     permission denied       denied                            ||
 ||  kernel       fake-kernel 1.0                                       |? NET     link speed unknown       18M/s                            ||
-||  arch         aarch64                                               |? PSI-CPU warming up                 n/a                            ||
-||  uptime       3d 04:12 (booted 00:00:00Z)                           |? PSI-MEM warming up                 n/a                            ||
-||  cpu          8 logical, 8 physical                                 |? PSI-IO  warming up                 n/a                            ||
+||  arch         aarch64                                               |? PSI-CPU warming up             warming                            ||
+||  uptime       3d 04:12 (booted 00:00:00Z)                           |? PSI-MEM warming up             warming                            ||
+||  cpu          8 logical, 8 physical                                 |? PSI-IO  warming up             warming                            ||
 ||  cpu model    Fake CPU at 3200 MHz                                  |UNAVAILABLE METRICS                                                 ||
 ||  memory       32 GiB total, swap 2.0 GiB                            |  ! process I/O             permission denied                       ||
 ||  semantics    cross-platform baseline; c...r-byte comparable with it|  - CPU time breakdown      unsupported                             ||
@@ -30,14 +29,14 @@ expression: text
 ||OWN OVERHEAD                                                         |  every headline metric is fresh                                    ||
 ||  cpu          0.6% of one core, 23 MiB resident                     |COLLECTOR ERRORS                                                    ||
 |+ SELECTED PROCESS --------------------------------- 9 of 12 lines ---|  ! /proc/diskstats: permission denied (x2, 00:02 ago)              ||
-||  identity     1 (start key 1)                                       |  ! hwmon: no sensors found (x1, 00:30 ago)                         ||
-||  name         launchd                                               |NOTICES                                                             ||
-||  executable   /usr/bin/launchd                                      |  none                                                              ||
-||  command      /sbin/launchd                                         |SAMPLING                                                            ||
+||  identity     31842 (start key 900100)                              |  ! hwmon: no sensors found (x1, 00:30 ago)                         ||
+||  name         rustc                                                 |NOTICES                                                             ||
+||  executable   /usr/bin/rustc                                        |  none                                                              ||
+||  command      cargo build --release                                 |SAMPLING                                                            ||
 ||  state        sleeping                                              |  interval     1s                                                   ||
 ||  user         gabor                                                 |  dropped      2                                                    ||
-||  cpu          0.1%                                                  |  coalesced    30                                                   ||
-||  memory       32M rss, 192M virt, 0.1% of total                     |  lag          1400ms                                               ||
+||  cpu          120%                                                  |  coalesced    30                                                   ||
+||  memory       2.6G rss, 16G virt, 8.1% of total                     |  lag          1400ms                                               ||
 ||  disk         !permission denied read, !permission denied write (...|  history      24 samples of 300, 162K                              ||
 |+---------------------------------------------------------------------+--------------------------------------------------------------------+|
 | 1 Overview  2 Processes  3 Storage  4 Network [5 Inspect]                                                                  / filter  ? help|

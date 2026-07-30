@@ -1,6 +1,5 @@
 ---
 source: crates/monitrs-tui/tests/view_snapshots.rs
-assertion_line: 743
 expression: text
 ---
 |+ monitrs  host:dev-mbp  [>LIVE]  1s  lag 1400ms  up 3d 04:12 ---------------------------------------------------------------- 00:00:23Z --+|
@@ -9,9 +8,9 @@ expression: text
 |+ SYSTEM ------------------------------------------ 22 of 23 lines ---+ DIAGNOSTICS -------------------------------------------------------+|
 ||  host         dev-mbp                                               |PRESSURE                                                            ||
 ||  os           fake-os 1.0                                           |? NET     link speed unknown       18M/s                            ||
-||  kernel       fake-kernel 1.0                                       |? PSI-CPU warming up                 n/a                            ||
-||  arch         aarch64                                               |? PSI-MEM warming up                 n/a                            ||
-||  uptime       3d 04:12 (booted 00:00:00Z)                           |? PSI-IO  warming up                 n/a                            ||
+||  kernel       fake-kernel 1.0                                       |? PSI-CPU warming up             warming                            ||
+||  arch         aarch64                                               |? PSI-MEM warming up             warming                            ||
+||  uptime       3d 04:12 (booted 00:00:00Z)                           |? PSI-IO  warming up             warming                            ||
 ||  cpu          8 logical, 8 physical                                 |UNAVAILABLE METRICS                                                 ||
 ||  cpu model    Fake CPU at 3200 MHz                                  |  - CPU time breakdown      unsupported                             ||
 ||  memory       32 GiB total, swap 2.0 GiB                            |  - swap activity           unsupported                             ||
@@ -30,14 +29,14 @@ expression: text
 ||OWN OVERHEAD                                                         |  none                                                              ||
 ||  cpu          0.6% of one core, 23 MiB resident                     |SAMPLING                                                            ||
 |+ SELECTED PROCESS --------------------------------- 9 of 12 lines ---|  interval     1s                                                   ||
-||  identity     1 (start key 1)                                       |  dropped      2                                                    ||
-||  name         launchd                                               |  coalesced    30                                                   ||
-||  executable   /usr/bin/launchd                                      |  lag          1400ms                                               ||
-||  command      /sbin/launchd                                         |  history      24 samples of 300, 190K                              ||
+||  identity     31842 (start key 900100)                              |  dropped      2                                                    ||
+||  name         rustc                                                 |  coalesced    30                                                   ||
+||  executable   /usr/bin/rustc                                        |  lag          1400ms                                               ||
+||  command      cargo build --release                                 |  history      24 samples of 300, 190K                              ||
 ||  state        sleeping                                              |                                                                    ||
 ||  user         gabor                                                 |                                                                    ||
-||  cpu          0.1%                                                  |                                                                    ||
-||  memory       32M rss, 192M virt, 0.1% of total                     |                                                                    ||
-||  disk         256K/s read, 512K/s write (736M / 1.4G total)         |                                                                    ||
+||  cpu          120%                                                  |                                                                    ||
+||  memory       2.6G rss, 16G virt, 8.1% of total                     |                                                                    ||
+||  disk         21M/s read, 42M/s write (60G / 120G total)            |                                                                    ||
 |+---------------------------------------------------------------------+--------------------------------------------------------------------+|
 | 1 Overview  2 Processes  3 Storage  4 Network [5 Inspect]                                                                  / filter  ? help|

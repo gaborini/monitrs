@@ -1,6 +1,5 @@
 ---
 source: crates/monitrs-tui/tests/view_snapshots.rs
-assertion_line: 528
 expression: text
 ---
 |+ monitrs  host:dev-mbp  [>LIVE]  1s  up 3d 04:12 ---------------------------------------------------------------------------- 00:00:23Z --+|
@@ -10,15 +9,15 @@ expression: text
 || . MEM     normal        29%     | CPU                                                                                                    ||
 || . SWAP    normal       0B/s     | MEM                                                                             #######################||
 || . LOAD    normal       4.12     | I/O                                                                             @@@@@@@@@@@@@@@@@@@@@@@||
-|| ? CPU     n/a           n/a     | CORE                                                                                                   ||
+|| ? CPU     denied     denied     | CORE                                                                                                   ||
 || ? NET     n/a         18M/s     |                                                                                                        ||
 |+ PROCESSES  sort CPU% desc --------------------------------------------------------------------------------------------------- 5 total ---+|
 ||      PID USER     S   CPU%  MEM%   RSS  VIRT  READ/s WRITE/s  THR      AGE NAME                     COMMAND                              ||
-||    31842 gabor    S   120%  8.1%  2.6G   16G     n/a     n/a    4    01:23 rustc                    cargo build --release                ||
-||     1221 postgres S    54%  3.0%  982M  5.8G     n/a     n/a    4    01:23 postgres                 postgres: checkpointer               ||
-||      507 gabor    S    21%  4.1%  1.3G  7.8G     n/a     n/a    4    01:23 WindowServer             /System/Library/WindowServer         ||
-||     9182 gabor    S    12%  1.2%  392M  2.3G     n/a     n/a    4    01:23 node                     node server.js                       ||
-||>       1 gabor    S   0.1%  0.1%   32M  192M     n/a     n/a    4    01:23 launchd                  /sbin/launchd                        ||
+||>   31842 gabor    S   120%  8.1%  2.6G   16G  denied  denied    4    01:23 rustc                    cargo build --release                ||
+||     1221 postgres S    54%  3.0%  982M  5.8G  denied  denied    4    01:23 postgres                 postgres: checkpointer               ||
+||      507 gabor    S    21%  4.1%  1.3G  7.8G  denied  denied    4    01:23 WindowServer             /System/Library/WindowServer         ||
+||     9182 gabor    S    12%  1.2%  392M  2.3G  denied  denied    4    01:23 node                     node server.js                       ||
+||        1 gabor    S   0.1%  0.1%   32M  192M  denied  denied    4    01:23 launchd                  /sbin/launchd                        ||
 ||                                                                                                                                          ||
 ||                                                                                                                                          ||
 ||                                                                                                                                          ||
@@ -37,7 +36,7 @@ expression: text
 ||                                                                                                                                          ||
 ||                                                                                                                                          ||
 |+ PINS ---------------------------------------------------------------+ NETWORK -----------------------------------------------------------+|
-|| nothing pinned; p pins the selected process                         | NET   rx  18M/s  tx 2.3M/s                                         ||
-||                                                                     | DISK  rd  18M/s  wr  42M/s                                         ||
+|| nothing pinned; p pins the selected process                         | NET   rx   18M/s  tx  2.3M/s                                       ||
+||                                                                     | DISK  rd   18M/s  wr   42M/s                                       ||
 |+---------------------------------------------------------------------+--------------------------------------------------------------------+|
 |[1 Overview] 2 Processes  3 Storage  4 Network  5 Inspect                                                                   / filter  ? help|

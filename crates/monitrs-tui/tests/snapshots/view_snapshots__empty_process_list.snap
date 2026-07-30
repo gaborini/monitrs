@@ -1,6 +1,5 @@
 ---
 source: crates/monitrs-tui/tests/view_snapshots.rs
-assertion_line: 510
 expression: text
 ---
 |+ monitrs  host:dev-mbp  [>LIVE]  1s  up 3d 04:12 ---------------------------------------------------------------------------- 00:00:23Z --+|

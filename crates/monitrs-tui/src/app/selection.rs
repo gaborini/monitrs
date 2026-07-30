@@ -84,6 +84,17 @@ pub struct Selection {
     /// Kept even when `identity` is `None` so that a table which briefly empties
     /// and refills does not throw the user back to the top.
     row: usize,
+    /// Whether the user has ever chosen what is selected.
+    ///
+    /// Rule 1 above — identity wins — is about a process *the user is watching*.
+    /// Until they have pointed at one, there is nothing to watch, and following
+    /// the identity that happened to be on row 0 is actively harmful: the first
+    /// snapshot cannot order by CPU at all (§8.2 makes every rate `WarmingUp`),
+    /// so row 0 of that table is an arbitrary process, and the viewport then
+    /// follows it to wherever the real ordering puts it. On a busy machine that
+    /// leaves a fresh session looking at row 78 of 989 with the hottest
+    /// processes scrolled off the top.
+    chosen: bool,
 }
 
 impl Selection {
@@ -93,6 +104,7 @@ impl Selection {
         Self {
             identity: None,
             row: 0,
+            chosen: false,
         }
     }
 
@@ -132,6 +144,14 @@ impl Selection {
             return Resync::Empty;
         };
 
+        if !self.chosen {
+            // An automatic selection tracks the top of the table, not the process
+            // that was there when it was made. See `chosen`.
+            self.row = 0;
+            self.identity = rows.get(0).map(|row| row.identity);
+            return Resync::Initialised { row: 0 };
+        }
+
         if let Some(identity) = self.identity {
             if let Some(row) = rows.row_of(identity) {
                 self.row = row;
@@ -153,12 +173,19 @@ impl Selection {
     }
 
     /// Selects `index`, clamped into `rows`. Reports whether anything changed.
+    ///
+    /// Every user-initiated selection funnels through here — movement, `gg`, `G`,
+    /// selecting by identity, a click — which is what makes this the one place
+    /// that can mark the selection as *chosen*. Note that it marks it even when
+    /// the row does not change: pressing `j` at the bottom of the table is still
+    /// the user saying which process they are watching.
     pub(in crate::app) fn select_row(&mut self, rows: &ProcessRows, index: usize) -> bool {
         let Some(last) = rows.last_index() else {
             return false;
         };
         let target = index.min(last);
         let identity = rows.get(target).map(|row| row.identity);
+        self.chosen = true;
         if self.row == target && self.identity == identity {
             return false;
         }
@@ -177,6 +204,16 @@ impl Selection {
             Some(row) => self.select_row(rows, row),
             None => false,
         }
+    }
+
+    /// Marks what is selected as the user's own choice.
+    ///
+    /// Acting on a row — opening its detail, pinning it — is choosing it just as
+    /// much as moving the cursor onto it is: after such an action the cursor has
+    /// to stay with *that* process instead of drifting back to the top of the
+    /// table under it.
+    pub(in crate::app) const fn confirm(&mut self) {
+        self.chosen = true;
     }
 
     /// Moves `delta` rows, clamping at both ends.
@@ -237,6 +274,86 @@ mod tests {
 
         let rows = rows_of(1, &table());
         assert_eq!(selection.resync(&rows), Resync::Initialised { row: 0 });
+        assert_eq!(selection.identity(), Some(ProcessIdentity::new(2, 22)));
+    }
+
+    /// The bug this pins was found by rendering a frame from the live collector,
+    /// not by a unit test: every rule below behaved as designed, and the result
+    /// was still that a fresh session opened on `launchd` at row 78 of 989 with
+    /// the busiest processes scrolled off the top.
+    ///
+    /// The mechanism: §8.2 makes every rate `WarmingUp` on the first snapshot, so
+    /// the CPU sort has nothing to order by and the unavailable-last rule falls
+    /// through to the `(pid, start_key)` tie-break — row 0 is PID 1. Latching the
+    /// selection onto that identity then dragged the viewport after it for the
+    /// rest of the session, because the viewport follows the selection.
+    #[test]
+    fn an_automatic_selection_follows_the_top_row_until_the_user_chooses_one() {
+        // A first snapshot exactly as §8.2 requires it: no rate is measurable yet.
+        let warming = [
+            Fake::new(1, 11, "launchd"),
+            Fake::new(2, 22, "rustc"),
+            Fake::new(3, 33, "postgres"),
+        ];
+        let mut selection = Selection::new();
+        let rows = rows_of(1, &warming);
+        assert_eq!(selection.resync(&rows), Resync::Initialised { row: 0 });
+        assert_eq!(
+            selection.identity(),
+            Some(ProcessIdentity::new(1, 11)),
+            "with no CPU values to sort by, row 0 is the lowest PID"
+        );
+
+        // The rates arrive and the table takes its real shape.
+        let rows = rows_of(2, &table());
+        assert_eq!(selection.resync(&rows), Resync::Initialised { row: 0 });
+        assert_eq!(
+            selection.identity(),
+            Some(ProcessIdentity::new(2, 22)),
+            "an unchosen cursor must be on the busiest process, not on whatever \
+             happened to sort first before any rate existed"
+        );
+        assert_eq!(selection.row(), Some(0), "so the table opens at its top");
+
+        // One deliberate keypress, and §7.2 rule 1 takes over for good.
+        assert!(selection.select_identity(&rows, ProcessIdentity::new(4, 44)));
+        let quieter = [
+            Fake::new(1, 11, "launchd").cpu(0.1),
+            Fake::new(2, 22, "rustc").cpu(287.0),
+            Fake::new(3, 33, "postgres").cpu(54.0),
+            Fake::new(4, 44, "node").cpu(0.2),
+        ];
+        let rows = rows_of(3, &quieter);
+        assert_eq!(
+            selection.resync(&rows),
+            Resync::Retained { row: 2 },
+            "node fell to third by CPU and the cursor went with it"
+        );
+        assert_eq!(selection.identity(), Some(ProcessIdentity::new(4, 44)));
+    }
+
+    #[test]
+    fn acting_on_a_row_counts_as_choosing_it() {
+        let mut selection = Selection::new();
+        let rows = rows_of(1, &table());
+        let _ = selection.resync(&rows);
+        assert_eq!(selection.identity(), Some(ProcessIdentity::new(2, 22)));
+
+        // `Enter`, `p` and the signal dialog all confirm without moving.
+        selection.confirm();
+
+        let reordered = [
+            Fake::new(1, 11, "launchd").cpu(500.0),
+            Fake::new(2, 22, "rustc").cpu(1.0),
+            Fake::new(3, 33, "postgres").cpu(54.0),
+            Fake::new(4, 44, "node").cpu(12.0),
+        ];
+        let rows = rows_of(2, &reordered);
+        assert_eq!(
+            selection.resync(&rows),
+            Resync::Retained { row: 3 },
+            "the process a dialog is about must not slide out from under it"
+        );
         assert_eq!(selection.identity(), Some(ProcessIdentity::new(2, 22)));
     }
 
@@ -323,6 +440,9 @@ mod tests {
             Some(ProcessIdentity::new(2, 22)),
             "rustc is the busiest process, so it starts selected"
         );
+        // §26's rule is about the process the user is *watching*, so the cursor has
+        // to be theirs before the reuse question means anything.
+        selection.confirm();
 
         let recycled = [
             Fake::new(1, 11, "launchd").cpu(0.1),
@@ -428,7 +548,14 @@ mod tests {
     fn repeated_resyncs_are_idempotent() {
         let mut selection = Selection::new();
         let rows = rows_of(1, &table());
+        // An unchosen cursor re-derives itself from the same rows and lands in the
+        // same place; it reports `Initialised` each time because that is what it
+        // did, and the reducer discards the report anyway.
         assert_eq!(selection.resync(&rows), Resync::Initialised { row: 0 });
+        assert_eq!(selection.resync(&rows), Resync::Initialised { row: 0 });
+        assert_eq!(selection.identity(), Some(ProcessIdentity::new(2, 22)));
+
+        selection.confirm();
         assert_eq!(selection.resync(&rows), Resync::Retained { row: 0 });
         assert_eq!(selection.resync(&rows), Resync::Retained { row: 0 });
     }

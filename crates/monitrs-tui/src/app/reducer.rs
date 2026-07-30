@@ -196,7 +196,10 @@ pub fn reduce(state: &mut AppState, action: Action) -> Effects {
 
         // ----------------------------------------------------------------- pinning
         Action::PinSelected => match state.selected() {
-            Some(identity) => toggle_pin(state, identity),
+            Some(identity) => {
+                state.selection.confirm();
+                toggle_pin(state, identity)
+            }
             None => Effects::new(),
         },
         Action::Pin(identity) => toggle_pin(state, identity),
@@ -555,6 +558,7 @@ fn inspect_selected(state: &mut AppState) -> Effects {
     }
     match state.selected() {
         Some(identity) => {
+            state.selection.confirm();
             state.overlays.push(Overlay::ProcessDetail {
                 identity,
                 scroll: 0,
@@ -989,6 +993,9 @@ fn action_target(state: &mut AppState, capability: Capability) -> Option<Process
     let name = process.name.to_string();
     let signalable = process.state.is_signalable();
     let state_label = process.state.label();
+    // Aiming an action at a row is choosing it: the cursor must not drift off the
+    // process the confirmation dialog is about (§7.2).
+    state.selection.confirm();
 
     let support = state.live_snapshot().map(|snapshot| match capability {
         Capability::Signals => snapshot.capabilities.process_signals,
@@ -2909,7 +2916,12 @@ mod tests {
     fn resyncing_reports_what_happened_to_the_selection() {
         let mut state = state();
         deliver(&mut state, 1, &table());
-        assert_eq!(state.resync_rows(), Resync::Retained { row: 0 });
+        // Nothing has been chosen yet, so the cursor re-derives from row 0.
+        assert_eq!(state.resync_rows(), Resync::Initialised { row: 0 });
+
+        // Once a row is the user's, resyncing keeps that process.
+        let _ = reduce(&mut state, Action::SelectNext);
+        assert_eq!(state.resync_rows(), Resync::Retained { row: 1 });
     }
 
     #[test]

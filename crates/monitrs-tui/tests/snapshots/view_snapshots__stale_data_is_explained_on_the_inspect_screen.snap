@@ -1,6 +1,5 @@
 ---
 source: crates/monitrs-tui/tests/view_snapshots.rs
-assertion_line: 569
 expression: text
 ---
 |+ monitrs  host:dev-mbp  [>LIVE]  1s  up 3d 04:12 ---------------------------------------------------------------------------- 00:00:23Z --+|
@@ -11,9 +10,9 @@ expression: text
 ||  os           fake-os 1.0                                           |? CPU     needs a second sample      n/a                            ||
 ||  kernel       fake-kernel 1.0                                       |? MEM     needs a second sample      n/a                            ||
 ||  arch         aarch64                                               |? NET     link speed unknown       18M/s                            ||
-||  uptime       3d 04:12 (booted 00:00:00Z)                           |? PSI-CPU warming up                 n/a                            ||
-||  cpu          8 logical, 8 physical                                 |? PSI-MEM warming up                 n/a                            ||
-||  cpu model    Fake CPU at 3200 MHz                                  |? PSI-IO  warming up                 n/a                            ||
+||  uptime       3d 04:12 (booted 00:00:00Z)                           |? PSI-CPU warming up             warming                            ||
+||  cpu          8 logical, 8 physical                                 |? PSI-MEM warming up             warming                            ||
+||  cpu model    Fake CPU at 3200 MHz                                  |? PSI-IO  warming up             warming                            ||
 ||  memory       32 GiB total, swap 2.0 GiB                            |UNAVAILABLE METRICS                                                 ||
 ||  semantics    cross-platform baseline; c...r-byte comparable with it|  - CPU time breakdown      unsupported                             ||
 ||  cgroup limit n/a                                                   |  - swap activity           unsupported                             ||
@@ -30,14 +29,14 @@ expression: text
 ||OWN OVERHEAD                                                         |  ~ memory used             measured 00:17 ago                      ||
 ||  not measured yet                                                   |COLLECTOR ERRORS                                                    ||
 |+ SELECTED PROCESS --------------------------------- 9 of 12 lines ---|  none recorded                                                     ||
-||  identity     1 (start key 1)                                       |NOTICES                                                             ||
-||  name         launchd                                               |  none                                                              ||
-||  executable   /usr/bin/launchd                                      |SAMPLING                                                            ||
-||  command      /sbin/launchd                                         |  interval     1s                                                   ||
+||  identity     31842 (start key 900100)                              |NOTICES                                                             ||
+||  name         rustc                                                 |  none                                                              ||
+||  executable   /usr/bin/rustc                                        |SAMPLING                                                            ||
+||  command      cargo build --release                                 |  interval     1s                                                   ||
 ||  state        sleeping                                              |  dropped      0                                                    ||
 ||  user         gabor                                                 |  coalesced    23                                                   ||
-||  cpu          0.1%                                                  |  lag          0ms                                                  ||
-||  memory       32M rss, 192M virt, 0.1% of total                     |  history      24 samples of 300, 179K                              ||
-||  disk         256K/s read, 512K/s write (736M / 1.4G total)         |                                                                    ||
+||  cpu          120%                                                  |  lag          0ms                                                  ||
+||  memory       2.6G rss, 16G virt, 8.1% of total                     |  history      24 samples of 300, 179K                              ||
+||  disk         21M/s read, 42M/s write (60G / 120G total)            |                                                                    ||
 |+---------------------------------------------------------------------+--------------------------------------------------------------------+|
 | 1 Overview  2 Processes  3 Storage  4 Network [5 Inspect]                                                                  / filter  ? help|

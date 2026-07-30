@@ -429,6 +429,66 @@ impl AppState {
         state
     }
 
+    /// Adopts a new configuration into a running state (§12's reload).
+    ///
+    /// Takes the same [`AppSettings`] the runtime already builds from its
+    /// configuration file, rather than a second reload-shaped struct. That is the
+    /// whole point: two structs would be two translations of the same file, and the
+    /// one used on reload would be the one that quietly fell behind.
+    ///
+    /// Four of the fields are facts about *this session*, not settings, and are
+    /// therefore ignored: `started_at` and `size` describe the terminal as it is,
+    /// `view` is wherever the user has navigated to, and `env` is the environment
+    /// the process was launched in. `config_path` is likewise not adopted — the file
+    /// that was just reloaded is by definition the file already in force, and
+    /// following a `path` key inside a configuration file would make reloading
+    /// non-atomic.
+    ///
+    /// Returns whether the history ring was rebuilt, which discards retained
+    /// samples: the caller says so, because the user needs to know that their
+    /// timeline is gone (§8.5).
+    pub fn reconfigure(&mut self, settings: &AppSettings) -> bool {
+        self.display = settings.display;
+        self.sort = settings.sort;
+        self.tree_mode = settings.tree_mode;
+        self.only_user = settings.only_user;
+        self.hide_kernel_threads = settings.hide_kernel_threads;
+        self.filter_text = settings.filter.clone();
+        self.filter = compile_filter(
+            &settings.filter,
+            settings.only_user,
+            settings.hide_kernel_threads,
+        );
+        self.sample_interval = settings.sample_interval;
+        self.resolver =
+            KeyResolver::with_timeout(settings.keymap.clone(), settings.sequence_timeout);
+
+        // Rebuilt only when it actually changed. A ring rebuild throws away every
+        // retained sample, so doing it on every reload would make `:reload` a way to
+        // erase the Time Lens by accident (§2.1's history is the expensive thing here,
+        // not the allocation).
+        let history_changed = self.history_config != settings.history;
+        if history_changed {
+            self.history_config = settings.history;
+            self.history = HistoryRing::with_config(settings.history, self.clock);
+            self.timeline = Timeline::live();
+            self.displayed = self.latest.clone();
+            let clamps: Vec<String> = self
+                .history
+                .clamps()
+                .iter()
+                .map(|clamp| clamp.message())
+                .collect();
+            for message in clamps {
+                self.notify(Notice::watch(NoticeKind::Config, message));
+            }
+        }
+
+        // Last, because it depends on the filter and the ordering above.
+        let _ = self.resync_rows();
+        history_changed
+    }
+
     // ------------------------------------------------------------------ screen
 
     /// The active view (§6.2 `1`–`5`).

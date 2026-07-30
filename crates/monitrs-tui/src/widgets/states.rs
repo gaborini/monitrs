@@ -8,15 +8,22 @@
 //! `MetricState` at all: they all call [`describe`] (or one of its typed
 //! wrappers) and render the [`MetricDisplay`] it returns.
 //!
-//! # Why there are two placeholder widths
+//! # Why a placeholder has three widths
 //!
 //! §4 fixes the placeholder strings (`warming up`, `permission denied`, `n/a`,
 //! and the [`UnavailableReason`] messages), and §5.1 fixes `n/a` as the strict
 //! ASCII spelling of "no value". A `MEM%` column is five cells wide, so
 //! `permission denied` cannot go in it. [`MetricDisplay::fitted`] therefore picks
-//! the widest form that fits — the full placeholder in a wide field, `n/a` in a
-//! narrow one — and the symbol, which is one cell and always present, is what
-//! keeps `permission denied` distinguishable from `warming up` either way (§5.2).
+//! the widest form that fits, and there are three:
+//!
+//! 1. the placeholder itself, wherever it fits;
+//! 2. its [`abbreviated_placeholder`] — `denied`, `warming` — which is the rung
+//!    that keeps two *different* facts apart in a column too narrow for either
+//!    phrase. Without it both became `n/a`, which is `Unsupported`'s own
+//!    placeholder, and the Overview's eight-cell radar column showed a machine
+//!    still warming up as one that supports nothing at all;
+//! 3. `n/a`, and below that the one-cell symbol, which is always present and is
+//!    what carries the distinction where not even the abbreviation fits (§5.2).
 //!
 //! [`UnavailableReason`]: monitrs_core::model::UnavailableReason
 
@@ -105,9 +112,10 @@ impl MetricDisplay {
     /// The widest form of this metric that fits `width` cells.
     ///
     /// A value is tail-truncated, because a number's leading digits carry the
-    /// magnitude. A placeholder degrades to `n/a` and then to the symbol alone
-    /// rather than being truncated into something that reads like a different
-    /// word — `permission denied` clipped to `permis` is worse than `n/a` (§5.1).
+    /// magnitude. A placeholder degrades through [`abbreviated_placeholder`] to
+    /// `n/a` and then to the symbol alone rather than being truncated into
+    /// something that reads like a different word — `permission denied` clipped to
+    /// `permis` is worse than `n/a` (§5.1).
     #[must_use]
     pub fn fitted(&self, width: usize, glyphs: GlyphSet) -> String {
         if width == 0 {
@@ -118,6 +126,11 @@ impl MetricDisplay {
         }
         if self.is_value {
             return fit_within(&self.text, width, glyphs);
+        }
+        if let Some(abbreviation) = abbreviated_placeholder(&self.text)
+            && display_width(abbreviation) <= width
+        {
+            return abbreviation.to_owned();
         }
         let short = glyphs.unavailable();
         if display_width(short) <= width {
@@ -224,6 +237,32 @@ pub fn describe_pressure(state: &MetricState<PressureState>) -> MetricDisplay {
             is_value: false,
         },
     }
+}
+
+/// The abbreviation for a placeholder whose column cannot hold the whole phrase.
+///
+/// One rung between the phrase and `n/a`, and the reason it exists is the radar's
+/// eight-cell state column: `warming up` and `permission denied` are different
+/// facts — the first resolves itself within seconds, the second never will —
+/// and §4 exists so that a user can tell them apart. Collapsing both to `n/a`
+/// discards that distinction at exactly the width the Overview actually uses.
+///
+/// Compared against [`MetricState::placeholder`] rather than written out as
+/// literals, so that changing a phrase in `monitrs-core` makes the abbreviation
+/// stop applying instead of quietly applying to the wrong state.
+///
+/// [`MetricState::TemporarilyUnavailable`] deliberately gets none: its message is
+/// a specific claim (`counter reset`, `device disappeared`), and an abbreviated
+/// specific claim is a different claim. Those still fall through to `n/a`.
+#[must_use]
+pub fn abbreviated_placeholder(text: &str) -> Option<&'static str> {
+    if MetricState::<()>::WarmingUp.placeholder() == Some(text) {
+        return Some("warming");
+    }
+    if MetricState::<()>::PermissionDenied.placeholder() == Some(text) {
+        return Some("denied");
+    }
+    None
 }
 
 /// The character shown where a state could not be derived at all.
@@ -387,12 +426,17 @@ mod tests {
     }
 
     #[test]
-    fn a_placeholder_degrades_to_n_a_and_then_to_its_symbol() {
+    fn a_placeholder_degrades_through_its_abbreviation_to_n_a_and_then_to_its_symbol() {
         let display = describe_percent(&MetricState::PermissionDenied);
         let ascii = GlyphSet::ascii();
         assert_eq!(display.fitted(40, ascii), "permission denied");
         assert_eq!(display.fitted(17, ascii), "permission denied");
-        assert_eq!(display.fitted(16, ascii), "n/a");
+        // The whole point of the middle rung: down to six cells the cell still
+        // says the OS refused, rather than the `n/a` that also means "this
+        // machine has no such metric".
+        assert_eq!(display.fitted(16, ascii), "denied");
+        assert_eq!(display.fitted(6, ascii), "denied");
+        assert_eq!(display.fitted(5, ascii), "n/a");
         assert_eq!(display.fitted(3, ascii), "n/a");
         assert_eq!(display.fitted(2, ascii), "!");
         assert_eq!(display.fitted(1, ascii), "!");
@@ -401,15 +445,69 @@ mod tests {
 
     #[test]
     fn a_placeholder_is_never_clipped_into_a_different_word() {
-        // `permis` would read as a truncated value rather than as "no value".
+        // `permis` would read as a truncated value rather than as "no value";
+        // `denied` is the same claim in fewer cells, which is why it is allowed
+        // and a prefix of the phrase is not.
         let display = describe_percent(&MetricState::PermissionDenied);
         for width in 1..=16usize {
             let fitted = display.fitted(width, GlyphSet::ascii());
             assert!(
-                fitted == "n/a" || fitted == "!",
+                fitted == "denied" || fitted == "n/a" || fitted == "!",
                 "width {width} produced {fitted:?}"
             );
         }
+    }
+
+    /// The abbreviations exist to keep two *different* facts apart, so the test
+    /// that matters is that they never collide — with each other or with `n/a`.
+    #[test]
+    fn every_abbreviation_is_distinct_and_fits_the_radars_state_column() {
+        const RADAR_STATE_COLUMN: usize = 8;
+        let ascii = GlyphSet::ascii();
+        let warming = describe_percent(&MetricState::WarmingUp).fitted(RADAR_STATE_COLUMN, ascii);
+        let denied =
+            describe_percent(&MetricState::PermissionDenied).fitted(RADAR_STATE_COLUMN, ascii);
+        let unsupported =
+            describe_percent(&MetricState::Unsupported).fitted(RADAR_STATE_COLUMN, ascii);
+        let reset = describe_percent(&MetricState::TemporarilyUnavailable(
+            UnavailableReason::CounterReset,
+        ))
+        .fitted(RADAR_STATE_COLUMN, ascii);
+
+        assert_eq!(warming, "warming");
+        assert_eq!(denied, "denied");
+        assert_eq!(unsupported, "n/a", "`n/a` is already short enough");
+        assert_eq!(
+            reset, "n/a",
+            "a specific reason is not abbreviated into a different claim"
+        );
+        assert_ne!(warming, denied);
+        assert_ne!(warming, unsupported);
+        assert_ne!(denied, unsupported);
+    }
+
+    #[test]
+    fn an_abbreviation_tracks_the_phrase_it_abbreviates() {
+        // Pinned because the mapping is by text: if `monitrs-core` renames a
+        // placeholder, this fails rather than the abbreviation silently going away.
+        assert_eq!(
+            abbreviated_placeholder(
+                MetricState::<()>::WarmingUp
+                    .placeholder()
+                    .expect("warming up has a placeholder")
+            ),
+            Some("warming")
+        );
+        assert_eq!(
+            abbreviated_placeholder(
+                MetricState::<()>::PermissionDenied
+                    .placeholder()
+                    .expect("permission denied has a placeholder")
+            ),
+            Some("denied")
+        );
+        assert_eq!(abbreviated_placeholder("n/a"), None);
+        assert_eq!(abbreviated_placeholder("counter reset"), None);
     }
 
     #[test]

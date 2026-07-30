@@ -961,7 +961,7 @@ mod tests {
         let user = layout.column(Column::User).expect("USER at 140 cells");
         let text = table.cell_text(&rows[0], Column::User, user.width);
         assert!(!text.trim().is_empty(), "{text:?}");
-        assert_eq!(text, "n/a");
+        assert_eq!(text, "denied", "the USER column is wide enough to say why");
         assert_eq!(table.cell_token(&rows[0], Column::User), Token::Watch);
     }
 

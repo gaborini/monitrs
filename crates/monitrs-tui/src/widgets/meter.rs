@@ -412,10 +412,11 @@ mod tests {
         let meter = Meter::new(ascii(), MetricState::<Percent>::PermissionDenied).with_label("MEM");
         // Wide: the full reason.
         assert!(meter.line(40).contains("permission denied"));
-        // Narrow: `n/a` plus the `!` symbol, which still distinguishes it from
-        // `warming up` (§5.1, §5.2).
+        // Narrow: the abbreviation plus the `!` symbol, so the cell still says
+        // "the OS refused" rather than the `n/a` that also covers "this machine
+        // has no such metric" (§5.1, §5.2).
         let narrow = meter.line(14);
-        assert!(narrow.contains("n/a"), "{narrow:?}");
+        assert!(narrow.contains("denied"), "{narrow:?}");
         assert!(narrow.contains('!'), "{narrow:?}");
         assert!(!narrow.contains("permis"), "{narrow:?}");
     }

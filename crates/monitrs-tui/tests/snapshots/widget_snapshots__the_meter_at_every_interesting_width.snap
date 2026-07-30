@@ -11,6 +11,6 @@ expression: text_of(&buffer)
 |CPU                                             |
 |                                                |
 |MEM !permission denied [.......................]|
-|MEM ! n/a [........]                            |
+|MEM !denied [......]                            |
 |MEM ! n/a                                       |
 |MEM                                             |

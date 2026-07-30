@@ -1,15 +1,14 @@
 ---
 source: crates/monitrs-tui/tests/view_snapshots.rs
-assertion_line: 425
 expression: "text_of(&frame(&state, ascii()))"
 ---
 |+ monitrs  host:dev-mbp  [>LIVE]  1s --------- 00:00:23Z --+|
 |      PID USER     S   CPU%  MEM%   RSS NAME                |
-|    31842 gabor    S   120%  8.1%  2.6G rustc               |
+|>   31842 gabor    S   120%  8.1%  2.6G rustc               |
 |     1221 postgres S    54%  3.0%  982M postgres            |
 |      507 gabor    S    21%  4.1%  1.3G WindowServer        |
 |     9182 gabor    S    12%  1.2%  392M node                |
-|>       1 gabor    S   0.1%  0.1%   32M launchd             |
+|        1 gabor    S   0.1%  0.1%   32M launchd             |
 |                                                            |
 |                                                            |
 |                                                            |
