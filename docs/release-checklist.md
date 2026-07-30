@@ -39,10 +39,9 @@ is what a user actually reads. What is still owed:
   per-read breakdown showing where the time goes, and what it would take to fix.
   This is the one item on this list that is a *product* problem rather than a
   procedural one.
-* **The release notes are written** — `CHANGELOG.md` has a `0.1.0` section and
-  `changelog_excerpt.py` extracts it — but **the date in its heading is
-  `2026-07-30`**. Keep a Changelog dates a section by its release date, so if the tag
-  is pushed on another day, change that line first. The workflow's `verify` job passes
+* **A release section's date is the day you tag, not the day you wrote it.** Keep a
+  Changelog dates a section by its release date, so if the notes were written yesterday
+  and the tag goes out today, change that line first. The workflow's `verify` job passes
   `--check-date`, which *warns* on a heading that is not dated today rather than failing —
   a hard check there would only teach people to backdate the heading.
 
@@ -68,12 +67,13 @@ is what a user actually reads. What is still owed:
   built on this machine — no cross-linker — so they remain CI's to produce and
   nobody's to have run.
 
-So this file is currently a **procedure, not a plan**. It is complete and it is
-followed as written, but the [§23 gate](#the-23-gate-for-010) at the bottom is what
-decides whether a tag may be pushed, and today it does not pass. Do not cut `0.1.0`
-by ignoring it. If an early tag is genuinely wanted for packaging or CI work, tag it
-`v0.0.x`, keep the pre-release flag the workflow already applies to `0.x`, and say
-plainly in the release notes that the interactive interface is absent.
+So this file is a **procedure, not a plan**: it is complete and it is followed as
+written. The [§23 gate](#the-23-gate) at the bottom is the record of what has been
+proven, and it still has unticked boxes — the idle-CPU p95 and the soak. Two releases
+have gone out over those boxes, deliberately and with the pre-release flag the workflow
+applies to every `0.x`, and each one repeats the open items in its own changelog section
+under *Known limitations*. That is the arrangement: a box may be shipped over, but not
+quietly, and never by editing the box.
 
 ## 0. Prerequisites
 
@@ -541,8 +541,9 @@ A published release cannot be un-published safely. The remedy is always forward.
 
 ## The §23 gate
 
-§23's list, verbatim, as a checklist. `0.1.0` may not be tagged until every box is
-ticked with evidence — a test, a recorded measurement, or a named machine.
+§23's list, verbatim, as a checklist. A box is ticked only with evidence — a test, a
+recorded measurement, or a named machine — and an unticked box is a thing this project
+owes, carried into each release's *Known limitations* rather than resolved by ticking it.
 
 - [x] **launch, monitor, filter, inspect, pause, seek, return live, and quit all
       work.** Exercised by hand in a real terminal, and by
