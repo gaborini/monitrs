@@ -284,7 +284,7 @@ workload, so read them as a hard case rather than a flattering one:
 | sample collection below 200 ms p95 | p95 59–71 ms for the ordinary tick; 136–149 ms for the every-fifth one |
 | resident memory below 50 MiB | median 29 MiB, peak 31 MiB |
 | no unbounded growth | 30-minute soak: resident size fell, descriptors flat, nothing dropped |
-| **idle self CPU below 1% median, 2% p95** | **median 4.3%, p95 17.8% — fails** |
+| **idle self CPU below 1% median, 2% p95** | **median 1.3–2.7%, p95 11–15% — fails** |
 
 The last row is the honest one. monitrs' own computation is about 35 µs per tick;
 the cost is OS reads, and on this host the process table and the disk counters cost

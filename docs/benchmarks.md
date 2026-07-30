@@ -223,7 +223,7 @@ collector would be measuring the thing with itself.
 | sample collection below 200 ms p95 | fast-only tick (4 in 5): median 36–50 ms, p95 59–71 ms. Fast+medium (every 5th): median 113–130 ms, p95 136–149 ms | pass, and with more room than an earlier measurement suggested |
 | resident memory below 50 MiB | median 29 MiB, max 31 MiB | pass |
 | no unbounded file-descriptor growth | flat at 3 over a 30-minute soak with the real collector | pass over half an hour; the 12-hour run is still owed |
-| idle self CPU median below 1%, p95 below 2% | **median 4.3%, p95 17.8%** | **fails** |
+| idle self CPU median below 1%, p95 below 2% | **median 1.3–2.7%, p95 11–15%** over two runs | **fails, and close on the median** |
 | no unbounded memory growth over 12 hours | 30 minutes: 30.2 MiB → 28.5 MiB resident, retained history bounded, 0 snapshots dropped | evidence, not the gate — see [`soak-testing.md`](soak-testing.md#runs-on-record) |
 | no redraw busy loop | not measured as such | — |
 
@@ -251,7 +251,8 @@ components and 21 interfaces:
 | Read | Cost | Tier |
 |---|---|---|
 | `sysinfo` process refresh | 29 ms | fast |
-| `Disks::refresh(false)` | 34 ms | fast |
+| `Disks::refresh(false)` | 34 ms wall, ~21 ms of it our own CPU | ~~fast~~ — **fixed**, see below |
+| `Disks::refresh_specifics(io_usage)` | ~1 ms CPU | fast |
 | `Disks::refresh(true)` | 25 ms | medium |
 | `Components::refresh` (temperatures) | 85 ms | medium |
 | `Users::refresh` | 30 ms | slow |
@@ -267,10 +268,23 @@ Three things follow, and none of them is a micro-optimisation:
 
 1. **Asking `sysinfo` for fewer process fields does not help.** Requesting nothing at
    all still costs 26 ms of the 29: the enumeration dominates, not the fields.
-2. **`Disks::refresh(false)` is not the cheap call its name suggests** — it costs more
-   than `refresh(true)` did on this machine. The `false` only keeps the device list
-   from changing shape mid-tier. The fast tier now skips it when the medium tier ran
-   in the same tick, which was reading the same counters twice.
+2. **`Disks::refresh(false)` was the single most expensive line in the fast tier, and
+   for something the fast tier never reads.** *Fixed.* The call reads as "refresh,
+   cheaply or not"; it is not. It calls
+   `refresh_specifics(bool, DiskRefreshKind::everything())`, and the `bool` is only
+   `remove_not_listed_disks`. `everything()` includes `storage`, which on macOS is a
+   per-mount volume-capacity query through `CFURL`'s resource properties — about 21 ms
+   of our own CPU per tick against two volumes, once a second, for a number that is a
+   *medium*-tier metric (§8.6) published from `cached_filesystems`. The fast tier reads
+   `usage()` and `name()` and nothing else, so it now asks for
+   `DiskRefreshKind::nothing().with_io_usage()`: ~1 ms. Measured end to end, the idle
+   median went from 3.7–5.1% to 1.3–2.7%.
+
+   Worth noting *why* the earlier measurement missed this: it timed wall clock, and a
+   `CFURL` capacity query blocks without burning much CPU, so the two look similar on a
+   stopwatch and nothing like each other on the meter §16.1 actually budgets. The
+   collection figures above are wall-clock and barely moved; the idle-CPU figure
+   halved.
 3. **On macOS the process table is enumerated twice.** The native layer walks
    `kern.proc.all` itself and then overwrites the baseline's table; `sysinfo`'s 29 ms
    walk survives only to supply command lines and user names. Sourcing those natively

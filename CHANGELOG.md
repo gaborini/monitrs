@@ -127,11 +127,11 @@ assembled application; and a soak harness that drives the real worker threads.
 
 Named because §16.1's own last line asks for measurement rather than claims:
 
-* **The idle self-CPU budget is not met.** Median 4.3% against a 1% target, p95
-  17.8% against 2%, on a host with about a thousand processes — five times §16.1's
-  reference workload. The cost is OS reads, not monitrs' own computation, which is
-  three orders of magnitude smaller; `docs/benchmarks.md` locates it read by read
-  and says what would close it.
+* **The idle self-CPU budget is not met.** Median 1.3–2.7% against a 1% target, and
+  p95 11–15% against 2%, on a host with about a thousand processes — five times
+  §16.1's reference workload. The cost is OS reads, not monitrs' own computation,
+  which is three orders of magnitude smaller; `docs/benchmarks.md` locates it read by
+  read and says what would close it.
 * **No twelve-hour soak is on record.** A 30-minute run with the shipped collector
   is, and shows no growth. The twelve-hour run is the actual gate, and nothing has
   been soaked on Linux.

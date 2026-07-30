@@ -19,7 +19,8 @@ not monitrs — whether the value changed. What is still missing before `0.1.0`:
   not the gate — §16.1 says twelve hours, and it also measured a 90 ms worst-case
   input latency against a 50 ms budget that is recorded and not yet resolved.
 * **The idle self-CPU budget of §16.1 is not met.** Measured on a 12-core Mac with
-  about a thousand processes: median 4.3%, p95 17.8%, against a budget of 1% and 2%.
+  about a thousand processes: median 1.3–2.7%, p95 11–15%, against a budget of 1% and
+  2%. The median is close; the p95 is not.
   The other five measurable budgets pass — frame render, input latency, collection
   p95, resident memory, descriptor growth — and
   [`benchmarks.md`](benchmarks.md#the-161-end-to-end-budgets) has the numbers, the

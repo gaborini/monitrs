@@ -224,14 +224,10 @@ impl CommonCollector {
 
     /// Refreshes the fast tier.
     ///
-    /// `disks_already_refreshed` is set when the medium tier ran in the same tick.
-    /// Measured on macOS, `Disks::refresh(false)` costs as much as
-    /// `Disks::refresh(true)` — about 34 ms against a thousand-process, two-disk
-    /// machine — because `sysinfo` walks the devices either way. The `false` was
-    /// meant to make the fast path cheap and does not, so on a combined tick the two
-    /// calls read the same counters twice for nothing. Skipping the second is free:
-    /// `sample` runs the tiers slow, medium, fast, so the medium refresh has already
-    /// happened and its counters are from this tick.
+    /// `disks_already_refreshed` is set when the medium tier ran in the same tick, so
+    /// the two tiers do not read the same counters twice. `sample` runs the tiers
+    /// slow, medium, fast, so by then the medium refresh has already happened and its
+    /// counters are from this tick.
     fn refresh_fast(&mut self, disks_already_refreshed: bool) {
         self.system.refresh_cpu_usage();
         self.system
@@ -264,11 +260,23 @@ impl CommonCollector {
 
         self.networks.refresh(true);
         if !disks_already_refreshed {
-            // `false`: the device list belongs to the medium tier, and asking for it
-            // here would add a device enumeration to the answer. It does not make the
-            // call cheap — see this function's own note — it only keeps the list from
-            // changing shape between tiers.
-            self.disks.refresh(false);
+            // `refresh_specifics` rather than `refresh`, and this is the single most
+            // expensive line in the fast tier if it is written the obvious way.
+            //
+            // `Disks::refresh(bool)` reads as "refresh, cheaply or not"; it is not.
+            // It calls `refresh_specifics(bool, DiskRefreshKind::everything())`, and
+            // the `bool` is only `remove_not_listed_disks`. `everything()` includes
+            // `storage`, which on macOS is a per-mount volume-capacity query through
+            // `CFURL`'s resource properties — measured at about 19.6 ms per tick
+            // against two volumes, and it is 94% of what this line used to cost.
+            //
+            // The fast tier reads `usage()` and `name()` from these disks and nothing
+            // else: capacity is a *medium*-tier metric (§8.6), published from
+            // `cached_filesystems`, which `refresh_medium` builds. So the capacity
+            // this was paying for once a second was never read until the medium tick
+            // asked for it again.
+            self.disks
+                .refresh_specifics(false, sysinfo::DiskRefreshKind::nothing().with_io_usage());
         }
     }
 
