@@ -68,19 +68,11 @@ pub struct CommonCollector {
     // Carried over between ticks for tiers that are not due (§9.1).
     cached_host: HostSnapshot,
     cached_filesystems: Vec<FilesystemSnapshot>,
-    cached_disk_capacity: Vec<CachedDisk>,
     cached_sensors: SensorSnapshot,
     capabilities: CapabilitySnapshot,
     /// Whether a native layer supplies the process table (see
     /// [`Self::delegate_process_table`]).
     process_table_delegated: bool,
-}
-
-/// Static per-device facts, refreshed on the medium tier.
-#[derive(Clone, Debug)]
-struct CachedDisk {
-    device: DeviceKey,
-    mount_point: Box<str>,
 }
 
 impl CommonCollector {
@@ -127,7 +119,6 @@ impl CommonCollector {
             launch_baseline: HashMap::new(),
             cached_host: HostSnapshot::warming_up(),
             cached_filesystems: Vec::new(),
-            cached_disk_capacity: Vec::new(),
             cached_sensors: SensorSnapshot::warming_up(),
             capabilities: baseline_capabilities(),
             process_table_delegated: false,
@@ -194,16 +185,6 @@ impl CommonCollector {
     fn refresh_medium(&mut self) {
         self.disks.refresh(true);
         self.components.refresh(true);
-
-        self.cached_disk_capacity = self
-            .disks
-            .list()
-            .iter()
-            .map(|disk| CachedDisk {
-                device: disk.name().to_string_lossy().into_owned().into(),
-                mount_point: disk.mount_point().to_string_lossy().into_owned().into(),
-            })
-            .collect();
 
         self.cached_filesystems = self
             .disks
@@ -493,29 +474,45 @@ impl CommonCollector {
         let can_rate = tick.can_compute_rates();
         let at = tick.captured_at;
 
-        let raw: Vec<(DeviceKey, u64, u64, Option<Box<str>>)> = self
-            .disks
-            .list()
-            .iter()
-            .map(|disk| {
-                let usage = disk.usage();
-                let device: DeviceKey = disk.name().to_string_lossy().into_owned().into();
-                let mount = self
-                    .cached_disk_capacity
-                    .iter()
-                    .find(|cached| cached.device == device)
-                    .map(|cached| cached.mount_point.clone());
+        // Collapsed by device, because `sysinfo` lists one entry per *mount* and a
+        // device with several mounts is still one device. On an APFS Mac that is the
+        // ordinary case — `/` and `/System/Volumes/Data` share a container — and the
+        // uncollapsed version produced two identical `Macintosh HD` rows whose second
+        // one was permanently `warming up`: both wrote to the same rate tracker in the
+        // same tick, so the second `observe` saw a counter that had not moved. Two rows
+        // for one device is wrong on its own; one of them lying about warming up is
+        // worse.
+        //
+        // A `BTreeMap` rather than a `HashMap` so the row order is stable between
+        // frames, which §7.2's stability rule asks of every table.
+        let mut by_device: std::collections::BTreeMap<DeviceKey, (u64, u64, Vec<Box<str>>)> =
+            std::collections::BTreeMap::new();
+        for disk in self.disks.list() {
+            let usage = disk.usage();
+            let device: DeviceKey = disk.name().to_string_lossy().into_owned().into();
+            let mount: Box<str> = disk.mount_point().to_string_lossy().into_owned().into();
+            let entry = by_device.entry(device).or_insert_with(|| {
                 (
-                    device,
                     usage.total_read_bytes,
                     usage.total_written_bytes,
-                    mount,
+                    Vec::new(),
                 )
-            })
+            });
+            // The counters are per device, so every mount of it reports the same
+            // figures; taking the largest is defensive rather than meaningful.
+            entry.0 = entry.0.max(usage.total_read_bytes);
+            entry.1 = entry.1.max(usage.total_written_bytes);
+            if !mount.is_empty() && !entry.2.contains(&mount) {
+                entry.2.push(mount);
+            }
+        }
+        let raw: Vec<(DeviceKey, u64, u64, Vec<Box<str>>)> = by_device
+            .into_iter()
+            .map(|(device, (read, write, mounts))| (device, read, write, mounts))
             .collect();
 
         raw.into_iter()
-            .map(|(device, total_read, total_written, mount)| {
+            .map(|(device, total_read, total_written, mounts)| {
                 let (read, write) = if can_rate {
                     (
                         self.disk_read.observe(device.clone(), total_read, at),
@@ -547,7 +544,7 @@ impl CommonCollector {
                     } else {
                         MetricState::WarmingUp
                     },
-                    mount_points: mount.map(|m| vec![m]).unwrap_or_default(),
+                    mount_points: mounts,
                 }
             })
             .collect()
@@ -1177,6 +1174,53 @@ mod tests {
 
     /// Advances a collector by `count` samples, sleeping long enough between
     /// them that `sysinfo` can produce a real CPU delta.
+    /// One row per device, however many mounts it has.
+    ///
+    /// `sysinfo` lists one entry per mount, so a device with several — which on an
+    /// APFS Mac is every device, since `/` and `/System/Volumes/Data` share a
+    /// container — produced one row per mount. Both wrote to the same rate tracker in
+    /// the same tick, so the second `observe` saw a counter that had not moved and the
+    /// duplicate row reported `warming up` for the life of the process.
+    #[test]
+    #[ignore = "platform smoke test: reads the live machine"]
+    fn one_row_per_device_however_many_mounts_it_has() {
+        let mut collector = CommonCollector::new().expect("constructs");
+        let snapshots = sample_twice(&mut collector);
+        let second = snapshots.last().expect("two samples");
+
+        let mut seen: Vec<&str> = second.disks.iter().map(|disk| &*disk.device).collect();
+        let before = seen.len();
+        seen.sort_unstable();
+        seen.dedup();
+        assert_eq!(
+            seen.len(),
+            before,
+            "a device appears more than once: {:?}",
+            second.disks.iter().map(|d| &d.device).collect::<Vec<_>>()
+        );
+
+        // And the mounts are not lost by the collapsing: at least one device on a Mac
+        // or a Linux box backs a mount monitrs can name.
+        assert!(
+            second
+                .disks
+                .iter()
+                .any(|disk| !disk.mount_points.is_empty()),
+            "no device reports a mount point, so the mapping was dropped"
+        );
+
+        // A second sample can compute rates, so no device should still be warming up
+        // unless the platform genuinely gave nothing.
+        for disk in &second.disks {
+            assert!(
+                !disk.read.is_warming_up() || disk.totals.is_warming_up(),
+                "device {} reports a warming-up rate on the second sample with real \
+                 totals, which is the duplicate-row bug",
+                disk.device
+            );
+        }
+    }
+
     fn sample_twice(collector: &mut CommonCollector) -> Vec<SystemSnapshot> {
         let start = Instant::now();
         let mut tick = SampleTick::first(start, SystemTime::now());
