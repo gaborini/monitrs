@@ -52,6 +52,7 @@
 
 pub mod inspect;
 pub mod network;
+pub mod overlays;
 pub mod overview;
 pub mod processes;
 pub mod storage;
