@@ -156,9 +156,9 @@ collector would be measuring the thing with itself.
 | input-to-visible-response below 50 ms | median 417 µs, p95 486 µs | pass, by a factor of 100 |
 | sample collection below 200 ms p95 | median 156 ms, p95 172 ms | pass, with little room |
 | resident memory below 50 MiB | median 29 MiB, max 31 MiB | pass |
-| no unbounded file-descriptor growth | 10 open files at the start, 10 after 60 s | pass over a minute; the 12-hour run is still owed |
+| no unbounded file-descriptor growth | flat at 3 over a 30-minute soak with the real collector | pass over half an hour; the 12-hour run is still owed |
 | idle self CPU median below 1%, p95 below 2% | **median 4.3%, p95 17.8%** | **fails** |
-| no unbounded memory growth over 12 hours | not run | — |
+| no unbounded memory growth over 12 hours | 30 minutes: 30.2 MiB → 28.5 MiB resident, retained history bounded, 0 snapshots dropped | evidence, not the gate — see [`soak-testing.md`](soak-testing.md#runs-on-record) |
 | no redraw busy loop | not measured as such | — |
 
 The workload matters and is not the reference one: §16.1 specifies 8 logical CPUs
@@ -215,8 +215,12 @@ Named here so their absence is not mistaken for a passing grade:
   benchmark does not.
 * Diagnostic-rule evaluation.
 * ASCII and Unicode graph generation.
-* The 12-hour soak test for unbounded memory and file-descriptor growth. The
-  harness exists (`crates/monitrs/tests/soak.rs`); the run has not happened.
+* The 12-hour soak test. A 30-minute run with the real collector is on record in
+  [`soak-testing.md`](soak-testing.md#runs-on-record) and shows no growth, but the
+  §16.1 gate is twelve hours and that has not been run. Nor has any soak on Linux.
+* The worst-case input latency under sustained load, which that soak measured at
+  90 ms against a 50 ms budget — a keypress queued behind a snapshot absorb on the
+  UI thread, not a stall. Recorded there; not yet decided.
 * The end-to-end numbers above on the §16.1 reference workload — 8 CPUs and 200
   processes — rather than on this machine.
 * Whether anything constitutes a redraw busy loop, as opposed to the idle-redraw

@@ -155,6 +155,64 @@ For each of the three release runs, keep in the release record:
 A run that failed and was understood is worth more in the record than a run that
 passed and was not read.
 
+## Runs on record
+
+### 2026-07-30 — real collector, 30 minutes, release
+
+Not one of the three release runs, and not the twelve-hour gate. It is here because
+it is the first soak on record at all, it drove the shipped collector rather than the
+fake, and it is evidence about growth even though it is not the gate.
+
+| | |
+|---|---|
+| Machine | Apple M4 Pro, 12 logical cores, 48 GiB, macOS 26.5.2 (arm64), on mains power |
+| Toolchain | rustc 1.97.1, `--release` |
+| Command | `MONITRS_SOAK_REAL_COLLECTOR=1 MONITRS_SOAK_SECONDS=1800 MONITRS_SOAK_INTERVAL_MS=1000` |
+| Otherwise busy | yes — an interactive session, a browser and an editor were running, about a thousand processes |
+
+```text
+run:            1800s requested, 1810.4812895s elapsed (243.792149459s warm-up)
+collector:      real (4000 processes requested)
+load:           1s fast tier, history 300 of 300 samples, ceiling 5512800 B
+snapshots:      2212 processed, last sequence 2211, 138 detail replies
+channel:        peak depth 1 of 64, 44 coalesced, 0 dropped
+stall probe:    depth 64 of 64 after the stall, coalesced 0 -> 44
+input:          33457 keys, median 35.75µs, worst 90.321209ms, 0 unanswered
+resident:       first quartile 30880 KiB, last quartile 29192 KiB, peak 31184 KiB
+descriptors:    first quartile peak 3, last quartile peak 3
+workers:        4 spawned, 0 failed to join
+```
+
+What it establishes over half an hour and 2212 snapshots:
+
+* **Resident size does not grow.** The last quartile is *lower* than the first —
+  30,880 KiB down to 29,192 KiB — with a peak of 31,184 KiB. The dip is the ring
+  reaching its steady state, which is [why the quartiles are read in that
+  order](#why-the-first-quartile-is-lower-than-the-last).
+* **Descriptors are flat at 3**, with the real collector open the whole time.
+* **Retained history is bounded**: 2,009,802 B at the start and 1,998,685 B at the
+  end against the ring's own worst case of 5,512,800 B, with the ring full at 300 of
+  300 samples — so this is the steady state and not a ring still filling.
+* **Nothing was dropped.** The channel's peak depth was 1 of 64 during the run; the
+  stall probe then filled it to 64 of 64 and the coalescing count went 0 → 44 with a
+  drop count of zero, which is §10.3's rule doing its job under saturation.
+* **No worker failed to join.**
+
+One number deserves care rather than a victory lap. The worst single input latency
+was **90 ms**, against §16.1's 50 ms budget for input-to-visible-response; the median
+was 36 µs. The stall probe runs *after* the injector stops, so that 90 ms is from the
+ordinary run: it is a keypress queued behind a snapshot the reducer was absorbing on
+the same thread, not a stall. `capture.rs` measures the reduce-and-render path itself
+at a 486 µs p95, so the interface is not slow — a keypress can wait behind other work
+on the UI thread. Whether §16.1's "when no collector result is required" covers that
+case is a fair question, and it is recorded here rather than argued away.
+
+### Still owed
+
+* The twelve-hour run (`MONITRS_SOAK_SECONDS=43200`), which is the actual §16.1 gate.
+* The ten-thousand-process hour.
+* Any run on Linux.
+
 ## What this does not cover
 
 Be exact about this; §23 asks for claims to be supported by a test or a documented

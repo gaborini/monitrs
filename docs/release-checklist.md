@@ -10,10 +10,12 @@ says so.
 pause, seek, return live, quit — have each been exercised by hand in a real
 terminal. What is still missing before `0.1.0`:
 
-* **No twelve-hour soak is on record.** The harness exists and scales
-  (see [`soak-testing.md`](soak-testing.md)); the run has not been done, and §16.1's
-  no-unbounded-growth claim is unproven until it is. A 60-second idle run does show
-  the descriptor count flat at 10, which is evidence but not the gate.
+* **No twelve-hour soak is on record.** A 30-minute run with the shipped collector
+  is ([`soak-testing.md`](soak-testing.md#runs-on-record)): resident size fell over
+  the run, descriptors stayed at 3, retained history stayed bounded with the ring
+  full, and nothing was dropped even with the channel saturated. That is evidence,
+  not the gate — §16.1 says twelve hours, and it also measured a 90 ms worst-case
+  input latency against a 50 ms budget that is recorded and not yet resolved.
 * **The idle self-CPU budget of §16.1 is not met.** Measured on a 12-core Mac with
   about a thousand processes: median 4.3%, p95 17.8%, against a budget of 1% and 2%.
   The other five measurable budgets pass — frame render, input latency, collection
