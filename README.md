@@ -23,9 +23,9 @@ terminal without colour, and a screen reader. It is written by
 (`cargo test -p monitrs --release --test capture -- --ignored`), so it cannot drift
 from what monitrs actually draws, and §20.1's ban on a mocked-up screenshot is kept.
 
-Trimmed to 118 columns on the right for legibility; the full 160-column frames, the
-Unicode variant, and the 80×24 compact layout are in
-[`docs/screenshots/`](docs/screenshots/). The hostname and the login name are
+Trimmed to 118 columns on the right for legibility. [`docs/screenshots/`](docs/screenshots/)
+has the full 160-column frame of every screen that has one — Overview, CPU, Storage,
+Inspect and Battery — plus the Unicode variant and the 80×24 compact layout. The hostname and the login name are
 substituted for the machine this was taken on — every measurement, process name and
 state is exactly as rendered, and the substitutes are the same width so no column
 moves.
@@ -73,6 +73,21 @@ frame:
   cross-platform baseline cannot see them, which is why monitrs enriches by default
   (§9.2).
 
+## The screens
+
+Seven, on the digit keys, plus six overlays — help, command palette, filter edit, sort
+selector, process detail, and the confirmation that covers both signals and renice.
+
+| | | |
+|---|---|---|
+| `1` | **Overview** | meters, the Pressure Radar, the history sparklines, the process table, pins, and a per-interface network footer |
+| `2` | **Processes** | the full table, flat or as a tree, with the pinned strip above it |
+| `3` | **CPU** | per-core meters grouped by core class, the load average per CPU, and the processes accounting for it |
+| `4` | **Storage** | filesystem capacity and inodes, per-device throughput, the processes doing the I/O, and a throughput history |
+| `5` | **Network** | per-interface counters, errors, link state, and utilization where the link speed is known |
+| `6` | **Inspect** | every fact about the machine and the selected process, plus what this build cannot measure and why |
+| `7` | **Battery** | charge, wear against design capacity, draw, and the thermal sensors |
+
 ## What makes it different
 
 monitrs is not a reimplementation of `htop`. It is built around one idea the
@@ -95,6 +110,22 @@ capacity is meaningless.
 normalized severity, **and the rule that produced the state**, so you never have
 to guess why something turned amber. Linux PSI where available.
 
+**Follow a process with its children.** `F` scopes the table to one process and
+everything beneath it, and the panel says what the *family* costs:
+`4 of 10 total, cpu >=107%, rss 479M`. A build's compilers come and go every
+second, so no single row ever answers "what is this build using", and filtering on
+`cc` finds every compiler on the machine instead of the four in this build. `>=`
+means a member's CPU was refused and the total is a lower bound rather than the
+answer.
+
+**Container-aware, in the direction that matters.** Inside a cgroup, monitrs shows
+the ceiling that applies *beside* the host's figures — `8 logical, 8 physical,
+cgroup 1.5 CPUs`, `cgroup limit 2.0G, 512M used (25%)` — and takes both halves of
+that memory ratio from the group, because `/proc/meminfo` is not namespaced and the
+host's `used` over a container's limit reports 2000%. It also refuses the tempting
+version of this: the load average is *not* divided by the quota, because
+`/proc/loadavg` counts every process on the machine including other tenants'.
+
 **Readable without color.** Every state has a redundant ASCII symbol (`.` `!`
 `X` `?`). A strict 7-bit ASCII mode renders correctly on any terminal, over any
 SSH session, in any locale.
@@ -108,8 +139,10 @@ right.
 |---|---|---|---|---|
 | Scrub back through history | yes | no | no | graphs only |
 | Per-sample spike attribution | yes | no | no | no |
+| Sum one process tree's cost | yes | no | no | no |
 | Explicit per-metric availability | yes | partial | partial | partial |
 | Shows the rule behind a warning | yes | n/a | n/a | n/a |
+| cgroup ceiling beside the host's | yes | partial | no | no |
 | Strict 7-bit ASCII mode | yes | yes | no | partial |
 | Process tree | yes | yes | yes | yes |
 | Themes and mouse support | yes | yes | yes | yes |

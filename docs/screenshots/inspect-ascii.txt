@@ -1,12 +1,12 @@
-+ monitrs  host:dev-mbp  [>LIVE]  250ms  up 9d 12:25 ---------------------------------------------------------------------------- 19:48:47Z --+
-| CPU   24% [######################=-----------------------------------------------------------------------]  load  3.15 3.92 3.96  12 cpu  12 core  temp 51.8C|
-| MEM   64% [############################################################=---------------------------------]  31G/48G  swap off  bat 97%+                      |
++ monitrs  host:dev-mbp  [>LIVE]  250ms  up 9d 13:27 ---------------------------------------------------------------------------- 20:51:18Z --+
+| CPU   13% [############=---------------------------------------------------------------------------------]  load  2.20 2.20 1.96  12 cpu  12 core  temp 51.8C|
+| MEM   61% [########################################################=-------------------------------------]  29G/48G  swap off  bat 100%-                     |
 + SYSTEM -----------------------------------------------------------------------+ DIAGNOSTICS -----------------------------------------------------------------+
 |  host         dev-mbp                                        |PRESSURE                                                                      |
 |  os           Darwin macOS 26.5.2 Tahoe                                       |  every derived signal is normal                                              |
 |  kernel       25.5.0                                                          |UNAVAILABLE METRICS                                                           |
 |  arch         aarch64                                                         |  - disk busy               unsupported                                       |
-|  uptime       9d 12:25 (booted 07:23:24Z)                                     |  - Linux PSI               unsupported                                       |
+|  uptime       9d 13:27 (booted 07:23:24Z)                                     |  - Linux PSI               unsupported                                       |
 |  cpu          12 logical, 12 physical                                         |  - cgroup limits           unsupported                                       |
 |  cpu model    Apple M4 Pro at -n/a                                            |  - kernel threads          unsupported                                       |
 |  memory       48 GiB total, swap off                                          |STALE DATA                                                                    |
@@ -32,17 +32,17 @@
 |                                                                               |                                                                              |
 |                                                                               |                                                                              |
 + SELECTED PROCESS -------------------------------------------------------------|                                                                              |
-|  identity     1080 (start key 1784618702483440)                               |                                                                              |
-|  name         corespotlightd                                                  |                                                                              |
-|  executable   /System/Library/Frameworks/CoreServices.framework/Versions/A/...|                                                                              |
-|  command      /System/Library/Frameworks/Core...sions/A/Support/corespotlightd|                                                                              |
+|  identity     62728 (start key 1785357771134658)                              |                                                                              |
+|  name         claude                                                          |                                                                              |
+|  executable   /Users/you/.local/bin/claude                                     |                                                                              |
+|  command      claude                                                          |                                                                              |
 |  state        running                                                         |                                                                              |
 |  user         me                                                              |                                                                              |
-|  cpu          88%                                                             |                                                                              |
-|  memory       170M rss, 435G virt, 0.3% of total                              |                                                                              |
-|  disk         0B/s read, 37K/s write (1.7G / 929M total)                      |                                                                              |
-|  threads      17                                                              |                                                                              |
-|  age          9d                                                              |                                                                              |
+|  cpu          20%                                                             |                                                                              |
+|  memory       901M rss, 421G virt, 1.8% of total                              |                                                                              |
+|  disk         0B/s read, 0B/s write (115M / 251M total)                       |                                                                              |
+|  threads      34                                                              |                                                                              |
+|  age          1d                                                              |                                                                              |
 |  on-demand detail not loaded                                                  |                                                                              |
 +-------------------------------------------------------------------------------+------------------------------------------------------------------------------+
  1 Overview  2 Processes  3 CPU  4 Storage  5 Network [6 Inspect] 7 Battery   filter:                                                           / filter  ? help

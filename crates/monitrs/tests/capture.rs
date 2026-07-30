@@ -353,6 +353,25 @@ fn capture_real_frames_for_the_documentation() {
     );
     write_frame("inspect-ascii.txt", &inspect, &anonymize);
 
+    // The two screens added after 0.1.0. The README says the full frames live in
+    // `docs/screenshots/`, so a screen with no captured frame makes that sentence false —
+    // and §20.1 allows no other kind of screenshot than one written from the renderer.
+    live.press(KeyPress::char('4'));
+    let (storage, _) = live.render(WIDE);
+    assert!(
+        storage.contains("TOP DISK I/O"),
+        "the Storage screen must name the processes doing the I/O"
+    );
+    write_frame("storage-ascii.txt", &storage, &anonymize);
+
+    live.press(KeyPress::char('7'));
+    let (battery, _) = live.render(WIDE);
+    assert!(
+        battery.contains("THERMAL SENSORS"),
+        "the Battery screen must carry the thermal sensors"
+    );
+    write_frame("battery-ascii.txt", &battery, &anonymize);
+
     // And one Unicode frame, so the enhanced mode is documented too.
     let mut fancy = Live::new(
         WIDE,

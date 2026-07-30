@@ -1,0 +1,48 @@
++ monitrs  host:dev-mbp  [>LIVE]  250ms  up 9d 13:27 ---------------------------------------------------------------------------- 20:51:18Z --+
+| CPU   13% [############=---------------------------------------------------------------------------------]  load  2.20 2.20 1.96  12 cpu  12 core  temp 51.8C|
+| MEM   61% [########################################################=-------------------------------------]  29G/48G  swap off  bat 100%-                     |
++ FILESYSTEM CAPACITY ---------------------------------------------------------------------------------- 2 mounted, = shares a device, SIZE is not additive ---+
+| MOUNT              DEVICE     TYPE      SIZE  USED AVAIL  USE% INODE%  IFREE CAPACITY                                                                        |
+|=/                  Macinto... apfs ro   460G  414G   46G   90%   0.1%   318M [###################=--]                                                        |
+|=/System/...es/Data Macinto... apfs      460G  414G   46G   90%   1.1%   318M [###################=--]                                                        |
++ DEVICE THROUGHPUT ------------------------------------------------------------------------------------------------------------------ busy - (unsupported) ---+
+|DEVICE      READ/s WRITE/s   R-IOPS   W-IOPS MODEL            MOUNTS                                                                                          |
+|Macinto...  423K/s   26K/s      n/a      n/a -                / /System/Volumes/Data                                                                          |
++ TOP DISK I/O ---------------------------------------------------------------------------------------------------------------------------------- 31 of 990 ---+
+| READ/s WRITE/s TOTAL R TOTAL W      PID NAME                                                                                                                 |
+| 317K/s    0B/s     19G     31G    84322 Google Chrome                                                                                                        |
+|  18K/s    0B/s    5.0G     29G    84340 Google Chrome Helper                                                                                                 |
+|   0B/s    0B/s     37G    688M     4408 WallpaperAerialsExtension                                                                                            |
+|   0B/s    0B/s     18G    648M     1189 mediaanalysisd                                                                                                       |
+|   0B/s    0B/s     11G    1.7G     1155 fileproviderd                                                                                                        |
+|   0B/s    0B/s    5.0G    156K     4030 contactsd                                                                                                            |
+|   0B/s    0B/s    4.9G     25M     1422 WallpaperDynamicExtension                                                                                            |
+|   0B/s    0B/s    562M    4.2G    29551 com.docker.backend                                                                                                   |
+|   0B/s    0B/s    958M    2.4G     1393 Slack                                                                                                                |
+|   0B/s    0B/s    885M    2.3G    55509 Autoupdate                                                                                                           |
+|   0B/s    0B/s    2.0G    899M     1295 duetexpertd                                                                                                          |
+|   0B/s    0B/s    1.7G    935M     1080 corespotlightd                                                                                                       |
+|   0B/s    0B/s    513M    2.0G     1862 Creative Cloud Content Manager.node                                                                                  |
+|   0B/s    0B/s    2.2G     35M     1221 corespeechd                                                                                                          |
+|   0B/s    0B/s    886M    1.4G     1656 Creative Cloud                                                                                                       |
+|   0B/s    0B/s    190M    1.8G     6112 com.apple.Safari.SafeBrowsing.Service                                                                                |
+|   0B/s    0B/s    565M    1.2G     1237 talagentd                                                                                                            |
+|   0B/s    0B/s    769M    962M    31474 com.apple.Virtualization.VirtualMachine                                                                              |
+|   0B/s    0B/s    550M    1.1G     1454 Slack Helper                                                                                                         |
+|   0B/s    0B/s    754M    783M    84341 Google Chrome Helper                                                                                                 |
+|   0B/s    0B/s    894M    328M    29344 Cursor                                                                                                               |
+|   0B/s    0B/s    124M    1.0G     1061 lsd                                                                                                                  |
+|   0B/s    0B/s    330M    838M    32139 Google Drive                                                                                                         |
+|   0B/s    0B/s    1.1G    160K    29163 FPCKService                                                                                                          |
+|   0B/s    0B/s    202M    888M    30685 ChatGPT                                                                                                              |
+|   0B/s    0B/s    737M    197M     1089 ContextStoreAgent                                                                                                    |
+|   0B/s    0B/s    683M    129M     1680 1Password                                                                                                            |
+|   0B/s    0B/s    702M     85M     1402 Dock                                                                                                                 |
+|   0B/s    0B/s    398M    334M     1082 BiomeAgent                                                                                                           |
+|   0B/s    0B/s    309M    263M     3650 Adobe Desktop Service                                                                                                |
+|   0B/s    0B/s    528M     60K     4867 AppleSpell                                                                                                           |
++ THROUGHPUT HISTORY 5m ---------------------------------------------------------------------------------------------------- all devices, write peak 2.0M/s ---+
+| READ                                                                                                                                          .:=+.-#=-...*:@|
+| WRITE                                                                                                                                         .@:.........#..|
++--------------------------------------------------------------------------------------------------------------------------------------------------------------+
+ 1 Overview  2 Processes  3 CPU [4 Storage] 5 Network  6 Inspect  7 Battery   filter:                                                           / filter  ? help

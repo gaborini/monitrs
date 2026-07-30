@@ -1,24 +1,24 @@
-+ monitrs  host:dev-mbp  [>LIVE]  250ms --------- 19:48:47Z --+
- CPU 24%  MEM 64%  load  3.15 3.92 3.96  31G/48G  swap off  dsk r533K/s w459K/s
-+ PROCESSES  sort CPU% desc  no kthreads ------------------------ 994 total ---+
++ monitrs  host:dev-mbp  [>LIVE]  250ms --------- 20:51:18Z --+
+ CPU 13%  MEM 61%  load  2.20 2.20 1.96  29G/48G  swap off  dsk r423K/s w26K/s
++ PROCESSES  sort CPU% desc  no kthreads ------------------------ 990 total ---+
 |      PID USER     S   CPU%  MEM%   RSS  READ/s WRITE/s NAME                  |
-|>    1080 me       R    88%  0.3%  170M    0B/s   37K/s corespotlightd        |
-|    30467 me       R    59%  0.1%   57M   92K/s  634K/s spotlightknowledged...|
-|    62728 me       R    15%  1.7%  852M    0B/s    0B/s claude                |
-|    53963 me       R    12%  0.9%  436M    0B/s    0B/s Google Chrome Helpe...|
-|    56008 me       R    10%  0.2%   95M    0B/s    0B/s capture-32a1f72385b...|
-|      954 me       R  10.0%  0.0%  7.0M    0B/s  9.2K/s cfprefsd              |
-|     1398 me       R   7.1%  0.3%  142M    0B/s    0B/s Terminal              |
-|    84339 me       R   6.3%  0.4%  218M    0B/s    0B/s Google Chrome Helper  |
-|    30770 me       R   3.9%  0.3%  128M    0B/s    0B/s Codex (Service)       |
-|     7365 me       R   2.9%  1.2%  574M    0B/s    0B/s Google Chrome Helpe...|
-|    56721 me       R   2.0%  1.0%  511M    0B/s    0B/s 2.1.220               |
-|    30466 me       R   1.6%  1.3%  624M    0B/s    0B/s Cursor Helper (Rend...|
-|    31474 me       R   0.9%  2.1%  1.0G    0B/s    0B/s com.apple.Virtualiz...|
-|     1531 me       R   0.7%  1.5%  746M    0B/s    0B/s Slack Helper (Rende...|
-|    29521 me       R   0.6%  0.6%  302M    0B/s    0B/s Cursor Helper (Plugin)|
-|    53634 me       R   0.6%  0.4%  195M    0B/s    0B/s Cursor Helper (Plugin)|
-|    29495 me       R   0.6%  0.7%  330M    0B/s    0B/s Cursor Helper (Plugin)|
-|    16469 me       R   0.6%  1.0%  499M    0B/s    0B/s claude                |
+|>   62728 me       R    20%  1.8%  901M    0B/s    0B/s claude                |
+|    84322 me       R    19%  1.6%  811M  317K/s    0B/s Google Chrome         |
+|    57853 me       R    12%  0.2%   96M    0B/s    0B/s capture-32a1f72385b...|
+|    84352 me       R    10%  1.7%  858M    0B/s    0B/s Google Chrome Helpe...|
+|     1398 me       R   6.9%  0.4%  174M    0B/s    0B/s Terminal              |
+|    84339 me       R   5.7%  0.5%  244M    0B/s    0B/s Google Chrome Helper  |
+|     1130 me       R   2.6%  0.1%   30M    0B/s    0B/s WindowManager         |
+|    56721 me       R   2.1%  1.1%  519M    0B/s    0B/s 2.1.220               |
+|    30466 me       R   1.6%  1.3%  629M    0B/s    0B/s Cursor Helper (Rend...|
+|      963 me       R   1.6%  0.2%  103M    0B/s    0B/s loginwindow           |
+|    16469 me       R   1.5%  1.0%  503M    0B/s    0B/s claude                |
+|     7365 me       R   1.5%  1.2%  593M    0B/s    0B/s Google Chrome Helpe...|
+|    84340 me       R   1.3%  0.4%  204M   18K/s    0B/s Google Chrome Helper  |
+|    31474 me       R   1.1%  2.1%  1.0G    0B/s    0B/s com.apple.Virtualiz...|
+|    53620 me       R   0.9%  0.4%  184M    0B/s    0B/s Cursor Helper (Plugin)|
+|    29521 me       R   0.7%  0.6%  312M    0B/s    0B/s Cursor Helper (Plugin)|
+|    29520 me       R   0.7%  0.6%  308M    0B/s    0B/s Cursor Helper (Plugin)|
+|    30782 me       R   0.7%  0.4%  200M    0B/s    0B/s Cursor Helper (Plugin)|
 +------------------------------------------------------------------------------+
  1 [2] 3  4  5  6  7   filter:                                  / filter  ? help

@@ -1,48 +1,48 @@
-+ monitrs  host:dev-mbp  [>LIVE]  250ms  up 9d 12:25 ---------------------------------------------------------------------------- 19:48:47Z --+
-| CPU   24% [######################=-----------------------------------------------------------------------]  load  3.15 3.92 3.96  12 cpu  12 core  temp 51.8C|
-| MEM   64% [############################################################=---------------------------------]  31G/48G  swap off  bat 97%+                      |
-+ PRESSURE -----------------------+ HISTORY 5m -------------------------------------------------------------------------------------------- I/O peak 3.2M/s ---+
-| . CPU     normal        24%     | CPU                                                                                                         ::::::::::::::-|
-| . MEM     normal        36%     | MEM                                                                                                        ****************|
-| . NET     normal      67K/s     | I/O                                                                                                         ............@.:|
-| . LOAD    normal       3.15     | CORE  **++:...-:::                                                                                                         |
++ monitrs  host:dev-mbp  [>LIVE]  250ms  up 9d 13:27 ---------------------------------------------------------------------------- 20:51:18Z --+
+| CPU   13% [############=---------------------------------------------------------------------------------]  load  2.20 2.20 1.96  12 cpu  12 core  temp 51.8C|
+| MEM   61% [########################################################=-------------------------------------]  29G/48G  swap off  bat 100%-                     |
++ PRESSURE -----------------------+ HISTORY 5m -------------------------------------------------------------------------------------------- I/O peak 2.0M/s ---+
+| . CPU     normal        13%     | CPU                                                                                                         :::-:::::::::::|
+| . MEM     normal        39%     | MEM                                                                                                        ****************|
+| . NET     normal      16K/s     | I/O                                                                                                         .@:.........#..|
+| . LOAD    normal       2.20     | CORE  ---::...-:::                                                                                                         |
 |                                 |                                                                                                                            |
-+ PROCESSES  sort CPU% desc  no kthreads -------------------------------------------------------------------------------------------------------- 994 total ---+
++ PROCESSES  sort CPU% desc  no kthreads -------------------------------------------------------------------------------------------------------- 990 total ---+
 |      PID USER     S   CPU%  MEM%   RSS  VIRT  READ/s WRITE/s  THR      AGE NAME                             COMMAND                                          |
-|>    1080 me       R    88%  0.3%  170M  435G    0B/s   37K/s   17       9d corespotlightd                   /System/Library/Framewo.../Support/corespotlightd|
-|    30467 me       R    59%  0.1%   57M  416G   92K/s  634K/s   15 01:11:54 spotlightknowledged.updater      /usr/libexec/spotlightknowledged.updater -u      |
-|    62728 me       R    15%  1.7%  852M  421G    0B/s    0B/s   34 23:05:56 claude                           claude                                           |
-|    53963 me       R    12%  0.9%  436M  1.8T    0B/s    0B/s   23    16:49 Google Chrome Helper (Renderer)  /Applications/Google Ch...6 --seatbelt-client=371|
-|    56008 me       R    10%  0.2%   95M  415G    0B/s    0B/s    5    00:07 capture-32a1f72385b25d91         /Users/you/pgit/monitrs/...gnored --test-threads=1|
-|      954 me       R  10.0%  0.0%  7.0M  415G    0B/s  9.2K/s    4       9d cfprefsd                         /usr/sbin/cfprefsd agent                         |
-|     1398 me       R   7.1%  0.3%  142M  416G    0B/s    0B/s   12       9d Terminal                         /System/Applications/Ut...Contents/MacOS/Terminal|
-|    84339 me       R   6.3%  0.4%  218M  465G    0B/s    0B/s   22       3d Google Chrome Helper             /Applications/Google Ch...92 --seatbelt-client=21|
-|    30770 me       R   3.9%  0.3%  128M  464G    0B/s    0B/s   23 07:49:11 Codex (Service)                  /Applications/ChatGPT.a...92 --seatbelt-client=44|
-|     7365 me       R   2.9%  1.2%  574M  1.8T    0B/s    0B/s   25 09:32:48 Google Chrome Helper (Renderer)  /Applications/Google Ch...4 --seatbelt-client=100|
-|    56721 me       R   2.0%  1.0%  511M  421G    0B/s    0B/s   32       2d 2.1.220                          /Users/you/.local/share/...ission-mode acceptEdits|
-|    30466 me       R   1.6%  1.3%  624M  1.8T    0B/s    0B/s   26 01:11:55 Cursor Helper (Renderer)         /Applications/Cursor.ap...7 --seatbelt-client=168|
-|    31474 me       R   0.9%  2.1%  1.0G  439G    0B/s    0B/s   25       2d com.apple.Virtualization.Virt... /System/Library/Framewo...lization.VirtualMachine|
-|     1531 me       R   0.7%  1.5%  746M  1.8T    0B/s    0B/s   27       9d Slack Helper (Renderer)          /Applications/Slack.app...in --seatbelt-client=53|
-|    29521 me       R   0.6%  0.6%  302M  1.8T    0B/s    0B/s   51 01:12:03 Cursor Helper (Plugin)           Cursor Helper (Plugin):...]                      |
-|    53634 me       R   0.6%  0.4%  195M  1.8T    0B/s    0B/s   23    17:47 Cursor Helper (Plugin)           Cursor Helper (Plugin):...]                      |
-|    29495 me       R   0.6%  0.7%  330M  1.8T    0B/s    0B/s   35 01:12:04 Cursor Helper (Plugin)           Cursor Helper (Plugin):...]                      |
-|    16469 me       R   0.6%  1.0%  499M  421G    0B/s    0B/s   32       3d claude                           claude                                           |
-|    29520 me       R   0.6%  0.6%  298M  1.8T    0B/s    0B/s   51 01:12:03 Cursor Helper (Plugin)           Cursor Helper (Plugin):...]                      |
-|    53633 me       R   0.6%  0.4%  201M  1.8T    0B/s    0B/s   22    17:47 Cursor Helper (Plugin)           Cursor Helper (Plugin):...]                      |
-|    30782 me       R   0.6%  0.4%  208M  1.8T    0B/s    0B/s   23 01:11:34 Cursor Helper (Plugin)           Cursor Helper (Plugin):...]                      |
-|    53632 me       R   0.6%  0.3%  165M  1.8T    0B/s    0B/s   51    17:47 Cursor Helper (Plugin)           Cursor Helper (Plugin):...]                      |
-|    53620 me       R   0.5%  0.4%  182M  1.8T    0B/s    0B/s   22    17:47 Cursor Helper (Plugin)           Cursor Helper (Plugin):...]                      |
-|    31228 me       R   0.5%  0.6%  281M  1.8T    0B/s    0B/s   21 07:49:07 Codex (Renderer)                 /Applications/ChatGPT.a...8 --seatbelt-client=146|
-|    84340 me       R   0.5%  0.4%  177M  464G    0B/s    0B/s   21       3d Google Chrome Helper             /Applications/Google Ch...41 --seatbelt-client=20|
-|    56626 me       R   0.4%  0.4%  201M  420G    0B/s    0B/s    9       2d claude                           /Users/you/.local/share/...ission-mode acceptEdits|
-|    84322 me       R   0.3%  1.5%  752M  513G    0B/s    0B/s   51       3d Google Chrome                    /Applications/Google Ch...Google Chrome --restart|
-|    56606 me       R   0.3%  0.5%  270M  420G    0B/s    0B/s   15       2d claude                           /Users/you/.local/bin/cl...u-metrics","pid":16469}|
-|    53962 me       R   0.2%  0.7%  321M  1.8T    0B/s    0B/s   24    16:54 Google Chrome Helper (Renderer)  /Applications/Google Ch...7 --seatbelt-client=367|
-|    30685 me       R   0.2%  0.7%  347M  1.8T    0B/s    0B/s   63 07:49:14 ChatGPT                          /Applications/ChatGPT.app/Contents/MacOS/ChatGPT |
-|    12764 me       R   0.2%  0.6%  309M  1.8T    0B/s    0B/s   28 09:10:42 Google Chrome Helper (Renderer)  /Applications/Google Ch...92 --seatbelt-client=51|
-|    53619 me       R   0.2%  0.2%   86M  1.8T    0B/s    0B/s   25    17:48 Cursor Helper                    Cursor Helper: fileWatc...9a2]                   |
+|>   62728 me       R    20%  1.8%  901M  421G    0B/s    0B/s   34       1d claude                           claude                                           |
+|    84322 me       R    19%  1.6%  811M  513G  317K/s    0B/s   54       3d Google Chrome                    /Applications/Google Ch...Google Chrome --restart|
+|    57853 me       R    12%  0.2%   96M  415G    0B/s    0B/s    5    00:07 capture-32a1f72385b25d91         /Users/you/pgit/monitrs/...gnored --test-threads=1|
+|    84352 me       R    10%  1.7%  858M  1.8T    0B/s    0B/s   24       3d Google Chrome Helper (Renderer)  /Applications/Google Ch...1 --seatbelt-client=190|
+|     1398 me       R   6.9%  0.4%  174M  416G    0B/s    0B/s   10       9d Terminal                         /System/Applications/Ut...Contents/MacOS/Terminal|
+|    84339 me       R   5.7%  0.5%  244M  465G    0B/s    0B/s   22       3d Google Chrome Helper             /Applications/Google Ch...92 --seatbelt-client=21|
+|     1130 me       R   2.6%  0.1%   30M  415G    0B/s    0B/s    6       9d WindowManager                    /System/Library/CoreSer...nts/MacOS/WindowManager|
+|    56721 me       R   2.1%  1.1%  519M  421G    0B/s    0B/s   32       2d 2.1.220                          /Users/you/.local/share/...ission-mode acceptEdits|
+|    30466 me       R   1.6%  1.3%  629M  1.8T    0B/s    0B/s   26 02:14:25 Cursor Helper (Renderer)         /Applications/Cursor.ap...7 --seatbelt-client=168|
+|      963 me       R   1.6%  0.2%  103M  416G    0B/s    0B/s   10       9d loginwindow                      /System/Library/CoreSer...cOS/loginwindow console|
+|    16469 me       R   1.5%  1.0%  503M  421G    0B/s    0B/s   32       3d claude                           claude                                           |
+|     7365 me       R   1.5%  1.2%  593M  1.8T    0B/s    0B/s   25 10:35:19 Google Chrome Helper (Renderer)  /Applications/Google Ch...4 --seatbelt-client=100|
+|    84340 me       R   1.3%  0.4%  204M  464G   18K/s    0B/s   21       3d Google Chrome Helper             /Applications/Google Ch...41 --seatbelt-client=20|
+|    31474 me       R   1.1%  2.1%  1.0G  439G    0B/s    0B/s   24       2d com.apple.Virtualization.Virt... /System/Library/Framewo...lization.VirtualMachine|
+|    53620 me       R   0.9%  0.4%  184M  1.8T    0B/s    0B/s   22 01:20:18 Cursor Helper (Plugin)           Cursor Helper (Plugin):...]                      |
+|    29521 me       R   0.7%  0.6%  312M  1.8T    0B/s    0B/s   51 02:14:34 Cursor Helper (Plugin)           Cursor Helper (Plugin):...]                      |
+|    29520 me       R   0.7%  0.6%  308M  1.8T    0B/s    0B/s   51 02:14:34 Cursor Helper (Plugin)           Cursor Helper (Plugin):...]                      |
+|    30782 me       R   0.7%  0.4%  200M  1.8T    0B/s    0B/s   22 02:14:04 Cursor Helper (Plugin)           Cursor Helper (Plugin):...]                      |
+|      953 me       R   0.5%  0.0%  6.6M  415G    0B/s    0B/s    3       9d distnoted                        /usr/sbin/distnoted agent                        |
+|    30685 me       R   0.4%  0.8%  371M  1.8T    0B/s    0B/s   64 08:51:45 ChatGPT                          /Applications/ChatGPT.app/Contents/MacOS/ChatGPT |
+|    30770 me       R   0.4%  0.3%  129M  464G    0B/s    0B/s   23 08:51:42 Codex (Service)                  /Applications/ChatGPT.a...92 --seatbelt-client=44|
+|    84346 me       R   0.4%  0.6%  289M  1.8T    0B/s    0B/s   23       3d Google Chrome Helper (Renderer)  /Applications/Google Ch...6 --seatbelt-client=122|
+|     1356 me       R   0.3%  0.0%   15M  415G    0B/s    0B/s    3       9d milod                            /usr/libexec/milod                               |
+|    56606 me       R   0.3%  0.6%  273M  420G    0B/s    0B/s   14       2d claude                           /Users/you/.local/bin/cl...u-metrics","pid":16469}|
+|     1132 me       R   0.2%  0.1%   67M  416G    0B/s    0B/s    4       9d sharingd                         /usr/libexec/sharingd                            |
+|    12764 me       R   0.2%  0.6%  317M  1.8T    0B/s    0B/s   28 10:13:12 Google Chrome Helper (Renderer)  /Applications/Google Ch...92 --seatbelt-client=51|
+|    53618 me       R   0.2%  1.0%  469M  1.8T    0B/s    0B/s   23 01:20:19 Cursor Helper (Renderer)         /Applications/Cursor.ap...e --seatbelt-client=236|
+|    57647 me       R   0.2%  0.6%  282M  1.8T    0B/s    0B/s   22    01:16 Google Chrome Helper (Renderer)  /Applications/Google Ch...76 --seatbelt-client=59|
+|     1454 me       R   0.1%  0.1%   56M  464G    0B/s    0B/s   19       9d Slack Helper                     /Applications/Slack.app...41 --seatbelt-client=21|
+|     4508 me       R   0.1%  0.1%   34M  415G    0B/s    0B/s    6       9d SiriNCService                    /System/Library/CoreSer...nts/MacOS/SiriNCService|
+|     1076 me       R   0.1%  0.0%   16M  415G    0B/s    0B/s    7       9d universalaccessd                 /usr/sbin/universalaccessd launchd -s            |
+|    29551 me       R   0.1%  0.6%  272M  417G    0B/s    0B/s   47       3d com.docker.backend               /Applications/Docker.ap...docker.backend services|
 + PINS -------------------------------------------------------------------------+ NETWORK ---------------------------------------------------------------------+
-| nothing pinned; p pins the selected process                                   | NET   rx   67K/s  tx  3.1K/s                                                 |
-|                                                                               | DISK  rd  533K/s  wr  459K/s                                                 |
+| nothing pinned; p pins the selected process                                   | NET   rx   16K/s  tx   13K/s                                                 |
+|                                                                               | DISK  rd  423K/s  wr   26K/s                                                 |
 +-------------------------------------------------------------------------------+------------------------------------------------------------------------------+
 [1 Overview] 2 Processes  3 CPU  4 Storage  5 Network  6 Inspect  7 Battery   filter:                                                           / filter  ? help

@@ -197,6 +197,32 @@ Also confirm the dependency graph has not drifted:
 cargo tree -p crossterm --workspace     # exactly one crossterm major version (§13)
 ```
 
+### And the platform you are not on
+
+Everything above compiles **one** of the two native layers. On a Mac,
+`crates/monitrs-collectors/src/linux/` is behind `cfg(target_os = "linux")` and is never
+seen — not by `cargo check`, not by `clippy`, and not by `rustdoc`. Half the collector can
+therefore be broken while every gate above passes.
+
+```sh
+rustup target add x86_64-unknown-linux-gnu      # once; aarch64-apple-darwin from Linux
+cargo check --workspace --all-features --target x86_64-unknown-linux-gnu
+cargo clippy -p monitrs-collectors --all-features --lib --tests \
+  --target x86_64-unknown-linux-gnu -- -D warnings
+RUSTDOCFLAGS="-D warnings" cargo doc --workspace --no-deps --all-features \
+  --target x86_64-unknown-linux-gnu
+```
+
+None of these links, so the other platform's toolchain is not needed — only its `std`.
+
+The third command is the one that is easy to leave out and the one that has already caught
+something: a push went red on `cargo doc` alone, because a public module doc in
+`linux/statfs.rs` linked to a private constant. `clippy --target` does not run `rustdoc`,
+so the first two commands passed while the release gate would not have. Run all three.
+
+`--all-features` matters here too: the native layers are behind `linux-native` and
+`macos-native`, so omitting it checks the `sysinfo` baseline and nothing else.
+
 ## 5. Soak
 
 Blocking. [`soak-testing.md`](soak-testing.md) has the invocations, how to read the
