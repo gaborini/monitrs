@@ -24,11 +24,11 @@ terminal. What is still missing before `0.1.0`:
   per-read breakdown showing where the time goes, and what it would take to fix.
   This is the one item on this list that is a *product* problem rather than a
   procedural one.
-* **No release *notes* exist.** `CHANGELOG.md` has only an `Unreleased` section, so
-  `changelog_excerpt.py` cannot produce the excerpt §19.2 requires — and the release
-  workflow's `verify` job runs exactly that script, so a `v0.1.0` tag would be
-  refused before a single binary was built. That is the gate working, and writing the
-  section is the remaining work.
+* **The release notes are written** — `CHANGELOG.md` has a `0.1.0` section and
+  `changelog_excerpt.py` extracts it — but **the date in its heading is
+  `2026-07-30`**. Keep a Changelog dates a section by its release date, so if the tag
+  is pushed on another day, change that line first. The workflow's `verify` job does
+  not check the date, only that the section exists.
 
   The archive itself has been assembled and exercised by hand for
   `aarch64-apple-darwin`, following the workflow's own steps: the tarball contains

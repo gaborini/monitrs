@@ -10,73 +10,149 @@ work yet, regardless of what the source contains.
 
 ## [Unreleased]
 
+Nothing yet.
+
+## [0.1.0] - 2026-07-30
+
+First release. `monitrs` shows what a machine is doing now and what it was doing a
+few minutes ago, and it is explicit about the difference between a metric it
+measured, one it is still warming up, one the OS refused, and one this platform
+cannot produce.
+
 ### Added
 
-* Cargo workspace with four crates and a one-directional dependency graph:
-  `monitrs-core` depends on no terminal library and no OS collector.
-* Platform-neutral data model: `SystemSnapshot` and its component snapshots for
-  host, CPU, memory, processes, disks, filesystems, networks, pressure, sensors,
-  capabilities, and collector health.
-* `MetricState<T>` per-metric availability, so an unavailable metric can never be
-  rendered as zero. Includes a `Stale` variant that cannot be read without its
-  age.
-* `ProcessIdentity` pairing a PID with a platform start key, so PID reuse is
-  detectable by construction.
-* Validated `Percent` and `Rate` scalars that reject NaN, infinities, and
-  negatives at construction, and byte/duration/text formatters whose output is
-  bounded by a display-width budget it can never exceed.
-* Quality gates: rustfmt, a clippy policy, `cargo deny`, and a CI matrix covering
-  Linux glibc and musl on x86_64 and aarch64, macOS on both architectures, an
-  MSRV job, and an assertion that exactly one `crossterm` major version resolves.
-* Reusable widgets — meter, sparkline, per-core strip, panel, process table, tree
-  prefixes, pressure radar, pinned strip — with 23 snapshot tests covering ASCII,
-  Unicode, and no-colour modes, plus the empty, permission-denied, stale, and
-  warming-up states. A painter that clips every write, so no widget can draw
-  outside its area or panic on a zero-area one.
-* Application state and the reducer: stable selection by process identity, pinning,
-  Time Lens pause/seek/return-to-live, and a confirmation chain in which
-  `Effect::SignalProcess` has exactly one constructor, reachable only after an
-  accepted confirmation.
-* Pressure engine and the diagnostic rules of §11.2, with hysteresis that a test
-  proves does not flap on alternating input, and a test asserting no rule claims
-  OOM, a memory leak, disk failure, malware, or thermal throttling.
-* Linux `/proc` and `/sys` enrichment: PSI, cgroup v2 limits reported separately
-  from host totals, device busy time, per-process I/O, and a start key with
-  clock-tick resolution. Every parser takes bytes rather than a path, so all 120
-  fixtures — including a process name containing spaces and parentheses, truncated
-  reads, counter resets, and the cgroup `max` sentinel — run on every platform.
-* macOS native enrichment through documented APIs only: `sysctl`,
-  `host_statistics64`, `host_processor_info`, `proc_pidinfo`, `getifaddrs`, and
-  IOKit's public power interfaces. Wired and compressed pages reported separately
-  per §8.4. No external commands, no private APIs, and a `SAFETY:` comment on every
-  unsafe block.
-* CLI, JSON snapshot export with argument redaction, versioned TOML configuration
-  with `config path`/`init`/`check`, the bounded event channel and worker threads,
-  and benchmarks with measured results in `docs/benchmarks.md`.
-* **The interactive interface launches.** `monitrs` with no subcommand opens the
-  five screens, the overlays, and the Pressure Radar over a live collector, and
-  restores the terminal on quit, on error, and on panic. Verified by hand in a real
-  terminal: switching views, the help overlay, pausing and seeking the timeline,
-  returning to live, and quitting.
-* The five screens (Overview, Processes, Storage, Network, Inspect) and the
-  overlays (help, signal confirmation, spike attribution, process detail, filter
-  edit, sort selector, command palette, notices), with 33 further snapshot tests.
-* A soak-test harness that drives the real worker threads, and `docs/` gains
-  troubleshooting, soak-testing, and release-checklist guides.
+#### The interface
+
+* **Five screens** — Overview, Processes, Storage, Network, Inspect — and six
+  overlays: help, command palette, filter edit, sort selector, process detail, and
+  the process-action confirmation that covers both signals and renice. Notices are a
+  panel rather than an overlay, and the spike attribution is the body of the Time Lens
+  screen rather than something you open. Keyboard-first throughout; the mouse is
+  optional and off by default.
+* **The Time Lens.** `Space` pauses the visible timeline without stopping
+  collection, `[` and `]` scrub through the retained history, and `L` returns to
+  live. Selecting a historical sample shows which processes accounted for the
+  change, with an explicit statement of how much of the change the named processes
+  account for — correlation, described as correlation.
+* **The Pressure Radar.** Each signal carries the rule text that produced it, the
+  raw metric it was derived from, and how long the state has held. Hysteresis stops
+  it flapping. No rule claims a diagnosis the data cannot support: no OOM, no memory
+  leak, no disk failure, no malware, no thermal throttling.
+* **A stable process table.** Sorting is total, with a `(pid, start key)`
+  tie-breaker, so a hundred rows all reporting `0%` keep their order between
+  refreshes. The cursor follows the process you chose rather than the row it was
+  on; until you choose one it tracks the top of the table, so the busiest process is
+  what a fresh session shows. Tree mode re-attaches the children of a filtered-out
+  parent instead of scattering them.
+* **Four layout bands** from 160×48 down to 80×24, and below that a minimal process
+  list rather than a broken frame. Every panel's width is reserved from the layout,
+  so no value can push a column out of alignment.
+* **Strict ASCII mode** (`--ascii`) whose output is seven-bit by assertion, a
+  Unicode mode, three themes, and `--color off`/`NO_COLOR`. Colour is never the only
+  carrier of meaning: every state also has a distinct character, and every
+  unavailable value says which kind of unavailable it is — `warming up`,
+  `permission denied`, `n/a`, or a specific reason — abbreviated but never merged
+  as the column narrows.
+
+#### What it measures
+
+* **Per-metric availability.** `MetricState<T>` makes "no value" a state rather
+  than a zero, and a retained value cannot be displayed without its age.
+* **Native enrichment by default.** On Linux, `/proc` and `/sys`: PSI, cgroup v2
+  limits reported separately from host totals, device busy time, per-process I/O,
+  and a start key with clock-tick resolution. On macOS, documented APIs only —
+  `sysctl`, `host_statistics64`, `host_processor_info`, `proc_pidinfo`,
+  `getifaddrs`, and IOKit's public power interfaces — with wired and compressed
+  pages reported separately. No external commands and no private APIs on either.
+* **Rates are computed from measured intervals**, never from an assumed one, and a
+  counter that went backwards reports a reset rather than a spike.
+* **Process identity is a PID plus a start key**, so a reused PID inherits nothing:
+  not the selection, not a pin, and not a pending action.
+
+#### Doing something about it
+
+* **Signals** — `x` opens the dialog, `T` proposes SIGTERM, `K` proposes SIGKILL —
+  behind a confirmation that names the process. A signal never follows from one
+  keypress, and the forceful ones demand a distinct key rather than `Enter`, so
+  leaning on the confirm key cannot escalate. The identity is rechecked immediately
+  before delivery, so a PID reused between the dialog and the write is refused
+  instead of signalled.
+* **Renice** (`R`) on both platforms, with the same revalidation. A dry run says in
+  advance whether the value will be permitted; lowering a nice value needs
+  privileges monitrs never acquires, and it says so rather than failing silently.
+* **Process actions are refused while the timeline is away from live**, because the
+  process on a frozen screen is not necessarily the process that PID names now.
+* **No privilege escalation, ever.** monitrs never invokes `sudo`, never asks for a
+  password, and reports what it could not read.
+
+#### Around the edges
+
+* `monitrs snapshot --format json` with command arguments redacted by default,
+  `monitrs config path`/`init`/`check`, shell completions for five shells, and a
+  manpage — the last two generated from the same definition the program parses.
+* **Versioned TOML configuration** that rejects an unknown key rather than ignoring
+  it, points at the exact key for an out-of-range value, suggests the near miss for
+  a typo, and detects key conflicts. Reload is atomic and applies to the running
+  interface *and* the sampler; the settings that need a restart are named.
+* `--debug-log` on every subcommand, carrying collector durations and the
+  dropped/coalesced counts, and never writing to a terminal that is showing the
+  interface.
+* **The terminal is restored** on quit, on error, and on panic — before the panic
+  report is printed, and before slow workers are joined.
+
+### Measured
+
+§16.1's budgets, measured rather than asserted. Frame render, input latency and
+collection come from `crates/monitrs/tests/capture.rs`; self CPU, resident memory
+and descriptors from `scripts/measure-overhead.py`, which observes the running
+binary from outside. Full numbers and the per-read breakdown are in
+[`docs/benchmarks.md`](docs/benchmarks.md#the-161-end-to-end-budgets).
+
+| Budget | Measured on a 12-core Mac, ~1000 processes |
+|---|---|
+| frame render below 16 ms at 160×48 | median 200 µs, p95 353 µs |
+| input-to-visible-response below 50 ms | median 417 µs, p95 486 µs |
+| sample collection below 200 ms p95 | median 156 ms, p95 172 ms |
+| resident memory below 50 MiB | median 29 MiB, peak 31 MiB |
+| no unbounded growth | 30-minute soak: resident size *fell*, descriptors flat, nothing dropped |
+
+2224 tests. Among them: 86 recorded frames of the rendered interface across three
+snapshot suites, covering ASCII, Unicode, no-colour, and the empty,
+permission-denied, stale and warming-up states; 120 Linux `/proc` and `/sys` fixtures
+that run on every platform because each parser takes bytes rather than a path;
+property tests over the formatters and the sort; 13 integration tests over the
+assembled application; and a soak harness that drives the real worker threads.
 
 ### Known limitations
 
-* No twelve-hour soak run is on record, so §16.1's no-unbounded-growth claim is
-  unproven. The harness exists and scales.
-* The end-to-end performance budgets are unmeasured; only component benchmarks are.
-* `renice` is not implemented on either platform. The key reports that rather than
-  appearing to work.
-* Timestamps are UTC and say so: no time-zone database is bundled.
+Named because §16.1's own last line asks for measurement rather than claims:
 
+* **The idle self-CPU budget is not met.** Median 4.3% against a 1% target, p95
+  17.8% against 2%, on a host with about a thousand processes — five times §16.1's
+  reference workload. The cost is OS reads, not monitrs' own computation, which is
+  three orders of magnitude smaller; `docs/benchmarks.md` locates it read by read
+  and says what would close it.
+* **No twelve-hour soak is on record.** A 30-minute run with the shipped collector
+  is, and shows no growth. The twelve-hour run is the actual gate, and nothing has
+  been soaked on Linux.
+* **Worst-case input latency under sustained load was 90 ms**, against a 50 ms
+  budget — a keypress queued behind a snapshot the reducer was absorbing on the same
+  thread, not a stall. Recorded, not yet resolved.
+* Per-process socket counts and device busy time are unsupported on macOS: the first
+  costs one syscall per descriptor, the second has no documented API. Both say
+  `n/a` rather than guessing.
+* PSI is Linux-only, and says `n/a` on macOS rather than promising a value that will
+  never arrive.
+* Timestamps are UTC and labelled `Z`: no time-zone database is bundled.
+* Only the `aarch64-apple-darwin` release archive has been assembled and run by
+  hand. The other five targets are built by CI and have not been run on their
+  hardware.
 
 ### Changed
 
-* Relicensed from GPL-3.0 to dual MIT OR Apache-2.0, matching the Rust ecosystem
-  norm and the project's dependency license policy.
+* Relicensed from GPL-3.0 to dual MIT OR Apache-2.0 before any release, matching
+  the Rust ecosystem norm and this project's dependency licence policy. Anyone who
+  cloned the repository at its first commit saw the earlier licence.
 
-[Unreleased]: https://github.com/gaborini/monitrs/commits/main
+[Unreleased]: https://github.com/gaborini/monitrs/compare/v0.1.0...HEAD
+[0.1.0]: https://github.com/gaborini/monitrs/releases/tag/v0.1.0

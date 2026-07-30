@@ -176,7 +176,10 @@ Full, always-current help is generated from the live keymap: press `?`.
 
 `T`, `K`, and `R` *propose* SIGTERM, SIGKILL, and renice. None of them acts on a
 single keypress; each opens a confirmation showing the process identity and the
-consequences.
+consequences, and the forceful ones want a distinct key rather than `Enter`, so
+leaning on the confirm key cannot escalate. The identity is rechecked immediately
+before the write: a PID that was reused between the dialog and the confirmation is
+refused rather than acted on.
 
 ## Configuration
 

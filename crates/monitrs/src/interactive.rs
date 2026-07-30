@@ -27,8 +27,8 @@
 use std::process::ExitCode;
 use std::time::{Duration, Instant};
 
-use monitrs_collectors::platform_collector;
-use monitrs_core::model::Severity;
+use monitrs_collectors::{platform_collector, renice};
+use monitrs_core::model::{MetricState, Severity};
 use monitrs_core::process::{ProcessSort, ProcessSortKey, SortDirection};
 use monitrs_tui::action::{Effect, ViewId};
 use monitrs_tui::app::{
@@ -348,17 +348,55 @@ fn execute(effect: &Effect, state: &mut AppState, ctx: &mut EffectContext) -> Fl
             Flow::Continue
         }
 
-        Effect::ReniceProcess { identity, .. } => {
-            // §6.2 makes renice conditional on platform support, and neither native
-            // collector exposes it yet. Saying so is better than a dialog that
-            // appears to work.
+        Effect::ReniceProcess { identity, nice } => {
+            // The target is rebuilt from the *live* snapshot rather than from
+            // whatever the dialog was opened against, and `renice` rechecks the
+            // identity again immediately before the write. Two rechecks rather than
+            // one because the confirmation the user gave is about a process, not a
+            // PID: §15.1's whole point is that a PID reused between the dialog and
+            // the write must produce a refusal, not a renice of the wrong process.
+            let target = state
+                .live_snapshot()
+                .and_then(|snapshot| {
+                    snapshot
+                        .processes
+                        .iter()
+                        .find(|process| process.identity == *identity)
+                })
+                .map(|process| {
+                    renice::ReniceTarget::from_snapshot(
+                        process,
+                        state
+                            .detail()
+                            .filter(|detail| detail.identity == *identity)
+                            .map_or(&MetricState::WarmingUp, |detail| &detail.nice),
+                    )
+                });
+            let outcome = match target {
+                Some(target) => renice::renice(&target, i32::from(*nice)),
+                // Not in the newest snapshot: it exited between the confirmation and
+                // now, which §14.1 calls expected. Reported as such rather than
+                // attempted against a PID whose owner is unknown.
+                None => renice::ReniceOutcome::Vanished,
+            };
+            // Info, like a signal: changing a process's priority is a deliberate,
+            // consequential act, and the identity is numeric so nothing sensitive is
+            // written (§14.2).
+            tracing::info!(
+                pid = identity.pid,
+                start_key = identity.start_key,
+                requested = *nice,
+                applied = outcome.is_applied(),
+                "process renice"
+            );
             state.push_notice(Notice::new(
                 NoticeKind::ProcessAction,
-                Severity::Watch,
-                format!(
-                    "renice is not available in this build; {} unchanged",
-                    identity.pid
-                ),
+                if outcome.is_expected() {
+                    Severity::Info
+                } else {
+                    Severity::Watch
+                },
+                outcome.message(),
             ));
             Flow::Continue
         }

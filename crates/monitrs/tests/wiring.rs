@@ -195,3 +195,47 @@ fn the_shipped_collector_never_fabricates_a_zero_for_a_read_it_was_refused() {
         }
     }
 }
+
+/// A capability that says `Available` must have an execution path behind it.
+///
+/// The bug this pins came from merging two correct changes: one made the collectors
+/// declare `renice` available, the other left `Effect::ReniceProcess` reporting
+/// "renice is not available in this build". Separately each was defensible; together
+/// they were worse than either — the `R` key offered a dialog, the user confirmed a
+/// change to a real process, and *then* monitrs refused. §4's capability flags are
+/// what the interface gates on, so a flag and its effect handler disagreeing is a
+/// lie told through a confirmation prompt.
+///
+/// A source scan again, for the same reason as the collector one: the failure is a
+/// dialog that appears to work, which no type checks.
+#[test]
+fn a_declared_capability_is_not_contradicted_by_its_effect_handler() {
+    use monitrs_collectors::renice;
+    use monitrs_core::model::CapabilityState;
+
+    let declared = matches!(renice::capability_state(), CapabilityState::Available);
+    let interactive =
+        std::fs::read_to_string(Path::new(env!("CARGO_MANIFEST_DIR")).join("src/interactive.rs"))
+            .expect("interactive.rs must be readable");
+
+    let refusals: Vec<&str> = interactive
+        .lines()
+        .filter(|line| {
+            let code = line.split("//").next().unwrap_or(line);
+            code.contains("renice is not available")
+        })
+        .collect();
+
+    if declared {
+        assert!(
+            refusals.is_empty(),
+            "`renice::capability_state()` is Available on this build, so the `R` key \
+             offers a dialog — but the effect handler still refuses: {refusals:?}"
+        );
+        assert!(
+            interactive.contains("renice::renice("),
+            "the renice effect must reach `renice::renice`, or the dialog cannot do \
+             anything"
+        );
+    }
+}
