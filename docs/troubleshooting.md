@@ -21,7 +21,7 @@ correct, and they are not the same quantity.
   71% available are the same measurement from opposite ends.
 
 The Overview's radar column is too narrow to spell out `available`, which is what
-makes the pair read as a contradiction. Press `5` for **Inspect**, where each signal
+makes the pair read as a contradiction. Press `6` for **Inspect**, where each signal
 is shown with the full rule text that produced it — there the memory row states the
 threshold in terms of available memory explicitly.
 
@@ -336,10 +336,10 @@ different proposition from a laptop at one second. `--history` costs memory in
 proportion to its span; both are clamped to supported ranges and any clamp is
 reported rather than applied silently.
 
-Both are measured now, and one of them **misses its budget**: on a 12-core Mac with
-about a thousand processes, monitrs costs a median 1.3–2.7% of one core at rest against
-a 1% target, while resident memory sits at 29 MiB against 50 MiB and a frame renders in
-200 µs against 16 ms. If your machine runs many processes, expect the CPU figure
+Both are measured now, and one of them **misses half its budget**: on a 12-core Mac with
+about a thousand processes, monitrs costs a median 0.5–1.1% of one core at rest against a
+1% target — which passes — but a p95 of 6–11% against 2%, which does not. Resident memory
+sits at 24.5–26.7 MiB against 50 MiB and a frame renders in 200 µs against 16 ms. If your machine runs many processes, expect the CPU figure
 rather than the budget:
 [`benchmarks.md`](benchmarks.md#where-the-idle-cpu-goes) breaks the cost down read by
 read — most of it is the OS handing over the process table and the disk counters, not

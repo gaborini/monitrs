@@ -626,7 +626,7 @@ machine with high memory use. This matches §5.7, which lists the Compact band's
 contents and does not include pressure, but for an accessibility review it is the
 most consequential thing lost on a small terminal.
 
-Reachable instead: `5` opens Inspect, whose `PRESSURE` section lists every
+Reachable instead: `6` opens Inspect, whose `PRESSURE` section lists every
 non-normal signal with its symbol, its state, and the rule that derived it, and
 which does fit at 80×24. **Not changed** — spending a header cell on a severity
 badge is a layout decision beyond a review's remit — but the concrete fix is small:

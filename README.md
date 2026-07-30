@@ -7,12 +7,14 @@ terminal monitors, what it was doing thirty seconds ago. Pause the timeline,
 scrub back to a spike, and see which processes were most strongly correlated
 with it.
 
-> **Status: `0.1.0`, and marked a pre-release.** It is on
+> **Status: `0.2.0`, and marked a pre-release.** It is on
 > [crates.io](https://crates.io/crates/monitrs) and
-> [GitHub](https://github.com/gaborini/monitrs/releases/tag/v0.1.0). The pre-release
-> flag is not modesty: two of §16.1's budgets are not met and the twelve-hour soak has
-> not been run, both of which are stated in [`CHANGELOG.md`](CHANGELOG.md) and in the
-> table below. Where a claim has a caveat, the caveat is next to it rather than left out.
+> [GitHub](https://github.com/gaborini/monitrs/releases/tag/v0.2.0). The pre-release
+> flag is not modesty: one of §16.1's budgets is not met — idle self-CPU at the 95th
+> percentile — and the twelve-hour soak has not been run, both of which are stated in
+> [`CHANGELOG.md`](CHANGELOG.md) and in the table below. `0.2.0` also changes the
+> library API and the JSON export schema; the changelog lists every break. Where a claim
+> has a caveat, the caveat is next to it rather than left out.
 
 ## Demo
 
@@ -166,7 +168,7 @@ Windows is not supported and is not planned for v1.
 
 Support is tracked **per metric**, not per platform. See
 [`docs/platform-support.md`](docs/platform-support.md) for which metrics each
-platform provides, and the Inspect screen (`5`) for what your specific machine
+platform provides, and the Inspect screen (`6`) for what your specific machine
 provides right now.
 
 ## Install
@@ -191,7 +193,7 @@ surprises you.
 
 ### From a release archive
 
-[The `v0.1.0` release](https://github.com/gaborini/monitrs/releases/tag/v0.1.0) has one
+[The `v0.2.0` release](https://github.com/gaborini/monitrs/releases/tag/v0.2.0) has one
 archive per target — `x86_64` and `aarch64` for Linux glibc, Linux musl, and macOS —
 each carrying the binary, both licences, this README, the changelog excerpt for that
 version, shell completions for bash, zsh, fish, PowerShell and elvish, and a manpage.
@@ -199,9 +201,11 @@ Installing one means verifying it and putting the binary somewhere on your `PATH
 
 ```sh
 # Replace the version and target with the archive you downloaded.
-shasum -a 256 -c monitrs-0.1.0-aarch64-apple-darwin.tar.gz.sha256
-tar xzf monitrs-0.1.0-aarch64-apple-darwin.tar.gz
-install -m 755 monitrs-0.1.0-aarch64-apple-darwin/monitrs ~/.local/bin/monitrs
+# The release carries one SHA256SUMS for all six archives, not a file per archive, so
+# --ignore-missing is what lets you check the one you actually downloaded.
+shasum -a 256 --check --ignore-missing SHA256SUMS     # sha256sum on Linux
+tar xzf monitrs-0.2.0-aarch64-apple-darwin.tar.gz
+install -m 755 monitrs-0.2.0-aarch64-apple-darwin/monitrs ~/.local/bin/monitrs
 ```
 
 Releases also carry a build attestation, so `gh attestation verify

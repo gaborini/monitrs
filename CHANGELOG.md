@@ -10,6 +10,10 @@ work yet, regardless of what the source contains.
 
 ## [Unreleased]
 
+Nothing yet.
+
+## [0.2.0] - 2026-07-30
+
 Two more screens, the container facts the collector was already reading, and a way to
 watch one process together with everything it spawned.
 
@@ -29,7 +33,10 @@ watch one process together with everything it spawned.
   capacity with the resulting wear, pack temperature, and draw in watts. Plus a thermal
   sensor panel: those readings previously reached the screen as a single figure in the
   Overview header. A machine with no battery says so once, in the panel label, rather than
-  filling a screen with placeholders.
+  filling a screen with placeholders. **On macOS, cycles, capacity, wear, pack temperature
+  and watts all read `n/a`**: they live in the undocumented `AppleSmartBattery` registry
+  properties that §9.3 forbids this build from reading. The charge, the state and the time
+  remaining are real; the rest is honest absence, and the Linux collector reports all of it.
 * **The Linux battery collector**, from `/sys/class/power_supply/*` on the medium tier.
   `docs/platform-support.md` had been promising it. The system battery is picked by
   `type == Battery` with `scope` absent or `System`, which is what excludes the charger and
@@ -111,8 +118,10 @@ It had two panels and thirty blank rows. It now has four.
 
 #### Pressure escalations are announced
 
-* **A Pressure Radar signal crossing into `watch` or `critical` now produces a notice**
-  quoting the diagnostics engine's own rule text, not a paraphrase. An unavailable signal is
+* **A Pressure Radar signal changing state now produces a notice** quoting the diagnostics
+  engine's own rule text, not a paraphrase. Recoveries are announced too, at `info`
+  severity, because a signal that goes quiet without a word looks the same as one that
+  stopped being collected. An unavailable signal is
   never a de-escalation: it clears the remembered state, so the samples either side of a
   permission error cannot be stitched into a change that never happened.
 * **`diagnostics.bell_on_critical`** (default `false`) rings the terminal bell once per
@@ -132,18 +141,61 @@ It had two panels and thirty blank rows. It now has four.
   beside it. Also breaking for library users.
 * **`LinuxEnrichment::cgroup_cpu_limit` returns a `MetricState<CpuQuota>`** instead of an
   `Option<CpuMax>`, and `MeminfoSnapshot::to_snapshot` takes the group's charge alongside
-  its limit. `CpuSnapshot` and `MemorySnapshot` each gained a field, which breaks
-  struct-literal construction outside the collectors.
-* **A cgroup limit read that has gone stale still bounds the machine.** Both
-  `CpuSnapshot::effective_cores` and `MemorySnapshot::effective_limit_bytes` now accept a
-  stale reading, which is the one place this codebase deliberately breaks its own "fresh
-  values for calculations" rule. A limit is configuration, not a measurement: if the last
-  good read said 2 GiB and this tick's failed, falling back to the host's 64 GiB advertises
-  62 GiB of headroom that does not exist.
-* **Storage shows one row per device rather than one per mount point**, so an APFS Mac no
-  longer lists the same disk four times with the same figures.
+  its limit. The fields those changes added are in the consolidated list below.
+* **`MemorySnapshot::effective_limit_bytes` now accepts a stale cgroup reading**, which is
+  the one place this codebase deliberately breaks its own "fresh values for calculations"
+  rule. A limit is configuration, not a measurement: if the last good read said 2 GiB and
+  this tick's failed, falling back to the host's 64 GiB advertises 62 GiB of headroom that
+  does not exist. `CpuSnapshot::effective_cores` is its new counterpart and follows the same
+  rule; it is new in this release rather than changed.
+
+* **The JSON export schema is version `2`.** `monitrs snapshot --format json` reports
+  `"schema_version": 2`, and a consumer that checks it — which is what the field is for —
+  will now refuse rather than misread. Two fields were **removed**:
+  `sensors.battery.health` and `sensors.temperatures[].high_celsius`. The second's
+  replacement, `peak_celsius`, deliberately means something else, so a script reading the
+  old name as a declared limit would have silently reinterpreted a high-water mark as one.
+  The old `health` is `capacity.full_microwatt_hours / capacity.design_microwatt_hours`.
+  Added, which alone would not have earned a bump: `cpu.cgroup_quota`, `cpu.core_classes`,
+  `memory.cgroup_used_bytes`, `filesystems[].inodes`,
+  `sensors.battery.{capacity, temperature_celsius, power_watts}`, and
+  `host.environment.available.container` on Linux.
+* **Six public enums gained variants**, and none of them is `#[non_exhaustive]`, so a
+  downstream `match` no longer compiles until it grows an arm:
+  `monitrs_core::process::ProcessPredicate::InSubtree`, `monitrs_tui::ViewId::{Cpu, Battery}`,
+  `monitrs_tui::Action::{FollowSelected, StopFollowing}`, `monitrs_tui::Effect::RingBell`,
+  `monitrs_tui::app::Command::{Follow, Unfollow}`, and
+  `monitrs_tui::app::NoticeKind::Pressure`. Two public constants changed type as a
+  consequence: `ViewId::ALL` is now `[ViewId; 7]` and `NoticeKind::ALL` is `[NoticeKind; 8]`,
+  so a spelled-out array length fails to compile.
+
+  These types stay exhaustive on purpose. `Effect` in particular is matched without a
+  wildcard in the one function that acts on the outside world, and that exhaustiveness is
+  what forces a new effect to be wired to something real instead of silently doing nothing.
+* **Nine public fields were added to seven public structs**, breaking struct literals.
+  Four have no `Default`, so *every* literal breaks: `HostEnvironment::container`,
+  `FilesystemSnapshot::inodes`, `ProcessDetail::open_file_list`, and
+  `macos::MachineFacts::core_classes`. Three have one, so only fully exhaustive literals
+  break: `Scenario::{asymmetric_cores, process_open_files, battery_state}`,
+  `linux::LinuxSources::power_supplies`, and `app::AppSettings::bell_on_critical`. Add to
+  those `CpuSnapshot::{cgroup_quota, core_classes}`, `MemorySnapshot::cgroup_used_bytes`,
+  and `BatterySnapshot::{capacity, temperature_celsius, power_watts}`.
+* **The screens renumbered, so `ViewId::to_digit` and `ViewId::from_digit` answer
+  differently.** Inserting CPU at `3` moved Storage to `4`, Network to `5` and Inspect to
+  `6`; `5` now opens Network for anyone with the old key in their fingers or their scripts.
+* **Below 92 columns the tab strip shows bare digits instead of screen names** — `[1] 2 3 4
+  5 6 7` rather than `[1 Overview] 2 Processes …`. Seven titles need 76 cells beside the
+  footer hints, where five needed 58, so an 80-column terminal that used to show the names
+  no longer can. While the timeline is frozen the footer carries `L live` too and the
+  cutover rises to 100 columns, which reaches into the Standard band. The active screen
+  stays bracketed, and §5.2's rule that colour is never the only carrier still holds.
 
 ### Fixed
+
+* **Storage listed one row per mount point rather than per device**, so an APFS Mac showed
+  the same disk four times with four identical throughput figures — and a reader adding
+  them up got four times the machine's real I/O. One row per device now, with every mount
+  point it backs named in the row.
 
 * **`OPEN FILES` on macOS was the descriptor table size, not the count.** A process
   reporting 25 held 3 descriptors, opened 20 more, and still reported 25; another reporting
@@ -157,6 +209,46 @@ It had two panels and thirty blank rows. It now has four.
   on the machine this was found on.
 * **A failed `cpu.max` read kept the previous value**, presenting a ceiling read minutes
   earlier as the current one. An unparsable limit is now unavailable.
+* **`cargo doc` was broken on Linux** — a public module doc in the new `statfs` reader
+  linked to a private constant — and nothing on a macOS workstation could see it, because
+  neither `cargo check --target` nor `clippy --target` runs rustdoc. The release checklist
+  now runs all three against the other platform.
+* **Three documents still sent the reader to `5` for the Inspect screen** after the
+  renumbering: the README, the troubleshooting guide and the accessibility review.
+* **The command palette's `view` hint and its rejection message listed only the five 0.1.0
+  screens**, so `cpu` and `battery` worked but were undiscoverable. The rejection now names
+  every screen, and a test walks `ViewId::ALL` so the next screen cannot be added without
+  one.
+
+### Known limitations
+
+Carried forward and re-checked rather than copied: what 0.1.0 listed and this release still
+owes, minus what is now fixed.
+
+* **The twelve-hour soak is still not on record**, and it is now explicitly out of scope
+  here: it will be run on a dedicated EC2 host under its own project rather than on a
+  workstation, because the gate §16.1 asks for is twelve uninterrupted hours and a laptop
+  that sleeps does not produce one. The 30-minute run with the shipped collector remains
+  the only evidence, and it showed no growth. **Nothing has been soaked on Linux**, which
+  is also the only configuration where the file-descriptor budget is exercised at all.
+* **Idle self-CPU still misses its p95 budget**: median 0.5–1.1% against 1% — met — and p95
+  6–11% against 2%. `docs/benchmarks.md` locates the cost read by read; it is OS reads
+  rather than monitrs' own computation.
+* **Two of the seven screens have never been seen on Linux.** The Battery screen's Linux
+  collector is tested from captured `/sys/class/power_supply` fixtures on macOS, and the
+  inode reader from `statfs` errno cases, but no Linux machine has run either.
+* A slow terminal can still block a frame for an unbounded time, and no instrument here can
+  see it.
+* **Below 92 columns the tab strip loses the screen names**, which is new in this release
+  and is the cost of going from five screens to seven.
+* Device busy time remains unsupported on macOS: there is no documented API. Per-process
+  socket counts, which 0.1.0 listed here, are now supported — one syscall already carried
+  them.
+* PSI is Linux-only, and says `n/a` on macOS rather than promising a value that will never
+  arrive.
+* Timestamps are UTC and labelled `Z`: no time-zone database is bundled.
+* Of the six published archives, only the two macOS ones have ever been run, and the
+  x86_64 one only under Rosetta. That is unchanged from 0.1.0.
 
 ## [0.1.0] - 2026-07-30
 
@@ -306,5 +398,6 @@ Named because §16.1's own last line asks for measurement rather than claims:
   the Rust ecosystem norm and this project's dependency licence policy. Anyone who
   cloned the repository at its first commit saw the earlier licence.
 
-[Unreleased]: https://github.com/gaborini/monitrs/compare/v0.1.0...HEAD
+[Unreleased]: https://github.com/gaborini/monitrs/compare/v0.2.0...HEAD
+[0.2.0]: https://github.com/gaborini/monitrs/releases/tag/v0.2.0
 [0.1.0]: https://github.com/gaborini/monitrs/releases/tag/v0.1.0

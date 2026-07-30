@@ -275,7 +275,7 @@ components and 21 interfaces:
 
 | Read | Cost | Tier |
 |---|---|---|
-| `sysinfo` process refresh | 29 ms | fast |
+| `sysinfo` process refresh | 29 ms | ~~fast~~ — **fixed**, see below |
 | `Disks::refresh(false)` | 34 ms wall, ~21 ms of it our own CPU | ~~fast~~ — **fixed**, see below |
 | `Disks::refresh_specifics(io_usage)` | ~1 ms CPU | fast |
 | `Disks::refresh(true)` | 25 ms | medium |
@@ -295,7 +295,7 @@ Averaged that is 1.7% of a core, but it arrives as one spike in the second it la
 a p95 taken once a second sees the spike. Nothing has been measured about whether that
 read can be made cheaper, so it is the next thing to look at rather than a conclusion.
 
-Three things follow, and none of them is a micro-optimisation:
+Two things follow, and neither is a micro-optimisation:
 
 1. **Asking `sysinfo` for fewer process fields does not help — but not asking at all
    does.** *Fixed.* Requesting `ProcessRefreshKind::nothing()` still costs 26 ms of the
@@ -339,16 +339,13 @@ Three things follow, and none of them is a micro-optimisation:
    stopwatch and nothing like each other on the meter §16.1 actually budgets. The
    collection figures above are wall-clock and barely moved; the idle-CPU figure
    halved.
-3. **On macOS the process table is enumerated twice.** The native layer walks
-   `kern.proc.all` itself and then overwrites the baseline's table; `sysinfo`'s 29 ms
-   walk survives only to supply command lines and user names. Sourcing those natively
-   too — the macOS layer already has `read_process_arguments` — would remove most of
-   the fast tick's cost. That is the one change with a real chance of reaching the 1%
-   budget, and it is not a small one: the merge semantics that keep a refused read
-   reported as refused rather than as zero all live in that path.
 
-Until that is done, the honest statement is the one in the table: five budgets are
-met, idle CPU is not, and the reason is measured rather than guessed.
+The honest statement is the one in the table, row by row: four budgets pass outright, the
+descriptor budget passes over half an hour rather than the twelve the gate asks for, the
+idle-CPU **median** now passes and its **p95** does not — 6–11% against 2%, arriving as the
+medium tier's 85 ms `Components::refresh` once every five seconds — and two rows have no
+measurement to pass or fail. The reason for the p95 is measured rather than guessed, and
+whether that read can be made cheaper is the open question, not which read it is.
 
 ## What is not measured yet
 
