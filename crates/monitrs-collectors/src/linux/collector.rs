@@ -5,7 +5,9 @@
 //!
 //! 1. let [`CommonCollector`] produce a complete snapshot;
 //! 2. read the `/proc` and `/sys` sources the due tiers call for;
-//! 3. hand both to [`LinuxEnrichment::apply`].
+//! 3. hand both to [`LinuxEnrichment::apply`];
+//! 4. `statfs` the mount points for the one filesystem figure that is not in `/proc`
+//!    at all — the inode counts — and merge them in.
 //!
 //! Keeping the glue this small is what makes the rest of the module testable on a
 //! machine with no `/proc` (§17.2): the parsers, the reading layer, and the
@@ -19,11 +21,13 @@ use monitrs_core::model::{
 
 use crate::common::CommonCollector;
 use crate::error::CollectorError;
+use crate::inodes::{self, MountInodes};
 use crate::linux::cgroup::parse_pid_cgroup;
 use crate::linux::enrich::LinuxEnrichment;
 use crate::linux::process::parse_pid_stat;
 use crate::linux::read::{MAX_ENRICHED_PROCESSES, ProcRoot, SourceRequest, collect_sources};
 use crate::linux::signal::{KillSink, LinuxSignal, SignalDecision, SignalError, signal_process};
+use crate::linux::statfs;
 use crate::source::{SampleTick, SnapshotSource};
 
 /// The Linux collector.
@@ -35,6 +39,13 @@ pub struct LinuxCollector {
     common: CommonCollector,
     root: ProcRoot,
     enrichment: LinuxEnrichment,
+    /// Inode counts per mount point, refreshed on the medium tier (§8.6).
+    ///
+    /// Held here rather than re-read per sample because `statfs` is a per-mount
+    /// syscall that can block, and because the baseline republishes its cached
+    /// filesystems on every tick — so the readings have to outlive the tick that
+    /// took them or the field would carry a number one frame in ten (§4).
+    inodes: Vec<MountInodes>,
 }
 
 impl LinuxCollector {
@@ -44,6 +55,7 @@ impl LinuxCollector {
             common: CommonCollector::new()?,
             root: ProcRoot::live(),
             enrichment: LinuxEnrichment::new(),
+            inodes: Vec::new(),
         })
     }
 
@@ -54,6 +66,7 @@ impl LinuxCollector {
             common: CommonCollector::new()?,
             root,
             enrichment: LinuxEnrichment::new(),
+            inodes: Vec::new(),
         })
     }
 
@@ -126,6 +139,19 @@ impl SnapshotSource for LinuxCollector {
             },
         );
         self.enrichment.apply(&mut snapshot, &sources, tick);
+        // Inodes, on the medium tier with the byte capacity they belong beside. The
+        // mount list comes from the snapshot the baseline just produced rather than
+        // from a second enumeration, so a mount that appeared this tick is asked
+        // about this tick.
+        if tick.due.contains(Tier::Medium) {
+            self.inodes = statfs::read_inode_usage(
+                snapshot
+                    .filesystems
+                    .iter()
+                    .map(|filesystem| &*filesystem.mount_point),
+            );
+        }
+        inodes::merge_into(&mut snapshot.filesystems, &self.inodes);
         // The baseline declares renice unsupported because the `sysinfo` layer has no
         // write path; this layer does (`crate::renice`). It has to be set on the
         // snapshot as well as in `capabilities`, because the snapshot's copy is what
@@ -191,6 +217,25 @@ impl SnapshotSource for LinuxCollector {
             Ok((count, _capped)) => MetricState::Available(count),
             Err(failure) => failure.process_state(),
         };
+
+        // The list is a second, more expensive read of the same directory: one
+        // `readlink` per descriptor rather than one `read_dir` for all of them, capped
+        // at `OpenFileList::MAX_LISTED` (§16.1).
+        detail.open_file_list = match self.root.list_open_files(identity.pid) {
+            Ok(files) => MetricState::Available(files),
+            Err(failure) => failure.process_state(),
+        };
+
+        // Socket *counts* stay unsupported on Linux, and deliberately so. Unlike
+        // macOS, where `PROC_PIDLISTFDS` classifies the whole descriptor table in one
+        // syscall, `/proc/<pid>/fd` only says a descriptor is a socket once its link
+        // target has been read — one syscall each. Counting sockets over the capped
+        // walk would produce a floor of at most `OpenFileList::MAX_LISTED`, which for
+        // a process holding thousands of sockets would be a number that looks precise
+        // and is not; §26 prefers no number to a misleading one. The sockets that *are*
+        // in the list are still labelled as sockets. Set here rather than left to the
+        // baseline so that this decision is stated where it is made.
+        detail.sockets = MetricState::Unsupported;
 
         ProcessDetailResult::Loaded(detail)
     }

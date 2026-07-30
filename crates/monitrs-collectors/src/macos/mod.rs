@@ -10,6 +10,8 @@
 //! | Swap | capacity only | capacity plus swap-in and swap-out rates |
 //! | CPU | aggregate and per-core percentages | the same, plus the user/system/nice/idle split |
 //! | Threads, open files, niceness | unsupported | from `proc_pidinfo` |
+//! | Open descriptors and socket counts | unsupported | from `PROC_PIDLISTFDS`, on demand (§8.6) |
+//! | Filesystem inode counts | unsupported | from `getfsstat` |
 //! | Link state and speed | unsupported | from `getifaddrs` |
 //! | Battery | unsupported | from `IOPowerSources` |
 //!
@@ -24,8 +26,12 @@
 //!   Whatever the baseline finds is passed through untouched; this layer adds none.
 //! * **Battery cycle count and health.** Both live under undocumented
 //!   `AppleSmartBattery` registry property names.
-//! * **Per-process socket counts.** Reachable, but only by walking every
-//!   descriptor of every process, which §16.1's budget does not allow.
+//! * **Per-process network throughput.** There is no documented per-process
+//!   interface counter; `nettop` uses a private one. Absent rather than guessed.
+//! * **A complete descriptor list for a process holding thousands.** The list is
+//!   capped at [`monitrs_core::model::OpenFileList::MAX_LISTED`] because naming a
+//!   descriptor costs a syscall, and the panel says how many it did not name rather
+//!   than presenting a prefix as the whole table.
 //!
 //! # Constraints this module is built to satisfy
 //!
@@ -67,6 +73,8 @@ mod collector;
 mod cpu;
 #[cfg(all(target_os = "macos", feature = "macos-native"))]
 mod ffi;
+#[cfg(all(target_os = "macos", feature = "macos-native"))]
+mod filesystem;
 #[cfg(all(target_os = "macos", feature = "macos-native"))]
 mod memory;
 #[cfg(all(target_os = "macos", feature = "macos-native"))]

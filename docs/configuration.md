@@ -157,6 +157,7 @@ machine is 100% and nothing exceeds it. See [`metrics.md`](metrics.md).
 | `memory_watch_available_percent` | `15` | |
 | `memory_critical_available_percent` | `5` | Must be **below** `memory_watch_available_percent`. |
 | `sustained_samples` | `10` | 1–600. How many recent samples must agree before a signal escalates. |
+| `bell_on_critical` | `false` | Also ring the terminal bell when a signal reaches `critical`. |
 
 The memory thresholds run the opposite way to the CPU ones, because *less*
 available memory is worse. Getting that backwards is the easiest mistake in the
@@ -165,6 +166,40 @@ number.
 
 `sustained_samples` is the hysteresis that stops the radar flapping between amber
 and green once per second. Lowering it makes monitrs twitchier, not more accurate.
+
+### Being told, instead of watching
+
+A signal that crosses a threshold is recorded as a notice — `X pressure CPU is now
+critical (held 1s): cpu busy at or above diagnostics.cpu_watch_percent …` — quoting
+the same rule text and duration the radar panel shows, so the notice and the panel
+can never disagree. The line appears in the status area and in the notice panel; it
+opens no dialog and takes no key, so it cannot interrupt what you were doing.
+
+What it does *not* do is repeat. The reducer sees a snapshot a second and the radar
+reports `critical` in every one of them; only the **transition** is announced, which
+is what `sustained_samples` makes meaningful in the first place. Recovery is
+announced too, once, at a lower severity. A signal that becomes unavailable — the
+read was refused, or the machine woke from sleep and the hysteresis window was
+discarded — says nothing at all: that is not a recovery, and reporting it as one
+would claim the machine was fine on the strength of a metric nobody could read.
+
+Alerts are derived from the newest sample even while the timeline is paused or
+scrubbed. §2.1 freezes what is *displayed*, not collection, and pausing to read one
+spike is no reason to be kept in the dark about the next.
+
+`bell_on_critical` adds a single `\x07` to that, and only for an escalation into
+`critical`:
+
+* never for `watch`, and never on recovery;
+* once per episode, not once per second — a signal that is still critical has not
+  transitioned;
+* once per sample even if two signals cross together, because two beeps say nothing
+  the first did not;
+* off by default. A monitor left running on a second screen should not make noise
+  unless you asked it to, and the notice is the primary cue either way.
+
+Setting it with `enabled = false` is rejected rather than ignored: with diagnostics
+off no signal is derived at all, so the bell could never ring.
 
 ### `[keys]`
 
@@ -234,6 +269,7 @@ cpu_critical_percent = 95
 memory_watch_available_percent = 15
 memory_critical_available_percent = 5
 sustained_samples = 10
+bell_on_critical = false
 ```
 
 ## Command-line equivalents

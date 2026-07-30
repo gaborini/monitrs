@@ -158,6 +158,37 @@ time.
 
 See [`metrics.md` § Time and rates](metrics.md#time-and-rates).
 
+## The terminal beeped, or a `pressure` line appeared on its own
+
+A Pressure Radar signal crossed a threshold. The notice names the signal, the state
+it reached, and the rule that produced it:
+
+```
+X pressure CPU is now critical (held 1s): cpu busy at or above diagnostics.cpu_wa...
+```
+
+It is written once per **transition**, not once per sample: the radar reports
+`critical` every second for as long as the condition lasts, and only the change is
+worth saying. `held` is how long the signal has been in the state it just entered —
+at the moment of the transition that is one sample interval, because the engine's
+timer restarts when the state changes. The full rule, the raw metric and the
+severity bar are all on the Overview's radar panel; the notice is the part you do not
+have to be looking at.
+
+Recovery produces one more line, at a lower severity. A signal going *unavailable*
+produces none, deliberately: a refused read is not good news.
+
+The bell is off unless `diagnostics.bell_on_critical = true`, and even then it rings
+only for an escalation into `critical` — never for `watch`, never on recovery, and
+once per episode. If monitrs is beeping more than that, or beeping with the key unset,
+that is a bug worth an issue. To silence it, set the key back to `false` and
+`reload config` (`:`) — no restart needed. See
+[`configuration.md`](configuration.md#being-told-instead-of-watching).
+
+If a signal escalates and clears repeatedly, the condition is genuinely oscillating
+around your threshold; raise `diagnostics.sustained_samples` rather than the
+threshold, since that is the knob that decides how much agreement a transition needs.
+
 ## A value has a `~` and an age beside it
 
 The `~` marker means **retained, not current**: monitrs could not refresh that metric
@@ -201,6 +232,45 @@ Related things that are *not* inconsistencies:
   of its capability.
 
 See [`metrics.md` § Filesystems and disks](metrics.md#filesystems-and-disks).
+
+## The Battery screen says there is no battery
+
+Because there is not one. A desktop, a server, a virtual machine, a container and
+every CI runner reach the Battery screen (`7`) with nothing to report, and the screen
+says so in words rather than showing an empty panel or a charge of `0%`. Nothing is
+broken and no privilege would change it.
+
+The three absences are different and the screen distinguishes them:
+
+* **`n/a`** — this machine has no battery. On Linux, `/sys/class/power_supply`
+  contains no entry whose `type` is `Battery`; on macOS, `IOPowerSources` lists no
+  internal battery.
+* **`warming up`** — the battery is read on the medium (5 s) tier and the first
+  reading has not landed yet. It arrives within seconds.
+* **`permission denied`** — a power source is present but unreadable at this
+  privilege level. Rare; worth reporting if you see it.
+
+Related things that are *not* faults:
+
+* **On macOS the cycle count, capacities, pack temperature and watts are all
+  `n/a`.** `IOPowerSources` publishes the charge, the state, and the time-remaining
+  estimate and nothing else. The rest lives in the `AppleSmartBattery` I/O Registry
+  node under property names Apple has never documented, and §9.3 does not permit
+  reading those. The figures are obtainable; they are not obtainable *honestly*.
+* **There is no time remaining on some Linux laptops.** Most ACPI batteries publish
+  no estimate, and monitrs will not compute one: charge divided by an instantaneous
+  current swings by hours between consecutive samples, which is precisely the kind of
+  invented number §4 exists to prevent.
+* **A cycle count of `n/a` on a machine that has cycled its battery.** Firmware that
+  does not count cycles reports `0`, which monitrs treats as unknown — "0 cycles" on
+  a four-year-old laptop would be a fabricated all-clear about the pack's age.
+* **`0.0 W` on a full pack on mains is a measurement**, not an absence. A pack that
+  is neither charging nor discharging really draws nothing.
+* **A thermal sensor with no bar beside it.** A bar needs a full scale and a
+  temperature has none unless the sensor declares a threshold, so the bar appears
+  only where it does. Same rule as network utilization without a link speed.
+
+See [`metrics.md` § Sensors and battery](metrics.md#sensors-and-battery).
 
 ## The terminal is too small
 

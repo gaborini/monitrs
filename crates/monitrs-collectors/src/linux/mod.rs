@@ -10,9 +10,14 @@
 //! * `MemAvailable` semantics, so page cache is not counted as application use (§8.4);
 //! * device busy time from `/proc/diskstats` field 10 — the only place §7.3 allows a
 //!   busy percentage;
+//! * filesystem inode counts from `statfs(2)`, which no `/proc` file reports and which
+//!   are the difference between seeing an `ENOSPC` coming and being surprised by it;
 //! * interface drop counters, link state, and link speed, without which §7.4 forbids
 //!   a utilisation percentage;
 //! * PSI, the strongest input the Pressure Radar can have (§2.3);
+//! * the battery, from `/sys/class/power_supply` — cycle count, wear against design
+//!   capacity, pack temperature and instantaneous watts, none of which the baseline
+//!   or the documented macOS APIs can reach (§9.3);
 //! * cgroup limits, exposed *beside* host totals rather than instead of them (§9.2);
 //! * a process start key in clock ticks rather than whole seconds, which is what
 //!   makes PID reuse inside one second detectable (§26);
@@ -25,12 +30,14 @@
 //! shaped the way it is: [`read`] is the only code that touches the filesystem, and
 //! even that is rooted rather than hard-coded, so the reading layer itself is
 //! exercised by a checked-in `/proc` tree on any platform. Only `ProcRoot::live`,
-//! `LinuxCollector`, and the `kill(2)` sink are gated to Linux — they are not
-//! linkable in this documentation build for that reason — and all three are thin.
+//! `LinuxCollector`, the `kill(2)` sink, and `statfs` are gated to Linux — they are
+//! not linkable in this documentation build for that reason — and all four are thin.
+//! `statfs` is the one that could not have been written any other way: inode counts
+//! exist nowhere under `/proc`, so there is no byte stream to parse from a fixture.
 //!
 //! One consequence is worth stating plainly: this code was written and tested on
 //! macOS. Everything in [`parse`], [`stat`], [`meminfo`], [`loadavg`], [`diskstats`],
-//! [`netdev`], [`psi`], [`process`], [`cgroup`], [`signal`], [`read`], and [`enrich`]
+//! [`netdev`], [`psi`], [`power`], [`process`], [`cgroup`], [`signal`], [`read`], and [`enrich`]
 //! compiles and runs its tests on every platform. The Linux-gated code is
 //! type-checked by cross-compiling; it is not exercised by these tests, and the
 //! module boundary is drawn so that the un-exercised part is as small as possible.
@@ -56,14 +63,18 @@ pub mod loadavg;
 pub mod meminfo;
 pub mod netdev;
 pub mod parse;
+pub mod power;
 pub mod process;
 pub mod psi;
 pub mod read;
 pub mod signal;
 pub mod stat;
+#[cfg(all(target_os = "linux", feature = "linux-native"))]
+pub mod statfs;
 
 pub use enrich::{DEFAULT_USER_HZ, LinuxEnrichment};
 pub use parse::{ParseFailure, ParseResult};
+pub use power::{BatteryAttributes, PowerSupplyKind, battery_from, classify};
 pub use read::{LinuxSources, ProcRoot, ReadFailure, SourceRequest, collect_sources};
 pub use signal::{
     LinuxSignal, SignalDecision, SignalError, SignalSink, revalidate, signal_process,
@@ -126,6 +137,21 @@ pub(crate) mod fixtures {
     fixture!(NET_DEV_HUGE => "cases/net_dev/huge_counters.txt");
     fixture!(NET_DEV_AFTER_RESET => "cases/net_dev/after_reset.txt");
     fixture!(NET_DEV_EMPTY => "cases/net_dev/empty.txt");
+
+    fixture!(POWER_TYPE_BATTERY => "cases/power_supply/type_battery.txt");
+    fixture!(POWER_TYPE_MAINS => "cases/power_supply/type_mains.txt");
+    fixture!(POWER_SCOPE_SYSTEM => "cases/power_supply/scope_system.txt");
+    fixture!(POWER_SCOPE_DEVICE => "cases/power_supply/scope_device.txt");
+    fixture!(POWER_STATUS_DISCHARGING => "cases/power_supply/status_discharging.txt");
+    fixture!(POWER_STATUS_CHARGING => "cases/power_supply/status_charging.txt");
+    fixture!(POWER_STATUS_FULL => "cases/power_supply/status_full.txt");
+    fixture!(POWER_STATUS_NOT_CHARGING => "cases/power_supply/status_not_charging.txt");
+    fixture!(POWER_CAPACITY_82 => "cases/power_supply/capacity_82.txt");
+    fixture!(POWER_CYCLE_COUNT_214 => "cases/power_supply/cycle_count_214.txt");
+    fixture!(POWER_ENERGY_FULL_DESIGN => "cases/power_supply/energy_full_design.txt");
+    fixture!(POWER_ENERGY_FULL => "cases/power_supply/energy_full.txt");
+    fixture!(POWER_POWER_NOW => "cases/power_supply/power_now.txt");
+    fixture!(POWER_TEMP_314 => "cases/power_supply/temp_314.txt");
 
     fixture!(PID_STAT_SIMPLE => "cases/pid_stat/simple.txt");
     fixture!(PID_STAT_SIMPLE_NEXT_TICK => "cases/pid_stat/simple_next_tick.txt");

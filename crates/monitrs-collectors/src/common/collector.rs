@@ -206,6 +206,11 @@ impl CommonCollector {
                     // different from being 0% full (§4).
                     usage: Percent::ratio(used, total)
                         .map_or(MetricState::Unsupported, MetricState::Available),
+                    // `sysinfo` exposes no inode counts at all — there is no
+                    // `f_files` anywhere in its `Disk` API — so this is a metric the
+                    // baseline cannot produce rather than one it measured as zero.
+                    // `crate::inodes` is what the native layers fill it in through.
+                    inodes: MetricState::Unsupported,
                     kind: classify_filesystem(&fs_type, disk.is_removable()),
                     read_only: disk.is_read_only(),
                 }
@@ -842,18 +847,37 @@ fn classify_interface(name: &str) -> InterfaceKind {
     }
 }
 
+/// Absolute zero. Nothing at or below it is a temperature.
+///
+/// This is not a theoretical guard. Every Apple Silicon Mac reports a dozen unwired
+/// `PMU tdev*` sensors at about −9200 °C, and a `sysinfo` component list on such a
+/// machine is roughly half faults by count. Dropping them is not filtering
+/// inconvenient data: −9200 °C is the sensor saying it is not connected, and a panel
+/// that printed it would be printing a fabricated reading with a decimal point on it
+/// (§4).
+const ABSOLUTE_ZERO_CELSIUS: f32 = -273.15;
+
 fn read_temperatures(components: &Components) -> MetricState<Vec<TemperatureReading>> {
+    let physical = |value: f32| value.is_finite() && value > ABSOLUTE_ZERO_CELSIUS;
     let readings: Vec<TemperatureReading> = components
         .list()
         .iter()
         .filter_map(|component| {
             let celsius = component.temperature()?;
-            // A non-finite reading is a sensor fault, not a temperature.
-            celsius.is_finite().then(|| TemperatureReading {
+            // A non-finite or sub-absolute-zero reading is a sensor fault, not a
+            // temperature. Discarding the whole reading rather than substituting a
+            // number is the §4 answer, and an all-faults machine then reports
+            // `Unsupported` below rather than a list of nonsense.
+            physical(celsius).then(|| TemperatureReading {
                 label: component.label().to_owned().into(),
                 celsius,
-                high_celsius: component.max().filter(|value| value.is_finite()),
-                critical_celsius: component.critical().filter(|value| value.is_finite()),
+                // `Component::max` is the highest value *seen* on macOS and a
+                // driver-declared limit on some Linux sensors, and the two cannot be
+                // told apart through this interface. `peak_celsius` is named for the
+                // weaker of the two readings so nothing downstream mistakes it for a
+                // ceiling; only `critical` is one.
+                peak_celsius: component.max().filter(|value| physical(*value)),
+                critical_celsius: component.critical().filter(|value| physical(*value)),
             })
         })
         .collect();
@@ -1030,9 +1054,13 @@ impl SnapshotSource for CommonCollector {
         detail.root = root.map_or(MetricState::PermissionDenied, |text| {
             MetricState::Available(text.into())
         });
-        // The baseline cannot count descriptors or sockets; the native layers can.
+        // The baseline cannot count descriptors or sockets, let alone name them; the
+        // native layers can. `Unsupported` rather than the `WarmingUp` this record
+        // starts as, because a value the baseline will never produce is not one that
+        // is on its way (§4).
         detail.open_files = MetricState::Unsupported;
         detail.sockets = MetricState::Unsupported;
+        detail.open_file_list = MetricState::Unsupported;
         detail.descendants = MetricState::Available(u32::try_from(children.len()).unwrap_or(0));
         detail.children = MetricState::Available(children);
         // The baseline walks only one generation. A full chain needs repeated

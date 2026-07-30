@@ -288,6 +288,11 @@ pub(crate) struct DiagnosticsConfig {
     pub(crate) memory_critical_available_percent: u8,
     /// How many of the recent samples must agree before escalating.
     pub(crate) sustained_samples: u16,
+    /// Whether a signal escalating to `critical` also rings the terminal bell.
+    ///
+    /// Off by default. monitrs is frequently left running on a second screen, and a
+    /// monitor that beeps without being asked to is a monitor that gets closed.
+    pub(crate) bell_on_critical: bool,
 }
 
 impl Default for DiagnosticsConfig {
@@ -299,6 +304,7 @@ impl Default for DiagnosticsConfig {
             memory_watch_available_percent: 15,
             memory_critical_available_percent: 5,
             sustained_samples: 10,
+            bell_on_critical: false,
         }
     }
 }
@@ -812,6 +818,7 @@ fn known_keys() -> BTreeSet<&'static str> {
         "memory_watch_available_percent",
         "memory_critical_available_percent",
         "sustained_samples",
+        "bell_on_critical",
         "keys",
         "quit",
         "help",
@@ -1023,6 +1030,18 @@ impl Config {
                     "must be between 1 and 600, got {}",
                     self.diagnostics.sustained_samples
                 ),
+            );
+        }
+
+        // A bool has no range to check, but it can still contradict another key: with
+        // diagnostics off no signal ever escalates, so a bell asked for here could
+        // never ring. §12 requires that to be named rather than silently ignored.
+        if self.diagnostics.bell_on_critical && !self.diagnostics.enabled {
+            problem(
+                "diagnostics.bell_on_critical",
+                "cannot ring while diagnostics.enabled is false, because no pressure \
+                 signal is derived at all"
+                    .to_owned(),
             );
         }
 
@@ -1238,6 +1257,11 @@ memory_critical_available_percent = {mem_critical}
 # How many of the recent samples must agree before a signal escalates. This is
 # the hysteresis that stops the radar flapping once per second.
 sustained_samples = {sustained}
+# A signal crossing into watch or critical is always recorded as a notice. Set
+# this to also ring the terminal bell, once, when one reaches *critical* — never
+# for watch, and never when it recovers. Off by default: a monitor left on a
+# second screen should not beep unless you asked it to.
+bell_on_critical = {bell}
 
 # Key rebinding. Each entry replaces the built-in binding for that action.
 # Binding one key to two actions is rejected, not silently resolved.
@@ -1274,6 +1298,7 @@ sustained_samples = {sustained}
         mem_watch = defaults.diagnostics.memory_watch_available_percent,
         mem_critical = defaults.diagnostics.memory_critical_available_percent,
         sustained = defaults.diagnostics.sustained_samples,
+        bell = defaults.diagnostics.bell_on_critical,
     )
 }
 
@@ -1581,6 +1606,40 @@ mod tests {
                 .any(|p| p.key == "diagnostics.memory_critical_available_percent"),
             "{problems:?}"
         );
+    }
+
+    #[test]
+    fn the_bell_is_off_by_default_and_only_rings_for_critical() {
+        // §12: the default has to be the quiet one. A monitor that beeps on a fresh
+        // install is a monitor that gets uninstalled, and the notice is the primary
+        // cue — the bell is the addition (§5.2's principle applied to sound).
+        assert!(!Config::default().diagnostics.bell_on_critical);
+        assert!(starter_file().contains("bell_on_critical = false"));
+    }
+
+    #[test]
+    fn a_bell_that_could_never_ring_is_reported_rather_than_ignored() {
+        // With diagnostics off no signal is derived at all, so this pair of keys
+        // contradict each other. §12 wants that named, not silently dropped.
+        let problems = problems_for(
+            r"
+            [diagnostics]
+            enabled = false
+            bell_on_critical = true
+            ",
+        );
+        let problem = problems
+            .iter()
+            .find(|problem| problem.key == "diagnostics.bell_on_critical")
+            .expect("the contradiction must be reported");
+        assert!(problem.message.contains("diagnostics.enabled"), "{problem}");
+
+        // Either key on its own is fine.
+        assert!(
+            problems_for("[diagnostics]\nbell_on_critical = true\n").is_empty(),
+            "asking for the bell with diagnostics on is the point of the key"
+        );
+        assert!(problems_for("[diagnostics]\nenabled = false\n").is_empty());
     }
 
     #[test]

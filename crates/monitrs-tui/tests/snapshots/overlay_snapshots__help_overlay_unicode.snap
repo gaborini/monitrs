@@ -2,7 +2,7 @@
 source: crates/monitrs-tui/tests/overlay_snapshots.rs
 expression: text_of(&buffer)
 ---
-|                   ┌ HELP ─────────────────────────────────────────── 1-38 of 44 ───┐                   |
+|                   ┌ HELP ─────────────────────────────────────────── 1-38 of 45 ───┐                   |
 |                   │Global                                                          │                   |
 |                   │ q                  Quit                                        │                   |
 |                   │ Ctrl-C             Quit safely from any mode                   │                   |
@@ -16,6 +16,7 @@ expression: text_of(&buffer)
 |                   │ 4                  Go to the Storage view                      │                   |
 |                   │ 5                  Go to the Network view                      │                   |
 |                   │ 6                  Go to the Inspect view                      │                   |
+|                   │ 7                  Go to the Battery view                      │                   |
 |                   │ Space              Pause or resume the visible timeline        │                   |
 |                   │ L                  Return to the live sample                   │                   |
 |                   │ :                  Open the command palette                    │                   |
@@ -40,5 +41,4 @@ expression: text_of(&buffer)
 |                   │Time Lens                                                       │                   |
 |                   │ [                  Step one sample back                        │                   |
 |                   │ ]                  Step one sample forward                     │                   |
-|                   │ {                  Leap ten samples back                       │                   |
 |                   └────────────────────────────────────────────────────────────────┘                   |

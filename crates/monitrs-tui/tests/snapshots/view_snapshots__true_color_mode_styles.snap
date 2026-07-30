@@ -29,4 +29,4 @@ expression: "styles_of(&frame(&state, ascii()))"
 24: 1xRgb(59, 66, 82)/Reset/DIM 1xReset/Reset/NONE 1xRgb(121, 201, 143)/Reset/NONE 1xReset/Reset/NONE 7xRgb(214, 218, 227)/Reset/NONE 1xReset/Reset/NONE 8xRgb(121, 201, 143)/Reset/NONE 1xReset/Reset/NONE 8xRgb(124, 132, 148)/Reset/DIM 1xReset/Reset/NONE 69xRgb(121, 201, 143)/Reset/NONE 1xRgb(59, 66, 82)/Reset/DIM
 25: 1xRgb(59, 66, 82)/Reset/DIM 1xReset/Reset/NONE 1xRgb(121, 201, 143)/Reset/NONE 1xReset/Reset/NONE 7xRgb(214, 218, 227)/Reset/NONE 1xReset/Reset/NONE 8xRgb(121, 201, 143)/Reset/NONE 1xReset/Reset/NONE 8xRgb(124, 132, 148)/Reset/DIM 1xReset/Reset/NONE 69xRgb(121, 201, 143)/Reset/NONE 1xRgb(59, 66, 82)/Reset/DIM
 26: 100xRgb(59, 66, 82)/Reset/DIM
-27: 12xRgb(122, 162, 247)/Reset/BOLD 53xRgb(124, 132, 148)/Reset/DIM 19xReset/Reset/NONE 16xRgb(124, 132, 148)/Reset/DIM
+27: 12xRgb(122, 162, 247)/Reset/BOLD 64xRgb(124, 132, 148)/Reset/DIM 8xReset/Reset/NONE 16xRgb(124, 132, 148)/Reset/DIM

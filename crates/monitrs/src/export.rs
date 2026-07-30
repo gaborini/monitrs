@@ -10,6 +10,16 @@
 //! * **Command arguments are redacted by default.** A `psql
 //!   postgres://user:hunter2@host/db` command line in a public issue is a leaked
 //!   credential, and people paste exports without reading them.
+//! * **Open-file paths cannot appear at all**, redacted or otherwise. There are two
+//!   reasons and they compound: this projection has no [`ProcessDetail`] in it —
+//!   §8.6 loads the detail for one selected process, which is not part of a
+//!   *snapshot* — and [`ProcessDetail`]'s own `Serialize` implementation replaces a
+//!   descriptor's path with its availability state whatever serializes it. So there
+//!   is no `--include-paths` to add by accident, and an export that starts including
+//!   the detail cannot leak `/Users/someone/Documents/…` by forgetting to redact
+//!   (§15.2, §19).
+//!
+//! [`ProcessDetail`]: monitrs_core::model::ProcessDetail
 //! * **Unavailable metrics export as a named state**, never as `null` or `0`, so
 //!   the export cannot mislead a reader the way the UI is forbidden from
 //!   misleading a user (§4).
@@ -292,6 +302,7 @@ mod tests {
     use super::*;
     use monitrs_collectors::fake::{FakeProcess, Pattern, Scenario};
     use monitrs_collectors::{FakeCollector, SampleTick, SnapshotSource as _};
+    use monitrs_core::model::{OpenFileEntry, OpenFileKind, OpenFileList, ProcessDetail};
     use std::time::Instant;
 
     fn snapshot_from(scenario: Scenario, samples: u64) -> SystemSnapshot {
@@ -378,6 +389,71 @@ mod tests {
         // The model has no field for them, so even the permissive policy cannot
         // leak one.
         assert!(!json.contains("\"environ\""));
+    }
+
+    #[test]
+    fn a_snapshot_export_carries_no_open_file_paths_because_it_carries_no_detail() {
+        // §8.6's detail is per-selected-process and is not part of a snapshot, so the
+        // paths §7.2 puts on screen have no route into a file someone pastes into a
+        // public issue. This test is what makes that a decision rather than an
+        // accident: adding a `detail` field here would fail it.
+        let snapshot = snapshot_from(Scenario::default(), 3);
+        let json = SnapshotExport::new(&snapshot, RedactionPolicy::FULL)
+            .to_json()
+            .expect("serializes");
+        // `per_process_open_files` is a *capability* and does belong here; what must
+        // not appear is the listing itself or anything out of it.
+        for absent in [
+            "open_file_list",
+            "descriptor",
+            "/dev/null",
+            "libmonitrs_core.rlib",
+        ] {
+            assert!(!json.contains(absent), "{absent} reached the export");
+        }
+    }
+
+    #[test]
+    fn a_descriptor_path_cannot_reach_a_serializer_even_when_one_is_pointed_at_it() {
+        // The second half of the same rule, and the one that survives a future export
+        // deciding to include the detail: `ProcessDetail` serializes a descriptor's
+        // path as its *state* and never as its text (§15.2, §19). The state is §4's
+        // information and must survive; the path is the user's and must not.
+        let mut detail = ProcessDetail::pending(
+            ProcessIdentity::new(31_842, 900_100),
+            SystemTime::UNIX_EPOCH,
+        );
+        detail.open_file_list = MetricState::Available(OpenFileList::listed(
+            vec![
+                OpenFileEntry {
+                    descriptor: 3,
+                    kind: OpenFileKind::File,
+                    path: MetricState::Available(
+                        "/Users/gabor/Documents/tax-return-2025.pdf".into(),
+                    ),
+                },
+                OpenFileEntry {
+                    descriptor: 4,
+                    kind: OpenFileKind::Socket,
+                    path: MetricState::Unsupported,
+                },
+                OpenFileEntry {
+                    descriptor: 5,
+                    kind: OpenFileKind::File,
+                    path: MetricState::PermissionDenied,
+                },
+            ],
+            9,
+        ));
+        let json = serde_json::to_string(&detail).expect("serializes");
+
+        assert!(!json.contains("tax-return"), "a path reached a serializer");
+        assert!(!json.contains("/Users/"), "a path reached a serializer");
+        assert!(json.contains("redacted"), "the field must still be present");
+        // §4's states are not the user's data and stay legible.
+        assert!(json.contains("permission_denied"), "{json}");
+        assert!(json.contains("unsupported"), "{json}");
+        assert!(json.contains("socket"), "the kind is not user data");
     }
 
     #[test]

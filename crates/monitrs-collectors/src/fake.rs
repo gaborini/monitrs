@@ -20,11 +20,12 @@ use std::time::SystemTime;
 
 use monitrs_core::SystemSnapshot;
 use monitrs_core::model::{
-    AncestorEntry, BatterySnapshot, CapabilitySnapshot, CapabilityState, ChargeState,
-    CollectorHealth, Confidence, ContainerIdentity, ContainerRuntime, CpuQuota, CpuSnapshot,
-    CpuUsage, DiskSnapshot, DiskTotals, EnvironmentKind, FilesystemKind, FilesystemSnapshot,
-    HostEnvironment, HostSnapshot, InterfaceAddress, InterfaceErrors, InterfaceKind, LinkState,
-    LoadSnapshot, MemoryDetail, MemorySemantics, MemorySnapshot, MetricState, NetworkSnapshot,
+    AncestorEntry, BatteryCapacity, BatterySnapshot, CapabilitySnapshot, CapabilityState,
+    ChargeState, CollectorHealth, Confidence, ContainerIdentity, ContainerRuntime, CpuQuota,
+    CpuSnapshot, CpuUsage, DiskSnapshot, DiskTotals, EnvironmentKind, FilesystemKind,
+    FilesystemSnapshot, HostEnvironment, HostSnapshot, InodeUsage, InterfaceAddress,
+    InterfaceErrors, InterfaceKind, LinkState, LoadSnapshot, MemoryDetail, MemorySemantics,
+    MemorySnapshot, MetricState, NetworkSnapshot, OpenFileEntry, OpenFileKind, OpenFileList,
     PressureSnapshot, ProcessDetail, ProcessDetailResult, ProcessIdentity, ProcessIo,
     ProcessMemory, ProcessSnapshot, ProcessState, SensorSnapshot, SwapSnapshot, TemperatureReading,
     TrafficTotals, UnavailableReason, UserIdentity,
@@ -278,13 +279,30 @@ pub struct Scenario {
     /// Whether per-process I/O is readable, or refused as it is for another
     /// user's processes without privileges (§9.2).
     pub process_io: CapabilityState,
+    /// Whether a process's open descriptors can be listed (§7.2, §8.6).
+    ///
+    /// Three states matter and a real machine can only be asked for one of them at a
+    /// time: `Available` for a process the user owns, `PermissionDenied` for one
+    /// owned by somebody else, and `Unsupported` for a platform whose collector
+    /// cannot name descriptors at all — which is every platform on the `sysinfo`
+    /// baseline. §17.3 wants a snapshot of each.
+    pub process_open_files: CapabilityState,
     /// Whether the network link speed is known. When it is not, no utilization
     /// percentage may be rendered (§7.4).
     pub link_speed_mbps: Option<u64>,
     /// Whether temperature sensors exist.
     pub temperatures: bool,
     /// Whether a battery exists.
+    ///
+    /// `false` is not a degraded scenario: it is the desktop, the server, and every
+    /// CI runner, which is why the Battery screen's absent case is snapshot-tested
+    /// from it rather than from a hand-written struct (§17.5).
     pub battery: bool,
+    /// What the battery is doing, when there is one.
+    ///
+    /// Ignored entirely when `battery` is `false`, so the two cannot describe a
+    /// machine that is charging a battery it does not have.
+    pub battery_state: ChargeState,
     /// A cgroup memory limit, to exercise the container-vs-host display (§9.2).
     ///
     /// Also what makes the scenario a container: it drives the CPU quota, the group's
@@ -347,9 +365,11 @@ impl Default for Scenario {
                 FakeProcess::new(1, 1, "launchd", "/sbin/launchd").with_cpu(Pattern::Steady(0.1)),
             ],
             process_io: CapabilityState::Available,
+            process_open_files: CapabilityState::Available,
             link_speed_mbps: None,
             temperatures: true,
             battery: true,
+            battery_state: ChargeState::Discharging,
             cgroup_limit_bytes: None,
             collect_delay: Duration::ZERO,
             fail_at: None,
@@ -376,9 +396,45 @@ impl Scenario {
     pub fn permission_denied() -> Self {
         Self {
             process_io: CapabilityState::PermissionDenied,
+            process_open_files: CapabilityState::PermissionDenied,
             cpu: Pattern::PermissionDenied,
             temperatures: false,
             battery: false,
+            ..Self::default()
+        }
+    }
+
+    /// A platform whose collector cannot name a process's descriptors at all.
+    ///
+    /// What the `sysinfo` baseline produces on its own, and the third state §7.2's
+    /// "where supported and permitted" has to be renderable in: not refused, not
+    /// slow, simply absent (§4).
+    #[must_use]
+    pub fn without_open_file_listing() -> Self {
+        Self {
+            process_open_files: CapabilityState::Unsupported,
+            ..Self::default()
+        }
+    }
+
+    /// A machine with no battery: a desktop, a server, or a CI runner.
+    ///
+    /// The case §4 exists for, and the one every automated run of this monitor hits.
+    /// Named rather than left to callers setting `battery: false` inline, so the
+    /// snapshot suites all mean the same thing by it.
+    #[must_use]
+    pub fn no_battery() -> Self {
+        Self {
+            battery: false,
+            ..Self::default()
+        }
+    }
+
+    /// A laptop on mains with the pack charging.
+    #[must_use]
+    pub fn charging() -> Self {
+        Self {
+            battery_state: ChargeState::Charging,
             ..Self::default()
         }
     }
@@ -724,22 +780,36 @@ impl FakeCollector {
         }]
     }
 
+    /// The mount table.
+    ///
+    /// Two of these mounts share `disk0s1` on purpose. It is what an APFS container
+    /// really looks like — `/` and `/System/Volumes/Data` both report the container's
+    /// full size — and it is the case the Storage screen has to mark, because a reader
+    /// who adds the two `SIZE` columns together gets twice the disk the machine has.
+    /// A fake that showed one tidy mount per device would let that bug through.
     fn filesystems(&self) -> Vec<FilesystemSnapshot> {
         let total = 494 * GIB;
         let used = 374 * GIB;
+        let shared = |mount: &str, inodes: MetricState<InodeUsage>| FilesystemSnapshot {
+            mount_point: mount.into(),
+            device: Some("disk0s1".into()),
+            fs_type: Some("fakefs".into()),
+            total_bytes: total,
+            available_bytes: MetricState::Available(total - used),
+            used_bytes: MetricState::Available(used),
+            usage: Percent::ratio(used, total)
+                .map_or(MetricState::Unsupported, MetricState::Available),
+            inodes,
+            kind: FilesystemKind::Physical,
+            read_only: false,
+        };
         vec![
-            FilesystemSnapshot {
-                mount_point: "/".into(),
-                device: Some("disk0s1".into()),
-                fs_type: Some("fakefs".into()),
-                total_bytes: total,
-                available_bytes: MetricState::Available(total - used),
-                used_bytes: MetricState::Available(used),
-                usage: Percent::ratio(used, total)
-                    .map_or(MetricState::Unsupported, MetricState::Available),
-                kind: FilesystemKind::Physical,
-                read_only: false,
-            },
+            shared("/", InodeUsage::from_counts(4_882_812, 4_398_046)),
+            // The data volume is where the files are, so its table is the fuller one.
+            shared(
+                "/System/Volumes/Data",
+                InodeUsage::from_counts(4_882_812, 341_796),
+            ),
             FilesystemSnapshot {
                 mount_point: "/dev".into(),
                 device: None,
@@ -748,6 +818,9 @@ impl FakeCollector {
                 available_bytes: MetricState::Available(0),
                 used_bytes: MetricState::Available(200 * 1024),
                 usage: MetricState::Available(Percent::FULL),
+                // A pseudo-filesystem has no inode table to run out of, and §4 wants
+                // that said rather than reported as `0 of 0`.
+                inodes: MetricState::Unsupported,
                 kind: FilesystemKind::Virtual,
                 read_only: true,
             },
@@ -822,13 +895,13 @@ impl FakeCollector {
                         TemperatureReading {
                             label: "performance".into(),
                             celsius: 62.5,
-                            high_celsius: Some(95.0),
+                            peak_celsius: Some(95.0),
                             critical_celsius: Some(105.0),
                         },
                         TemperatureReading {
                             label: "efficiency".into(),
                             celsius: 44.0,
-                            high_celsius: Some(95.0),
+                            peak_celsius: Some(95.0),
                             critical_celsius: Some(105.0),
                         },
                     ],
@@ -837,19 +910,61 @@ impl FakeCollector {
                 MetricState::Unsupported
             },
             battery: if self.scenario.battery {
-                counter_state(
-                    sequence,
-                    BatterySnapshot {
-                        charge: Percent::new(82.0).unwrap_or(Percent::ZERO),
-                        state: ChargeState::Discharging,
-                        time_remaining: MetricState::Available(Duration::from_secs(4 * 3_600)),
-                        cycle_count: MetricState::Available(214),
-                        health: MetricState::Available(Percent::new(94.0).unwrap_or(Percent::FULL)),
-                    },
-                )
+                counter_state(sequence, self.battery())
             } else {
+                // §4: a machine with no battery reports the fact, not a flat pack.
                 MetricState::Unsupported
             },
+        }
+    }
+
+    /// The fake battery: a four-year-old laptop pack, worn to 91.6% of design.
+    ///
+    /// The figures are chosen so every field on the Battery screen is exercised and
+    /// none of them can be confused with another: 82% charge against 91.6% health
+    /// against 214 cycles reads wrong immediately if two of them are swapped.
+    ///
+    /// A time remaining only in the two states where the platform has a direction to
+    /// estimate toward. §4 forbids deriving one, so a full pack on mains has none —
+    /// and the screen has to say that rather than print the last figure it saw.
+    fn battery(&self) -> BatterySnapshot {
+        let state = self.scenario.battery_state;
+        BatterySnapshot {
+            charge: Percent::new(if matches!(state, ChargeState::Full) {
+                100.0
+            } else {
+                82.0
+            })
+            .unwrap_or(Percent::ZERO),
+            state,
+            time_remaining: match state {
+                ChargeState::Discharging => MetricState::Available(Duration::from_secs(4 * 3_600)),
+                ChargeState::Charging => MetricState::Available(Duration::from_secs(2_940)),
+                ChargeState::Full | ChargeState::NotCharging | ChargeState::Unknown => {
+                    MetricState::Unsupported
+                }
+            },
+            cycle_count: MetricState::Available(214),
+            capacity: MetricState::Available(BatteryCapacity {
+                design_microwatt_hours: 52_600_000,
+                full_microwatt_hours: 48_200_000,
+            }),
+            temperature_celsius: MetricState::Available(
+                if matches!(state, ChargeState::Charging) {
+                    // A charging pack runs warmer, and the screen is worth reading on a
+                    // scenario where the two states do not look identical.
+                    36.8
+                } else {
+                    31.4
+                },
+            ),
+            power_watts: MetricState::Available(match state {
+                ChargeState::Discharging => 12.4,
+                ChargeState::Charging => 44.6,
+                // A full pack on mains draws nothing, which is a measured zero
+                // rather than an absent reading.
+                ChargeState::Full | ChargeState::NotCharging | ChargeState::Unknown => 0.0,
+            }),
         }
     }
 
@@ -862,7 +977,7 @@ impl FakeCollector {
         CapabilitySnapshot {
             per_process_io: self.scenario.process_io,
             per_process_threads: CapabilityState::Available,
-            per_process_open_files: CapabilityState::Available,
+            per_process_open_files: self.scenario.process_open_files,
             per_process_sockets: CapabilityState::Available,
             per_process_working_directory: CapabilityState::Available,
             per_core_cpu: CapabilityState::Available,
@@ -1034,8 +1149,10 @@ impl SnapshotSource for FakeCollector {
         let mut detail = ProcessDetail::pending(identity, SystemTime::UNIX_EPOCH);
         detail.working_directory = MetricState::Available("/Users/dev/pgit/monitrs".into());
         detail.root = MetricState::Available("/".into());
-        detail.open_files = MetricState::Available(42);
-        detail.sockets = MetricState::Available(3);
+        let descriptors = fake_descriptors(self.scenario.process_open_files);
+        detail.open_files = descriptors.count;
+        detail.sockets = descriptors.sockets;
+        detail.open_file_list = descriptors.list;
         detail.descendants = MetricState::Available(u32::try_from(children.len()).unwrap_or(0));
         detail.children = MetricState::Available(children);
         detail.ancestry =
@@ -1044,6 +1161,84 @@ impl SnapshotSource for FakeCollector {
         detail.cgroup = MetricState::Unsupported;
         detail.container = MetricState::Unsupported;
         ProcessDetailResult::Loaded(Box::new(detail))
+    }
+}
+
+/// Everything one scenario says about a process's descriptors.
+#[derive(Clone, Debug)]
+struct FakeDescriptors {
+    count: MetricState<u32>,
+    sockets: MetricState<u32>,
+    list: MetricState<OpenFileList>,
+}
+
+/// The descriptors a scenario produces for its selected process (§7.2).
+///
+/// The three states are kept consistent with each other, because a real collector
+/// cannot produce an arbitrary mixture:
+///
+/// * `Available` — everything readable. The list is deliberately not a tidy row of
+///   files: it holds a pipe and a socket, whose paths are `Unsupported` because they
+///   have none; a descriptor the OS refused, which is `PermissionDenied`; and a total
+///   larger than the number of entries, so the "did not list" row is exercised.
+/// * `PermissionDenied` — another user's process. The count is refused along with the
+///   list, because the same read produces both.
+/// * `Unsupported` — a platform that can *count* descriptors but not name them, which
+///   is the case [`monitrs_core::model::ProcessDetail::open_file_list`] exists to
+///   express separately from the count.
+fn fake_descriptors(capability: CapabilityState) -> FakeDescriptors {
+    let list = match capability {
+        CapabilityState::Available => MetricState::Available(OpenFileList::listed(
+            vec![
+                OpenFileEntry {
+                    descriptor: 0,
+                    kind: OpenFileKind::File,
+                    path: MetricState::Available("/dev/null".into()),
+                },
+                OpenFileEntry {
+                    descriptor: 1,
+                    kind: OpenFileKind::Pipe,
+                    path: MetricState::Unsupported,
+                },
+                OpenFileEntry {
+                    descriptor: 4,
+                    kind: OpenFileKind::File,
+                    path: MetricState::Available(
+                        "/Users/dev/pgit/monitrs/target/debug/deps/libmonitrs_core.rlib".into(),
+                    ),
+                },
+                OpenFileEntry {
+                    descriptor: 5,
+                    kind: OpenFileKind::Socket,
+                    path: MetricState::Unsupported,
+                },
+                OpenFileEntry {
+                    descriptor: 9,
+                    kind: OpenFileKind::File,
+                    path: MetricState::PermissionDenied,
+                },
+                OpenFileEntry {
+                    descriptor: 12,
+                    kind: OpenFileKind::EventQueue,
+                    path: MetricState::Unsupported,
+                },
+            ],
+            42,
+        )),
+        CapabilityState::PermissionDenied => MetricState::PermissionDenied,
+        CapabilityState::Unsupported => MetricState::Unsupported,
+        // A capability nobody has probed cannot have produced a listing either.
+        CapabilityState::Unknown => MetricState::WarmingUp,
+    };
+    let (count, sockets) = if capability == CapabilityState::PermissionDenied {
+        (MetricState::PermissionDenied, MetricState::PermissionDenied)
+    } else {
+        (MetricState::Available(42), MetricState::Available(3))
+    };
+    FakeDescriptors {
+        count,
+        sockets,
+        list,
     }
 }
 

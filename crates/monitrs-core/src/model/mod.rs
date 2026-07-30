@@ -40,9 +40,11 @@ pub use pressure::{
     PressureId, PressureSignal, PressureSnapshot, PressureState, PsiResource, PsiSnapshot,
 };
 pub use process::{
-    AncestorEntry, ProcessDetail, ProcessDetailResult, ProcessIo, ProcessMemory, ProcessSnapshot,
-    ProcessState,
+    AncestorEntry, OpenFileEntry, OpenFileKind, OpenFileList, ProcessDetail, ProcessDetailResult,
+    ProcessIo, ProcessMemory, ProcessSnapshot, ProcessState,
 };
-pub use sensors::{BatterySnapshot, ChargeState, SensorSnapshot, TemperatureReading};
+pub use sensors::{
+    BatteryCapacity, BatterySnapshot, ChargeState, SensorSnapshot, TemperatureReading,
+};
 pub use snapshot::SystemSnapshot;
-pub use storage::{DiskSnapshot, DiskTotals, FilesystemKind, FilesystemSnapshot};
+pub use storage::{DiskSnapshot, DiskTotals, FilesystemKind, FilesystemSnapshot, InodeUsage};

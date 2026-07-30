@@ -39,7 +39,7 @@
 
 use core::time::Duration;
 
-use monitrs_core::model::{ProcessIdentity, ProcessState};
+use monitrs_core::model::{MetricState, OpenFileKind, ProcessIdentity, ProcessState};
 
 use crate::linux::parse::{
     ParseFailure, ParseResult, fields, lines, parse_i64, parse_u64, split_key_value,
@@ -424,10 +424,135 @@ pub fn join_cmdline(bytes: &[u8]) -> Box<str> {
     parse_cmdline(bytes).join(" ").into()
 }
 
+/// The `anon_inode:[…]` bodies that name a kernel event queue.
+///
+/// Everything else behind an `anon_inode` — `perf_event`, `bpf-map`, `io_uring`,
+/// `userfaultfd` — is deliberately absent: naming a descriptor is only useful if
+/// the name means something to the reader, and inventing a category for each of
+/// them would be guessing. Those become [`OpenFileKind::Unknown`], which is honest.
+const EVENT_QUEUE_INODES: [&str; 5] = ["eventpoll", "eventfd", "timerfd", "signalfd", "inotify"];
+
+/// What a `/proc/<pid>/fd/<n>` symlink target says about the descriptor (§7.2).
+///
+/// The target is not always a path. The kernel writes `socket:[12345]` for a
+/// socket, `pipe:[678]` for a pipe, and `anon_inode:[eventpoll]` for an `epoll`
+/// instance, and none of those is something a user can open. Returning the kind
+/// beside the path is what lets the overlay say *socket* instead of leaving a blank
+/// cell that reads as a failed read (§4).
+///
+/// A path the kernel annotates with ` (deleted)` is returned **verbatim**, because
+/// stripping the annotation would present a path that no longer resolves as one
+/// that does — and the fact that a process is holding an unlinked file open is
+/// usually the reason someone opened this panel.
+///
+/// Split out as a string function so the whole mapping is tested off Linux (§17.2);
+/// the `readlink` itself is [`crate::linux::read::ProcRoot::list_open_files`].
+#[must_use]
+pub fn describe_descriptor(target: &str) -> (OpenFileKind, MetricState<Box<str>>) {
+    if target.starts_with('/') {
+        // Anything with a leading slash names a file, directory, or device, which
+        // includes the `/dev/shm/…` files glibc uses for POSIX shared memory and
+        // semaphores. They are not re-classified: on Linux they really are files on
+        // a tmpfs, and `OpenFileKind::has_path` would become a lie if a kind that
+        // reports no path suddenly had one.
+        return (OpenFileKind::File, MetricState::Available(target.into()));
+    }
+    // Every remaining shape is a kernel object with no path at all, so its path is
+    // `Unsupported` — permanently, on every platform — rather than a failed read.
+    let kind = if let Some(inode) = bracketed(target, "anon_inode:") {
+        if EVENT_QUEUE_INODES.contains(&inode) {
+            OpenFileKind::EventQueue
+        } else {
+            OpenFileKind::Unknown
+        }
+    } else if bracketed(target, "socket:").is_some() {
+        OpenFileKind::Socket
+    } else if bracketed(target, "pipe:").is_some() {
+        OpenFileKind::Pipe
+    } else {
+        OpenFileKind::Unknown
+    };
+    (kind, MetricState::Unsupported)
+}
+
+/// The `x` in `prefix[x]`, when `target` has exactly that shape.
+fn bracketed<'a>(target: &'a str, prefix: &str) -> Option<&'a str> {
+    target
+        .strip_prefix(prefix)?
+        .strip_prefix('[')?
+        .strip_suffix(']')
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::linux::fixtures;
+
+    #[test]
+    fn a_descriptor_pointing_at_a_file_reports_its_path() {
+        let (kind, path) = describe_descriptor("/var/log/syslog");
+        assert_eq!(kind, OpenFileKind::File);
+        assert_eq!(path.fresh().map(|path| &**path), Some("/var/log/syslog"));
+    }
+
+    #[test]
+    fn a_socket_or_pipe_reports_a_kind_and_no_path_rather_than_an_empty_one() {
+        // §4: the descriptor is not unreadable, it simply has no path. Saying
+        // `permission denied` about a socket would be a false accusation, and an
+        // empty cell would read as a collection bug.
+        for (target, expected) in [
+            ("socket:[41231]", OpenFileKind::Socket),
+            ("pipe:[9982]", OpenFileKind::Pipe),
+            ("anon_inode:[eventpoll]", OpenFileKind::EventQueue),
+            ("anon_inode:[eventfd]", OpenFileKind::EventQueue),
+            ("anon_inode:[timerfd]", OpenFileKind::EventQueue),
+            ("anon_inode:[signalfd]", OpenFileKind::EventQueue),
+            ("anon_inode:[inotify]", OpenFileKind::EventQueue),
+        ] {
+            let (kind, path) = describe_descriptor(target);
+            assert_eq!(kind, expected, "{target}");
+            assert_eq!(path, MetricState::Unsupported, "{target}");
+            assert_eq!(path.placeholder(), Some("n/a"));
+        }
+    }
+
+    #[test]
+    fn an_unmodelled_target_is_unknown_rather_than_guessed_at() {
+        for target in [
+            "anon_inode:[perf_event]",
+            "anon_inode:[io_uring]",
+            "memfd:cache (deleted)",
+            "socket:not-bracketed",
+            "",
+        ] {
+            let (kind, path) = describe_descriptor(target);
+            assert_eq!(kind, OpenFileKind::Unknown, "{target}");
+            assert_eq!(path, MetricState::Unsupported, "{target}");
+        }
+    }
+
+    #[test]
+    fn an_unlinked_file_keeps_the_kernels_own_deleted_annotation() {
+        // A process holding a deleted file open is usually the reason someone opened
+        // this panel; hiding the annotation would present a path that does not
+        // resolve as one that does.
+        let (kind, path) = describe_descriptor("/tmp/build-cache.db (deleted)");
+        assert_eq!(kind, OpenFileKind::File);
+        assert_eq!(
+            path.fresh().map(|path| &**path),
+            Some("/tmp/build-cache.db (deleted)")
+        );
+    }
+
+    #[test]
+    fn a_shared_memory_file_stays_a_file_because_on_linux_that_is_what_it_is() {
+        // `OpenFileKind::has_path` is false for `SharedMemory`, so classifying a
+        // `/dev/shm` path as shared memory would make that method a lie.
+        let (kind, path) = describe_descriptor("/dev/shm/sem.mylock");
+        assert_eq!(kind, OpenFileKind::File);
+        assert!(kind.has_path());
+        assert!(path.fresh().is_some());
+    }
 
     #[test]
     fn a_name_containing_parentheses_and_spaces_does_not_shift_any_field() {

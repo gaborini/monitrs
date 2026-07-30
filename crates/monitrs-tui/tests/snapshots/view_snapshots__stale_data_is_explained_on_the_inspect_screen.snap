@@ -39,4 +39,4 @@ expression: text
 ||  memory       2.6G rss, 16G virt, 8.1% of total                     |  history      24 samples of 300, 179K                              ||
 ||  disk         21M/s read, 42M/s write (60G / 120G total)            |                                                                    ||
 |+---------------------------------------------------------------------+--------------------------------------------------------------------+|
-| 1 Overview  2 Processes  3 CPU  4 Storage  5 Network [6 Inspect]                                                           / filter  ? help|
+| 1 Overview  2 Processes  3 CPU  4 Storage  5 Network [6 Inspect] 7 Battery                                                 / filter  ? help|

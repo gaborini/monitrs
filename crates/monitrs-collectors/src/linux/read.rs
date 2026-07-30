@@ -15,7 +15,8 @@
 //!   into plausible nonsense.
 //! * **No recursive walks.** §9.2 forbids scanning unbounded `/proc` subtrees.
 //!   [`ProcRoot::list_pids`] reads one directory level and nothing else, and
-//!   [`ProcRoot::count_open_files`] counts one level of `fd/` with a cap.
+//!   [`ProcRoot::count_open_files`] and [`ProcRoot::list_open_files`] read one level
+//!   of `fd/` with a cap.
 //! * **A failed read is a metric state, never an error return.** `EACCES` on
 //!   `/proc/<pid>/io` is [`MetricState::PermissionDenied`]; `ENOENT` on
 //!   `/proc/<pid>/stat` is [`UnavailableReason::ProcessExited`]. Neither is a
@@ -40,8 +41,11 @@ use std::fs::File;
 use std::io::Read;
 use std::path::{Path, PathBuf};
 
-use monitrs_core::model::{CollectorHealth, MetricState, UnavailableReason};
+use monitrs_core::model::{
+    CollectorHealth, MetricState, OpenFileEntry, OpenFileKind, OpenFileList, UnavailableReason,
+};
 
+use crate::linux::process::describe_descriptor;
 use crate::tier::DueTiers;
 
 /// Cap for whole-system `/proc` files.
@@ -77,6 +81,14 @@ pub const MAX_ENRICHED_PROCESSES: usize = 16_384;
 /// [`ProcRoot::count_open_files`] returns that fact alongside the number instead of
 /// leaving the caller to guess.
 pub const MAX_COUNTED_FDS: usize = 65_536;
+
+/// The largest number of `/sys/class/power_supply` entries one pass will read.
+///
+/// Each entry costs sixteen small attribute reads, and the directory is not only
+/// batteries: a docking station full of bluetooth peripherals adds one entry each.
+/// Sixteen is far above the two batteries and one charger a real laptop has, so the
+/// cap bounds the medium tier's work without reaching a machine anyone owns (§16.1).
+pub const MAX_POWER_SUPPLIES: usize = 16;
 
 /// Why a read produced no bytes.
 ///
@@ -288,7 +300,26 @@ impl ProcRoot {
     /// One directory level, like [`ProcRoot::list_pids`]. Interface names are stable
     /// enough to sort, and sorting keeps the Network screen from reordering itself.
     pub fn list_interfaces(&self) -> Result<Vec<Box<str>>, ReadFailure> {
-        let entries = std::fs::read_dir(self.sys_dir.join("class/net"))
+        self.list_class("class/net", usize::MAX)
+    }
+
+    /// Lists the power supplies in `/sys/class/power_supply`.
+    ///
+    /// [`ReadFailure::Missing`] on a kernel built without `CONFIG_POWER_SUPPLY` and on
+    /// most virtual machines, which is the honest answer for a host with no battery
+    /// rather than an empty list that could be confused with a machine whose battery
+    /// vanished. Capped at [`MAX_POWER_SUPPLIES`].
+    pub fn list_power_supplies(&self) -> Result<Vec<Box<str>>, ReadFailure> {
+        self.list_class("class/power_supply", MAX_POWER_SUPPLIES)
+    }
+
+    /// One directory level of a `/sys/class` subdirectory, sorted and capped.
+    ///
+    /// Sorting matters for the same reason it does in [`ProcRoot::list_pids`]: the
+    /// order a screen renders in must not depend on directory iteration order. The cap
+    /// applies *after* sorting, so which entries survive it is deterministic too.
+    fn list_class(&self, relative: &str, cap: usize) -> Result<Vec<Box<str>>, ReadFailure> {
+        let entries = std::fs::read_dir(self.sys_dir.join(relative))
             .map_err(|error| ReadFailure::classify(&error))?;
         let mut names: Vec<Box<str>> = entries
             .filter_map(|entry| {
@@ -299,6 +330,7 @@ impl ProcRoot {
             })
             .collect();
         names.sort_unstable();
+        names.truncate(cap);
         Ok(names)
     }
 
@@ -324,6 +356,76 @@ impl ProcRoot {
             count += 1;
         }
         Ok((u32::try_from(count).unwrap_or(u32::MAX), capped))
+    }
+
+    /// Lists one process's open descriptors with their paths (§7.2, §8.6).
+    ///
+    /// On-demand only, and for a stronger reason than
+    /// [`ProcRoot::count_open_files`]: counting is one directory read, while naming
+    /// is one `readlink` per descriptor. That is why only the first
+    /// [`OpenFileList::MAX_LISTED`] descriptors are named and the rest are counted —
+    /// [`OpenFileList`] carries how many were left out so the panel can say so
+    /// instead of presenting a prefix as the whole table (§4).
+    ///
+    /// The descriptors are named in *numeric* order rather than in directory order.
+    /// `/proc/<pid>/fd` comes back unsorted, so taking the first 256 entries the
+    /// kernel happens to return would list an arbitrary subset and a different one
+    /// on each read; sorting first means the cap keeps the low descriptors — the
+    /// standard streams and the files opened earliest — and keeps the panel stable
+    /// between reads.
+    pub fn list_open_files(&self, pid: u32) -> Result<OpenFileList, ReadFailure> {
+        let dir = self.proc_dir.join(pid.to_string()).join("fd");
+        let entries = std::fs::read_dir(&dir).map_err(|error| ReadFailure::classify(&error))?;
+        let mut descriptors: Vec<i32> = Vec::new();
+        let mut total = 0usize;
+        for entry in entries {
+            // A descriptor closed while we were listing. Not an error (§14.1).
+            let Ok(entry) = entry else { continue };
+            let name = entry.file_name();
+            let Some(descriptor) = name.to_str().and_then(|name| name.parse::<i32>().ok()) else {
+                continue;
+            };
+            total = total.saturating_add(1);
+            if descriptors.len() < MAX_COUNTED_FDS {
+                descriptors.push(descriptor);
+            }
+        }
+        descriptors.sort_unstable();
+        descriptors.truncate(OpenFileList::MAX_LISTED);
+        let named = descriptors
+            .into_iter()
+            .map(|descriptor| read_one_descriptor(&dir, descriptor))
+            .collect();
+        Ok(OpenFileList::listed(named, total))
+    }
+}
+
+/// One descriptor of `dir`, read through `readlink`.
+///
+/// A failure here is per-descriptor and never aborts the listing: the common case is
+/// a descriptor closed between the directory read and this call, which §14.1 treats
+/// as routine.
+fn read_one_descriptor(dir: &Path, descriptor: i32) -> OpenFileEntry {
+    match std::fs::read_link(dir.join(descriptor.to_string())) {
+        Ok(target) => {
+            // `to_string_lossy` rather than a failure on invalid UTF-8: a path with an
+            // undecodable byte in it is still worth showing, and the replacement
+            // character says where it was.
+            let (kind, path) = describe_descriptor(&target.to_string_lossy());
+            OpenFileEntry {
+                descriptor,
+                kind,
+                path,
+            }
+        }
+        Err(error) => OpenFileEntry {
+            descriptor,
+            // The descriptor exists — it was in the directory — but nothing about it
+            // could be read, so its kind is unknown rather than assumed to be a file,
+            // and its path is the failure's own state (§4).
+            kind: OpenFileKind::Unknown,
+            path: ReadFailure::classify(&error).process_state(),
+        },
     }
 }
 
@@ -477,6 +579,50 @@ pub struct InterfaceSources {
     pub speed: SourceBytes,
 }
 
+/// One `/sys/class/power_supply/<name>` entry's attributes.
+///
+/// Every field is optional on some driver, which is why they are all
+/// [`SourceBytes`] and why nothing here decides what the absence means: that is
+/// [`crate::linux::power`]'s job, and it needs to distinguish "the file is not
+/// there" from "the read was refused".
+#[derive(Clone, Debug)]
+pub struct PowerSupplySources {
+    /// Directory name, e.g. `BAT0`.
+    pub name: Box<str>,
+    /// `type`: `Battery`, `Mains`, `UPS`.
+    pub kind: SourceBytes,
+    /// `scope`: `System` or `Device`. Absent on most drivers.
+    pub scope: SourceBytes,
+    /// `status`.
+    pub status: SourceBytes,
+    /// `capacity`, the charge percentage.
+    pub capacity: SourceBytes,
+    /// `cycle_count`.
+    pub cycle_count: SourceBytes,
+    /// `energy_full_design`, in µWh.
+    pub energy_full_design: SourceBytes,
+    /// `energy_full`, in µWh.
+    pub energy_full: SourceBytes,
+    /// `charge_full_design`, in µAh.
+    pub charge_full_design: SourceBytes,
+    /// `charge_full`, in µAh.
+    pub charge_full: SourceBytes,
+    /// `voltage_min_design`, in µV.
+    pub voltage_min_design: SourceBytes,
+    /// `power_now`, in µW.
+    pub power_now: SourceBytes,
+    /// `current_now`, in µA.
+    pub current_now: SourceBytes,
+    /// `voltage_now`, in µV.
+    pub voltage_now: SourceBytes,
+    /// `temp`, in tenths of a degree Celsius.
+    pub temp: SourceBytes,
+    /// `time_to_empty_now`, in seconds.
+    pub time_to_empty: SourceBytes,
+    /// `time_to_full_now`, in seconds.
+    pub time_to_full: SourceBytes,
+}
+
 /// The cgroup v2 files that carry this container's limits.
 #[derive(Clone, Debug, Default)]
 pub struct CgroupSources {
@@ -543,6 +689,12 @@ pub struct LinuxSources {
     pub pressure_io: Option<SourceBytes>,
     /// Per-interface `/sys` attributes, medium tier.
     pub interfaces: Option<Vec<InterfaceSources>>,
+    /// Per-power-supply `/sys` attributes, medium tier.
+    ///
+    /// `Some(empty)` and `None` are different answers: the first is a kernel that
+    /// exports the class and lists nothing under it, the second is a tick on which
+    /// the medium tier was not due.
+    pub power_supplies: Option<Vec<PowerSupplySources>>,
     /// cgroup limits.
     pub cgroup: CgroupSources,
     /// Container/VM evidence, slow tier.
@@ -612,6 +764,16 @@ pub fn collect_sources(root: &ProcRoot, request: &SourceRequest) -> LinuxSources
                 })
                 .collect(),
         );
+        // §8.6 puts the battery on the medium tier. A pack's charge moves in whole
+        // percentage points over minutes, so a one-second read would be sixteen
+        // attribute opens per tick to watch a number that does not change (§16.1).
+        sources.power_supplies = Some(
+            root.list_power_supplies()
+                .unwrap_or_default()
+                .into_iter()
+                .map(|name| power_supply_sources(root, name))
+                .collect(),
+        );
     }
 
     if request.tiers.contains(Tier::Slow) {
@@ -628,6 +790,35 @@ pub fn collect_sources(root: &ProcRoot, request: &SourceRequest) -> LinuxSources
     }
 
     sources
+}
+
+/// Reads one power supply's attributes.
+///
+/// Every attribute is read unconditionally rather than probed first: a `stat` to
+/// decide whether to `open` costs the same syscall it saves, and the absent files
+/// return [`ReadFailure::Missing`], which is the information the parser wants.
+fn power_supply_sources(root: &ProcRoot, name: Box<str>) -> PowerSupplySources {
+    let attribute =
+        |file: &str| root.read_sys(&format!("class/power_supply/{name}/{file}"), ATTRIBUTE_CAP);
+    PowerSupplySources {
+        kind: attribute("type"),
+        scope: attribute("scope"),
+        status: attribute("status"),
+        capacity: attribute("capacity"),
+        cycle_count: attribute("cycle_count"),
+        energy_full_design: attribute("energy_full_design"),
+        energy_full: attribute("energy_full"),
+        charge_full_design: attribute("charge_full_design"),
+        charge_full: attribute("charge_full"),
+        voltage_min_design: attribute("voltage_min_design"),
+        power_now: attribute("power_now"),
+        current_now: attribute("current_now"),
+        voltage_now: attribute("voltage_now"),
+        temp: attribute("temp"),
+        time_to_empty: attribute("time_to_empty_now"),
+        time_to_full: attribute("time_to_full_now"),
+        name,
+    }
 }
 
 #[cfg(test)]
@@ -817,12 +1008,56 @@ mod tests {
         assert_eq!(root.list_pids(16).err(), Some(ReadFailure::Missing));
         assert_eq!(root.list_interfaces().err(), Some(ReadFailure::Missing));
         assert_eq!(root.count_open_files(1).err(), Some(ReadFailure::Missing));
+        // A kernel with no `CONFIG_POWER_SUPPLY`, and every VM: a typed absence
+        // rather than an empty list, so the caller can tell the two apart.
+        assert_eq!(root.list_power_supplies().err(), Some(ReadFailure::Missing));
     }
 
     #[test]
     fn interfaces_are_listed_from_sys_class_net() {
         let names = tree().list_interfaces().expect("readable");
         assert_eq!(names, vec![Box::<str>::from("eth0"), Box::from("lo")]);
+    }
+
+    #[test]
+    fn every_power_supply_is_listed_including_the_ones_that_are_not_batteries() {
+        // The reading layer lists; deciding which entry is the system battery is
+        // `power::classify`'s job and needs the attributes this read fetches.
+        let names = tree().list_power_supplies().expect("readable");
+        assert_eq!(
+            names,
+            vec![
+                Box::<str>::from("AC"),
+                Box::from("BAT0"),
+                Box::from("hid-e4-battery")
+            ]
+        );
+    }
+
+    #[test]
+    fn a_power_supply_read_reports_each_absent_attribute_separately() {
+        // The fixture battery is an energy-reporting ACPI pack: it has no
+        // `charge_full` and no `time_to_empty_now`, and those absences are what
+        // make the corresponding metrics unsupported rather than zero (§4).
+        let sources = collect_sources(&tree(), &SourceRequest::all_tiers(Vec::new()));
+        let supplies = sources
+            .power_supplies
+            .as_ref()
+            .expect("medium tier was due");
+        let battery = supplies
+            .iter()
+            .find(|supply| &*supply.name == "BAT0")
+            .expect("the fixture battery");
+        assert!(battery.capacity.is_ok());
+        assert!(battery.energy_full.is_ok());
+        assert_eq!(
+            battery.charge_full.as_ref().err(),
+            Some(&ReadFailure::Missing)
+        );
+        assert_eq!(
+            battery.time_to_empty.as_ref().err(),
+            Some(&ReadFailure::Missing)
+        );
     }
 
     #[test]
@@ -846,6 +1081,7 @@ mod tests {
         assert_eq!(sources.processes.len(), 4);
         assert!(!sources.processes_truncated);
         assert_eq!(sources.interfaces.as_ref().map(Vec::len), Some(2));
+        assert_eq!(sources.power_supplies.as_ref().map(Vec::len), Some(3));
         assert!(sources.environment.is_some());
         assert!(
             sources
@@ -870,6 +1106,9 @@ mod tests {
         let nothing = collect_sources(&root, &request);
         assert!(nothing.stat.is_none());
         assert!(nothing.processes.is_empty());
+        // Not read this tick, which the enrichment must not confuse with "the
+        // machine stopped having a battery".
+        assert!(nothing.power_supplies.is_none());
 
         let mut fast_only = SourceRequest::all_tiers(vec![1]);
         fast_only.tiers = DueTiers::default();
@@ -915,5 +1154,138 @@ mod tests {
         // The fixture tree has no `fd` directories: they are symlink farms that a
         // checked-in fixture cannot represent portably.
         assert_eq!(tree().count_open_files(1).err(), Some(ReadFailure::Missing));
+        assert_eq!(
+            tree().list_open_files(1).err(),
+            Some(ReadFailure::Missing),
+            "an absent fd directory is not an empty descriptor table"
+        );
+    }
+
+    /// A scratch `/proc/<pid>/fd` symlink farm, built at run time.
+    ///
+    /// The checked-in fixture tree cannot hold one: the entries are symlinks whose
+    /// targets are frequently not paths at all — a git checkout has no way to store a
+    /// link to `socket:[456]` — and the kernel is the only thing that normally
+    /// creates them. Building the farm here is what lets the reader itself be tested
+    /// on the macOS host as well as on Linux (§17.2), because `readlink` returns a
+    /// dangling link's target text on both.
+    struct FdFarm {
+        base: PathBuf,
+    }
+
+    impl FdFarm {
+        fn new(label: &str, pid: u32, targets: &[(i32, String)]) -> Self {
+            let base = std::env::temp_dir()
+                .join(format!("monitrs-fd-{label}-{}-{pid}", std::process::id()));
+            // A previous run that was killed before its `Drop` ran must not make this
+            // one fail.
+            let _ = std::fs::remove_dir_all(&base);
+            let fd_dir = base.join("proc").join(pid.to_string()).join("fd");
+            std::fs::create_dir_all(&fd_dir).expect("a writable temporary directory");
+            for (descriptor, target) in targets {
+                std::os::unix::fs::symlink(target, fd_dir.join(descriptor.to_string()))
+                    .expect("a symlink in a directory we just created");
+            }
+            Self { base }
+        }
+
+        fn root(&self) -> ProcRoot {
+            ProcRoot::new(self.base.join("proc"), self.base.join("sys"))
+        }
+    }
+
+    impl Drop for FdFarm {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_dir_all(&self.base);
+        }
+    }
+
+    #[test]
+    fn a_descriptor_listing_names_files_and_labels_the_things_that_have_no_name() {
+        // §7.2's list, and §4's rule about what a socket's path is: not zero, not an
+        // empty string, and not `permission denied` either.
+        let targets = vec![
+            (0, "/dev/null".to_owned()),
+            (1, "pipe:[9982]".to_owned()),
+            (2, "socket:[41231]".to_owned()),
+            (7, "/var/log/build.log".to_owned()),
+        ];
+        let farm = FdFarm::new("mixed", 4_242, &targets);
+        let files = farm.root().list_open_files(4_242).expect("readable");
+
+        assert_eq!(files.count(), 4);
+        assert!(files.is_complete());
+        assert_eq!(files.not_listed(), 0);
+
+        let listed: Vec<(i32, OpenFileKind, Option<String>)> = files
+            .entries()
+            .iter()
+            .map(|entry| {
+                (
+                    entry.descriptor,
+                    entry.kind,
+                    entry.path.fresh().map(ToString::to_string),
+                )
+            })
+            .collect();
+        assert_eq!(
+            listed,
+            vec![
+                (0, OpenFileKind::File, Some("/dev/null".to_owned())),
+                (1, OpenFileKind::Pipe, None),
+                (2, OpenFileKind::Socket, None),
+                (7, OpenFileKind::File, Some("/var/log/build.log".to_owned())),
+            ]
+        );
+        for entry in files.entries() {
+            if entry.path.fresh().is_none() {
+                assert_eq!(entry.path, MetricState::Unsupported);
+            }
+        }
+    }
+
+    #[test]
+    fn a_descriptor_table_larger_than_the_cap_reports_how_many_it_did_not_name() {
+        // §16.1 on the on-demand tier: the cap bounds the syscalls, and the count of
+        // what it left out is what keeps the panel honest about it.
+        let overshoot = 5;
+        let targets: Vec<(i32, String)> = (0..OpenFileList::MAX_LISTED + overshoot)
+            .map(|index| {
+                let descriptor = i32::try_from(index).expect("small");
+                (descriptor, format!("/tmp/file-{descriptor}"))
+            })
+            .collect();
+        let farm = FdFarm::new("capped", 4_243, &targets);
+        let files = farm.root().list_open_files(4_243).expect("readable");
+
+        assert_eq!(files.count(), OpenFileList::MAX_LISTED);
+        assert_eq!(files.not_listed(), u32::try_from(overshoot).expect("small"));
+        assert!(!files.is_complete());
+        assert_eq!(
+            files.total(),
+            u64::try_from(OpenFileList::MAX_LISTED + overshoot).expect("small")
+        );
+        // The cap keeps the *lowest* descriptors, not whatever order the directory
+        // came back in, so two reads of the same process list the same descriptors.
+        let numbers: Vec<i32> = files.entries().iter().map(|e| e.descriptor).collect();
+        let mut sorted = numbers.clone();
+        sorted.sort_unstable();
+        assert_eq!(numbers, sorted, "the listing must be in descriptor order");
+        assert_eq!(numbers.first().copied(), Some(0));
+        assert_eq!(
+            numbers.last().copied(),
+            Some(i32::try_from(OpenFileList::MAX_LISTED - 1).expect("small"))
+        );
+    }
+
+    #[test]
+    fn a_process_holding_nothing_is_an_empty_listing_and_not_a_failure() {
+        // A real state: a zombie's descriptor table is empty, and that is a
+        // measurement rather than a refusal.
+        let farm = FdFarm::new("empty", 4_244, &[]);
+        let files = farm.root().list_open_files(4_244).expect("readable");
+        assert_eq!(files.count(), 0);
+        assert!(files.is_complete());
+        assert_eq!(files.total(), 0);
     }
 }

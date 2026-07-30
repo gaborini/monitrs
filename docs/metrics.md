@@ -85,6 +85,38 @@ one. The comparable form is load per logical CPU: `11.4` on 8 CPUs is `1.43` per
 CPU, which is what the load pressure rule uses. On a machine whose CPU count is
 unknown, load-per-CPU is unavailable rather than assumed.
 
+## Open files and sockets
+
+Three separate figures, all on the on-demand tier and all shown in the process
+detail overlay (`Enter` on a process):
+
+* **`OPEN FILES`** — how many descriptors the process holds. Counted by enumerating
+  the descriptor table, not read from a field that reports the table's *size*:
+  macOS' `pbi_nfiles` looks exactly like this number and is not one, because it does
+  not move when files open and close.
+* **`SOCKETS`** — how many of those descriptors are sockets. **macOS only.** One
+  `PROC_PIDLISTFDS` returns a type for every descriptor, so the count is free.
+  `/proc/<pid>/fd` gives no such thing: a descriptor's type is only visible once its
+  link target has been read, one syscall at a time, so a Linux socket count taken
+  from the capped walk below would be a floor pretending to be a total. On Linux the
+  count is `n/a`, and the sockets that appear in the list are still labelled as
+  sockets.
+* **`DESCRIPTORS`** — how much of the list is on screen, as `12 of 12 listed` or
+  `256 of 4096 listed, 3840 not listed`. The list stops at 256 descriptors, because
+  naming one costs a syscall on both platforms. The row is always present, so a
+  refused table reads `permission denied` and a platform that cannot list descriptors
+  reads `n/a` — never an empty list, which would say the process holds nothing open.
+
+Each listed row is `FD <n> <kind> PATH <path>`. The kind is there because not every
+descriptor has a path: a socket, a pipe, and an event queue have none at all, so
+their path is `n/a` and the kind is what says why rather than leaving a blank that
+reads as a failed read. A path the OS refused is `permission denied`. A path is never
+an empty string.
+
+Paths are user data. They are shown on screen and go nowhere else — not into the
+debug log, and not into a JSON export, which carries no process detail at all and
+could not carry a path if it did (§15.2, §19).
+
 ## Memory
 
 Linux and macOS do not mean the same thing by "used memory". monitrs records which
@@ -158,6 +190,32 @@ they otherwise dominate the list.
 Capacity lives in the medium sampling tier because `statfs` on a stalled network
 mount can block for seconds.
 
+**Two mounts can share one device, and then their sizes are not additive.** On an
+APFS Mac `/` and `/System/Volumes/Data` both report the whole container — the same
+494G twice, not 988G of disk. The Storage screen marks rows whose device backs
+another visible mount with `=` and says so in the panel's label. The numbers
+themselves are correct as reported; what the mark prevents is adding them up.
+
+### Inodes
+
+`INODE%` and `IFREE`: how much of the filesystem's inode table is in use, and how
+many entries are left. This is a **different exhaustion** from running out of bytes
+and it is invisible in the byte columns — a filesystem with 200 GB free can refuse
+to create a file because the table is full, and `USE%` will read a comfortable 40%
+while it happens.
+
+Read from `f_files` and `f_ffree`: `getfsstat` on macOS, `statfs(2)` per mount on
+Linux. `sysinfo` does not expose either field, so on a build without the native
+layer these columns read `n/a`.
+
+Many filesystems have no fixed inode table — including several pseudo-filesystems
+and any filesystem that allocates entries dynamically. Those report `f_files == 0`,
+which monitrs renders as `n/a` and **never** as `0 of 0`: "no inode limit" and "no
+inodes left" are opposite claims, and only the first one is true. A mount whose
+`statfs` was refused reads `denied`, which is a third and distinct answer.
+
+Inodes are a medium-tier read, beside the byte capacity and for the same reason.
+
 ### Device throughput
 
 Read and write throughput, read and write operations per second, and cumulative
@@ -172,6 +230,28 @@ capability.
 
 Mapping devices to mount points is expensive and lives in the on-demand tier, so
 it may be absent in a fast-tier snapshot.
+
+### Per-process disk I/O
+
+The Storage screen ranks processes by read plus write throughput, with each
+process's cumulative `TOTAL R` and `TOTAL W` beside the rates. The totals are the
+*process's own* counters — bytes since it started, as `/proc/<pid>/io` and
+`proc_pidinfo` report them — and not something monitrs accumulated; a process that
+restarts starts them again.
+
+Two ordering details worth knowing, because both are visible:
+
+* A process whose counters the OS refused sorts **below** a process measured as
+  idle. `denied` is not zero, and a refused row must not push a measured one off
+  the panel.
+* Where the rates tie — which on a real machine is most processes most seconds —
+  the order falls back to the cumulative totals. Ordering thirty idle rows by PID
+  answers nothing; ordering them by what they have written names the heavy users of
+  the disk.
+
+Kernel threads are excluded from the ranking: their per-process counters are
+refused on both platforms, and the question the panel answers is which
+*application* is using the disk.
 
 ## Network
 
@@ -228,6 +308,72 @@ shown as `n/a` there.
 
 PSI is the best available signal for memory and I/O pressure because it measures
 the stall itself rather than inferring it from a utilization number.
+
+## Sensors and battery
+
+Both are optional on every platform, and both are read on the medium (5 s) tier: a
+pack's charge moves in whole percentage points over minutes, and reading it every
+second would be a dozen file opens to watch a number that has not changed.
+
+### A machine with no battery
+
+**A desktop, a server, a virtual machine, a container and a CI runner all have no
+battery, and that reads as `n/a` with a reason — never `0%`.** This is a fact about
+the hardware, not a failed read, and the Battery screen says so in words rather than
+leaving a blank panel. It is the most common reading of the whole screen.
+
+The states are distinguished, because they call for different responses:
+
+| Reading | Meaning |
+|---|---|
+| `n/a` | This machine has no battery. Nothing to fix. |
+| `warming up` | The medium tier has not read `/sys/class/power_supply` yet. |
+| `permission denied` | A power source is present but unreadable at this privilege level. |
+
+### Battery fields
+
+| Field | Definition |
+|---|---|
+| charge | Charge level, `0..=100`. On Linux the kernel's own `capacity`; on macOS `Current Capacity / Max Capacity` from `IOPowerSources`. |
+| state | `charging`, `discharging`, `full`, `not charging`, `unknown`. `not charging` is real and distinct from `full`: it is what macOS optimised charging and Linux charge thresholds look like, and calling it "full" would misreport a pack deliberately held at 80%. |
+| time remaining | **Only what the platform published.** Time to empty while discharging, to full while charging. Absent on any pack whose OS publishes no estimate. |
+| cycle count | Completed charge cycles. A reported `0` or `4294967295` is treated as *unknown*, because ACPI firmware that does not count cycles reports exactly those, and "0 cycles" on a four-year-old laptop is a fabricated all-clear. |
+| capacity | Design capacity beside today's full-charge capacity, in watt-hours. The second number against the first is what tells you the pack is worn. |
+| health | `full / design`, derived from the pair above and stored nowhere, so it can never disagree with the two figures printed beside it. Not clamped to 100%: a new cell often measures above its design capacity. |
+| temperature | Pack temperature, where the pack reports one. Distinct from the thermal sensors: a battery at 45 °C means something different from a CPU package at 45 °C. |
+| power | Instantaneous power through the pack, in watts, as a **magnitude**. Direction is the charge state's job, because the sign of Linux's `current_now` is driver-dependent. A `0.0 W` reading on a full pack on mains is a measurement, not an absence. |
+
+**No time remaining is ever computed.** A figure derived from one instantaneous
+current reading swings by hours between consecutive samples, and it is the number
+users trust most — which is exactly why §4 forbids inventing it. Where the platform
+publishes no estimate, monitrs shows none.
+
+Two capacity unit systems exist on Linux and only one reaches the model. Drivers
+report either energy in µWh (`energy_full_design`) or charge in µAh
+(`charge_full_design`); the amp-hour form is converted through
+`voltage_min_design`, the nominal pack voltage the same kernel ABI provides. A
+driver reporting amp-hours and no nominal voltage leaves the capacity `n/a`: there
+is no second source for the missing factor, and multiplying by a plausible 11.4 V
+would fabricate a watt-hour figure.
+
+The system battery is picked out of `/sys/class/power_supply` by two documented
+attributes — `type` must be `Battery` and `scope`, where present, must be `System`.
+That is what excludes the charger, a UPS, and a bluetooth mouse's own cell, which
+all appear in the same directory on an ordinary laptop.
+
+### Thermal sensors
+
+Reported as the sensor names them, with whatever thresholds the sensor itself
+declares. A reading at or above the sensor's own critical threshold is flagged; see
+[What monitrs will not diagnose](#what-monitrs-will-not-diagnose) for why that is as
+far as it goes.
+
+**No temperature bar is drawn without a threshold to scale it against.** A bar needs
+a full scale and a temperature has none — 62 °C is most of the way to a laptop's
+limit and barely warm for a GPU — so the bar appears only where the sensor declares
+a ceiling, and a sensor that declares none shows the figure and says why there is no
+bar. This is the same rule that forbids a network utilization percentage without a
+known link speed.
 
 ## History and attribution coverage
 

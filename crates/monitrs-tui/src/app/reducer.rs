@@ -46,6 +46,7 @@ use crate::keymap::HelpSection;
 use super::command::{self, Command};
 use super::notice::{Notice, NoticeKind};
 use super::overlay::{Overlay, OverlayKind, ProcessActionStage};
+use super::pressure::PressureAlert;
 use super::text::TextInput;
 use super::{AppState, IDLE_REDRAW_INTERVAL, MAX_PINNED_PROCESSES, PanelFocus, next_glyph_mode};
 
@@ -316,6 +317,7 @@ fn snapshot_arrived(state: &mut AppState, snapshot: Arc<SystemSnapshot>) -> Effe
     state.advance_clock(snapshot.captured_at);
     let _ = state.history.record(&snapshot);
     state.absorb_health(snapshot.health.clone());
+    let alerts = state.pressure_watch.observe(&snapshot.pressure);
     state.latest = Some(snapshot);
 
     // A frozen view keeps showing what it froze — unless it has never shown
@@ -328,11 +330,38 @@ fn snapshot_arrived(state: &mut AppState, snapshot: Arc<SystemSnapshot>) -> Effe
     state.unrendered_snapshot = true;
 
     let mut effects = redraw();
+    announce_pressure(state, alerts, &mut effects);
     // §15.1: an action waiting for confirmation must not survive the process it
     // targets. Revalidating here means the dialog disappears with a reason rather
     // than confirming into nothing.
     revalidate_pending(state, &mut effects);
     effects
+}
+
+/// Records the radar transitions this snapshot produced, and rings once if asked
+/// (§2.3, §11.3, §12 `diagnostics.bell_on_critical`).
+///
+/// Deliberately driven by the **live** snapshot, even while the timeline is paused or
+/// scrubbed. §2.1 freezes what is *displayed*; collection continues, and an alert is a
+/// statement about the machine now rather than about the frame on screen. Suppressing
+/// alerts while paused would mean a user who paused to read one spike hears nothing
+/// about the next — and holding them until the user pressed `L` would deliver a burst
+/// of transitions, some of them long over, all stamped with the wrong moment. A notice
+/// is safe to raise here because it opens no dialog, moves no cursor and steals no
+/// key: it lands in the log and the status line, which is exactly where a user who is
+/// mid-scrub can ignore it until they are ready. The destructive things §15.1 blocks
+/// away from live are blocked because they *act*; this only tells.
+fn announce_pressure(state: &mut AppState, alerts: Vec<PressureAlert>, effects: &mut Effects) {
+    // One bell for the snapshot, however many signals escalated together: a machine
+    // that runs out of memory and starts swapping crosses two thresholds in the same
+    // second, and two beeps say nothing the first did not.
+    let ring = state.bell_on_critical && alerts.iter().any(|alert| alert.reached_critical);
+    for alert in alerts {
+        state.notify(alert.notice);
+    }
+    if ring {
+        effects.push(Effect::RingBell);
+    }
 }
 
 /// Takes the answer to an on-demand detail request (§7.5, §8.6).
@@ -1204,16 +1233,18 @@ pub fn help_line_count(sections: &[HelpSection]) -> usize {
 
 /// How many logical lines the process-detail overlay has to show (§7.5).
 ///
-/// The reducer needs this to clamp scrolling, and the renderer must use the same
-/// count so that the last line is reachable and no further. Fixed rows: working
-/// directory, root, open files, sockets, descendants, nice, cgroup, container, and
-/// the collection age. Variable rows: one per ancestor (§2.4's breadcrumb) and one
-/// per direct child.
+/// The reducer needs this to clamp scrolling, and the renderer calls *this* function
+/// rather than counting for itself, so the two cannot drift apart. Fixed rows:
+/// working directory, root, open files, sockets, the descriptor-listing summary,
+/// descendants, nice, cgroup, container, and the collection age. Variable rows: one
+/// per ancestor (§2.4's breadcrumb), one per direct child, and one per listed open
+/// descriptor (§7.2) — the last of which is why the count has to be derived from the
+/// record rather than being a constant.
 #[must_use]
 pub fn detail_line_count(detail: Option<&ProcessDetail>) -> usize {
     /// Rows that are always present, one per [`ProcessDetail`]
     /// scalar field plus the collection timestamp.
-    const FIXED_ROWS: usize = 9;
+    const FIXED_ROWS: usize = 10;
 
     let Some(detail) = detail else {
         return 1;
@@ -1226,7 +1257,14 @@ pub fn detail_line_count(detail: Option<&ProcessDetail>) -> usize {
         .children
         .fresh()
         .map_or(0, |children: &Vec<ProcessIdentity>| children.len());
-    FIXED_ROWS.saturating_add(ancestry).saturating_add(children)
+    let descriptors = detail
+        .open_file_list
+        .fresh()
+        .map_or(0, monitrs_core::model::OpenFileList::count);
+    FIXED_ROWS
+        .saturating_add(ancestry)
+        .saturating_add(children)
+        .saturating_add(descriptors)
 }
 
 /// Maps a keyboard/palette sort column onto the core comparator's key.
@@ -1276,14 +1314,20 @@ fn merge(into: &mut Effects, from: Effects) {
 
 #[cfg(test)]
 mod tests {
-    use monitrs_core::model::{CapabilitySnapshot, CollectorHealth, MetricState, ProcessState};
+    use monitrs_core::model::{
+        CapabilitySnapshot, CollectorHealth, MetricState, PressureId, PressureState, ProcessState,
+        Severity,
+    };
 
     use crate::action::SignalKind;
     use crate::event::Key;
     use crate::keymap::InputMode;
     use crate::theme::ThemeId;
 
-    use super::super::fixtures::{Fake, all_capabilities, arc_snapshot, epoch, snapshot_with};
+    use super::super::fixtures::{
+        Fake, all_capabilities, arc_snapshot, arc_snapshot_with_pressure, epoch, set_pressure,
+        snapshot_of, snapshot_with,
+    };
     use super::super::{
         AppSettings, MAX_PINNED_PROCESSES, NoticeKind, OverlayKind, PanelFocus, ProcessActionStage,
         Resync, TimelineStatus,
@@ -2173,6 +2217,281 @@ mod tests {
         );
     }
 
+    // ------------------------------------------------------- pressure alerts
+
+    /// A state that rings the bell, as `diagnostics.bell_on_critical = true` builds it.
+    fn ringing() -> AppState {
+        AppState::new(AppSettings {
+            started_at: epoch(),
+            size: (160, 48),
+            bell_on_critical: true,
+            ..AppSettings::default()
+        })
+    }
+
+    /// Delivers a snapshot whose radar reports `pressure` for `id`.
+    fn deliver_pressure(
+        state: &mut AppState,
+        sequence: u64,
+        id: PressureId,
+        pressure: MetricState<PressureState>,
+    ) -> Effects {
+        let snapshot = arc_snapshot_with_pressure(sequence, &table(), id, pressure);
+        let at = snapshot.captured_at;
+        let effects = apply::<()>(state, Event::Snapshot(snapshot));
+        state.record_render(at, Duration::from_millis(4));
+        effects
+    }
+
+    /// Every pressure notice recorded so far.
+    fn pressure_notices(state: &AppState) -> Vec<&Notice> {
+        state
+            .notices()
+            .iter()
+            .filter(|notice| notice.kind == NoticeKind::Pressure)
+            .collect()
+    }
+
+    #[test]
+    fn an_escalating_signal_is_announced_once_and_not_once_a_second() {
+        let mut state = state();
+
+        let _ = deliver_pressure(
+            &mut state,
+            1,
+            PressureId::Cpu,
+            MetricState::Available(PressureState::Critical),
+        );
+        assert_eq!(pressure_notices(&state).len(), 1);
+
+        // The radar keeps reporting critical for as long as the CPU is saturated.
+        for sequence in 2..30 {
+            let _ = deliver_pressure(
+                &mut state,
+                sequence,
+                PressureId::Cpu,
+                MetricState::Available(PressureState::Critical),
+            );
+        }
+
+        let notices = pressure_notices(&state);
+        assert_eq!(notices.len(), 1, "{notices:?}");
+        assert_eq!(
+            notices.first().map(|notice| notice.occurrences),
+            Some(1),
+            "a repeat count here would mean the transition was detected again"
+        );
+        let message = notices.first().map(|notice| notice.message.as_str());
+        assert!(
+            message.is_some_and(|message| message.starts_with("CPU is now critical")),
+            "{message:?}"
+        );
+        assert!(
+            message.is_some_and(|message| message.contains("diagnostics.cpu_watch_percent")),
+            "§2.3: the notice quotes the rule that derived the state: {message:?}"
+        );
+    }
+
+    #[test]
+    fn a_signal_that_goes_unavailable_is_not_reported_as_a_recovery() {
+        // §4/§26: "the OS refused the read" must never reach the user as good news.
+        let mut state = state();
+        let _ = deliver_pressure(
+            &mut state,
+            1,
+            PressureId::Cpu,
+            MetricState::Available(PressureState::Critical),
+        );
+        let before = pressure_notices(&state).len();
+
+        let _ = deliver_pressure(
+            &mut state,
+            2,
+            PressureId::Cpu,
+            MetricState::PermissionDenied,
+        );
+
+        assert_eq!(
+            pressure_notices(&state).len(),
+            before,
+            "an unavailable signal said something: {:?}",
+            pressure_notices(&state)
+        );
+        assert_eq!(state.pressure_watch().last_state(PressureId::Cpu), None);
+    }
+
+    #[test]
+    fn a_recovery_is_reported_at_a_lower_severity_than_the_escalation() {
+        let mut state = state();
+        let _ = deliver_pressure(
+            &mut state,
+            1,
+            PressureId::Memory,
+            MetricState::Available(PressureState::Critical),
+        );
+        let _ = deliver_pressure(
+            &mut state,
+            2,
+            PressureId::Memory,
+            MetricState::Available(PressureState::Normal),
+        );
+
+        let severities: Vec<Severity> = pressure_notices(&state)
+            .iter()
+            .map(|notice| notice.severity)
+            .collect();
+        assert_eq!(severities, vec![Severity::Critical, Severity::Info]);
+    }
+
+    #[test]
+    fn the_bell_is_silent_unless_configured_and_unless_critical() {
+        // Nothing configured: no bell, whatever the radar says.
+        let mut quiet = state();
+        let effects = deliver_pressure(
+            &mut quiet,
+            1,
+            PressureId::Cpu,
+            MetricState::Available(PressureState::Critical),
+        );
+        assert!(
+            !effects.contains(&Effect::RingBell),
+            "the bell is off by default: {effects:?}"
+        );
+        assert_eq!(
+            pressure_notices(&quiet).len(),
+            1,
+            "the notice still happens"
+        );
+
+        // Configured, but only `watch`: still silent.
+        let mut ringing = ringing();
+        let effects = deliver_pressure(
+            &mut ringing,
+            1,
+            PressureId::Cpu,
+            MetricState::Available(PressureState::Watch),
+        );
+        assert!(
+            !effects.contains(&Effect::RingBell),
+            "§2.3: only critical rings: {effects:?}"
+        );
+
+        // Configured and critical: one bell.
+        let effects = deliver_pressure(
+            &mut ringing,
+            2,
+            PressureId::Cpu,
+            MetricState::Available(PressureState::Critical),
+        );
+        assert_eq!(
+            effects
+                .iter()
+                .filter(|effect| **effect == Effect::RingBell)
+                .count(),
+            1,
+            "{effects:?}"
+        );
+
+        // Still critical, and on the way back down: silent again.
+        for (sequence, pressure) in [
+            (3, MetricState::Available(PressureState::Critical)),
+            (4, MetricState::Available(PressureState::Watch)),
+            (5, MetricState::Available(PressureState::Normal)),
+        ] {
+            let effects = deliver_pressure(&mut ringing, sequence, PressureId::Cpu, pressure);
+            assert!(
+                !effects.contains(&Effect::RingBell),
+                "sequence {sequence} rang: {effects:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn two_signals_escalating_together_ring_once() {
+        let mut state = ringing();
+        let mut snapshot = snapshot_of(1, &table());
+        for id in [PressureId::Memory, PressureId::Swap] {
+            set_pressure(
+                &mut snapshot,
+                id,
+                MetricState::Available(PressureState::Critical),
+            );
+        }
+
+        let effects = apply::<()>(&mut state, Event::Snapshot(Arc::new(snapshot)));
+
+        assert_eq!(pressure_notices(&state).len(), 2, "both are worth saying");
+        assert_eq!(
+            effects
+                .iter()
+                .filter(|effect| **effect == Effect::RingBell)
+                .count(),
+            1,
+            "two beeps say nothing the first did not: {effects:?}"
+        );
+    }
+
+    #[test]
+    fn alerts_still_fire_while_the_timeline_is_frozen() {
+        // §2.1 freezes the *displayed* snapshot; collection continues, and so does
+        // the machine. A user who paused to read one spike must still hear about the
+        // next — and the notice is dialog-free, so it cannot disturb their scrubbing.
+        let mut state = ringing();
+        let _ = deliver_pressure(
+            &mut state,
+            1,
+            PressureId::Cpu,
+            MetricState::Available(PressureState::Normal),
+        );
+        let _ = reduce(&mut state, Action::TogglePause);
+        assert!(!state.timeline().is_live());
+        let frozen = state.snapshot().map(|snapshot| snapshot.sequence);
+
+        let effects = deliver_pressure(
+            &mut state,
+            2,
+            PressureId::Cpu,
+            MetricState::Available(PressureState::Critical),
+        );
+
+        assert_eq!(pressure_notices(&state).len(), 1);
+        assert!(effects.contains(&Effect::RingBell));
+        assert_eq!(
+            state.snapshot().map(|snapshot| snapshot.sequence),
+            frozen,
+            "the alert must not drag the frozen view forward"
+        );
+    }
+
+    #[test]
+    fn a_dropped_snapshot_cannot_produce_an_alert() {
+        // A re-delivered or reordered snapshot is discarded before anything reads it
+        // (§10.3), so it must not be able to re-announce a transition either.
+        let mut state = state();
+        let _ = deliver_pressure(
+            &mut state,
+            2,
+            PressureId::Cpu,
+            MetricState::Available(PressureState::Critical),
+        );
+        assert_eq!(pressure_notices(&state).len(), 1);
+
+        let stale = arc_snapshot_with_pressure(
+            1,
+            &table(),
+            PressureId::Cpu,
+            MetricState::Available(PressureState::Normal),
+        );
+        let effects = apply::<()>(&mut state, Event::Snapshot(stale));
+
+        assert!(effects.is_empty());
+        assert_eq!(pressure_notices(&state).len(), 1);
+        assert_eq!(
+            state.pressure_watch().last_state(PressureId::Cpu),
+            Some(PressureState::Critical)
+        );
+    }
+
     // ------------------------------------------------------------- coalescing
 
     #[test]
@@ -2925,14 +3244,28 @@ mod tests {
     }
 
     #[test]
-    fn the_detail_line_count_grows_with_the_ancestry_and_children() {
+    fn the_detail_line_count_grows_with_the_ancestry_children_and_descriptors() {
         let bare = ProcessDetail::pending(identity(1, 1), std::time::SystemTime::UNIX_EPOCH);
         let bare_lines = detail_line_count(Some(&bare));
-        assert!(bare_lines >= 9);
+        assert!(bare_lines >= 10);
         assert_eq!(detail_line_count(None), 1);
 
         let mut populated = bare.clone();
         populated.children = MetricState::Available(vec![identity(2, 2), identity(3, 3)]);
         assert_eq!(detail_line_count(Some(&populated)), bare_lines + 2);
+
+        // One row per *listed* descriptor, not per descriptor the process holds: the
+        // ones the cap left out have no row to scroll to.
+        let mut with_files = bare.clone();
+        with_files.open_file_list =
+            MetricState::Available(monitrs_core::model::OpenFileList::listed(
+                vec![monitrs_core::model::OpenFileEntry {
+                    descriptor: 0,
+                    kind: monitrs_core::model::OpenFileKind::File,
+                    path: MetricState::Available("/dev/null".into()),
+                }],
+                4_096,
+            ));
+        assert_eq!(detail_line_count(Some(&with_files)), bare_lines + 1);
     }
 }

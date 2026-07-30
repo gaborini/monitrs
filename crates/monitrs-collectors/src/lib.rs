@@ -16,6 +16,8 @@
 //!   pure, so tier timing is tested by advancing a fake clock.
 //! * [`fake::FakeCollector`] produces deterministic snapshots for tests,
 //!   benchmarks, and UI snapshots.
+//! * [`inodes`] holds the one thing both platforms do identically with their
+//!   platform-specific inode reads: merge them onto the snapshot's filesystems.
 //! * [`renice`] is the one platform-neutral *write*: `setpriority(2)` is POSIX and
 //!   identical on both targets, so only the identity revalidation it depends on is
 //!   platform-specific (§6.2, §15.1).
@@ -53,6 +55,7 @@
 pub mod common;
 pub mod error;
 pub mod fake;
+pub mod inodes;
 pub mod linux;
 pub mod macos;
 pub mod renice;

@@ -1,12 +1,12 @@
-+ monitrs  host:dev-mbp  [>LIVE]  250ms  up 9d 10:05 ---------------------------------------------------------------------------- 17:28:46Z --+
-| CPU   32% [##############################=---------------------------------------------------------------]  load  8.56 7.61 6.11  12 cpu  12 core  temp 70.2C|
-| MEM   61% [#########################################################=------------------------------------]  29G/48G  swap off  bat 60%-                      |
++ monitrs  host:dev-mbp  [>LIVE]  250ms  up 9d 10:55 ---------------------------------------------------------------------------- 18:18:37Z --+
+| CPU   43% [########################################=-----------------------------------------------------]  load  5.79 7.66 8.42  12 cpu  12 core  temp 68.6C|
+| MEM   63% [##########################################################=-----------------------------------]  30G/48G  swap off  bat 29%-                      |
 + SYSTEM -----------------------------------------------------------------------+ DIAGNOSTICS -----------------------------------------------------------------+
 |  host         dev-mbp                                        |PRESSURE                                                                      |
 |  os           Darwin macOS 26.5.2 Tahoe                                       |  every derived signal is normal                                              |
 |  kernel       25.5.0                                                          |UNAVAILABLE METRICS                                                           |
 |  arch         aarch64                                                         |  - process sockets         unsupported                                       |
-|  uptime       9d 10:05 (booted 07:23:24Z)                                     |  - disk busy               unsupported                                       |
+|  uptime       9d 10:55 (booted 07:23:24Z)                                     |  - disk busy               unsupported                                       |
 |  cpu          12 logical, 12 physical                                         |  - Linux PSI               unsupported                                       |
 |  cpu model    Apple M4 Pro at -n/a                                            |  - cgroup limits           unsupported                                       |
 |  memory       48 GiB total, swap off                                          |  - kernel threads          unsupported                                       |
@@ -38,11 +38,11 @@
 |  command      /Applications/iTerm.app/Contents/MacOS/iTerm2                   |                                                                              |
 |  state        running                                                         |                                                                              |
 |  user         me                                                              |                                                                              |
-|  cpu          41%                                                             |                                                                              |
-|  memory       219M rss, 416G virt, 0.4% of total                              |                                                                              |
-|  disk         0B/s read, 0B/s write (42M / 316K total)                        |                                                                              |
-|  threads      9                                                               |                                                                              |
-|  age          38:19                                                           |                                                                              |
+|  cpu          43%                                                             |                                                                              |
+|  memory       221M rss, 416G virt, 0.4% of total                              |                                                                              |
+|  disk         0B/s read, 0B/s write (43M / 460K total)                        |                                                                              |
+|  threads      10                                                              |                                                                              |
+|  age          01:28:10                                                        |                                                                              |
 |  on-demand detail not loaded                                                  |                                                                              |
 +-------------------------------------------------------------------------------+------------------------------------------------------------------------------+
- 1 Overview  2 Processes  3 CPU  4 Storage  5 Network [6 Inspect]  filter:                                                                      / filter  ? help
+ 1 Overview  2 Processes  3 CPU  4 Storage  5 Network [6 Inspect] 7 Battery   filter:                                                           / filter  ? help

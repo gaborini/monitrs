@@ -66,6 +66,12 @@ unsafe impl Pod for KinfoProc {}
 unsafe impl Pod for ExternProc {}
 // SAFETY: `#[repr(C, packed(4))]` aggregate of integers.
 unsafe impl Pod for IfData {}
+// SAFETY: `#[repr(C)]` aggregates of integers and `c_char` arrays. `c_char` is
+// `i8` on every Apple target, so every bit pattern is a valid value.
+unsafe impl Pod for ProcFileinfo {}
+// SAFETY: as above; `libc::vnode_info_path` is a `#[repr(C)]` aggregate of
+// integers and a `c_char` array.
+unsafe impl Pod for VnodeFdinfowithpath {}
 
 /// `mach_timebase_info_data_t` from `<mach/mach_time.h>`.
 ///
@@ -307,6 +313,40 @@ pub(super) struct Eproc {
     pub(super) e_spare: [i32; 4],
 }
 
+/// `struct proc_fileinfo` from `<sys/proc_info.h>`.
+///
+/// The first half of [`VnodeFdinfowithpath`]. None of it is read — the descriptor
+/// walk wants the path that follows it — but the kernel writes the whole structure
+/// and `pvip`'s offset depends on this one's size.
+#[allow(dead_code, reason = "layout only; it fixes the offset of pvip")]
+#[derive(Clone, Copy, Debug)]
+#[repr(C)]
+pub(super) struct ProcFileinfo {
+    pub(super) fi_openflags: u32,
+    pub(super) fi_status: u32,
+    /// `off_t`.
+    pub(super) fi_offset: i64,
+    pub(super) fi_type: i32,
+    pub(super) fi_guardflags: u32,
+}
+
+/// `struct vnode_fdinfowithpath` from `<sys/proc_info.h>`: what
+/// [`PROC_PIDFDVNODEPATHINFO`] fills for one descriptor.
+///
+/// `libc` declares `vnode_info_path` and `proc_vnodepathinfo` but not this
+/// combination, so it is transcribed here and the `vnode_info_path` half is
+/// borrowed from `libc` rather than re-transcribed — which is also why
+/// [`tests::the_transcribed_layouts_have_the_sizes_the_headers_imply`] asserts the
+/// total: 1200 bytes, verified against the macOS 26 SDK headers.
+#[derive(Clone, Copy, Debug)]
+#[repr(C)]
+pub(super) struct VnodeFdinfowithpath {
+    /// The descriptor's own flags and offset.
+    pub(super) pfi: ProcFileinfo,
+    /// The vnode it refers to, including the tail end of its path.
+    pub(super) pvip: libc::vnode_info_path,
+}
+
 /// `struct kinfo_proc` from `<sys/sysctl.h>`: the payload of every `kern.proc.*`
 /// node.
 #[derive(Clone, Copy, Debug)]
@@ -333,6 +373,13 @@ pub(super) const KERN_CLOCKRATE: c_int = 12;
 pub(super) const CTL_VM: c_int = 2;
 /// `VM_SWAPUSAGE` from `<sys/vm.h>`.
 pub(super) const VM_SWAPUSAGE: c_int = 5;
+
+/// `PROC_PIDFDVNODEPATHINFO` from `<sys/proc_info.h>`.
+///
+/// The one `proc_pidfdinfo` flavour this collector uses. `libc` exposes the
+/// `PROC_PIDLISTFDS` and `PROX_FDTYPE_*` constants but not the per-descriptor
+/// flavours, so this one is transcribed; its payload is [`VnodeFdinfowithpath`].
+pub(super) const PROC_PIDFDVNODEPATHINFO: c_int = 2;
 
 /// `P_TRACED` from `<sys/proc.h>`: the process is being debugged.
 pub(super) const P_TRACED: c_int = 0x0000_0800;
@@ -502,6 +549,11 @@ mod tests {
         assert_eq!(align_of::<KinfoProc>(), 8);
         assert_eq!(size_of::<IfData>(), 96);
         assert_eq!(size_of::<Clockinfo>(), 20);
+        assert_eq!(size_of::<ProcFileinfo>(), 24);
+        assert_eq!(size_of::<VnodeFdinfowithpath>(), 1200);
+        // The kernel reports success by returning exactly this many bytes, so a
+        // transcription error here would look like every descriptor being refused.
+        assert_eq!(offset_of!(VnodeFdinfowithpath, pvip), 24);
     }
 
     #[test]

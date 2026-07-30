@@ -1,0 +1,28 @@
+---
+source: crates/monitrs-tui/tests/overlay_snapshots.rs
+expression: text
+---
+|+ PROCESS ------------------------------------------------------ 5-16 of 17 ---+|
+||NAME rustc   STATE sleeping   USER   gabor                                    ||
+||IDENTITY      pid 31842 start key 900100                                      ||
+||EXECUTABLE    /usr/bin/rustc                                                  ||
+||COMMAND       cargo build --release                                           ||
+||AGE   01:20   STARTED   1970-01-01 00:00:00 UTC                               ||
+||CPU   287%   RSS   2.6G   MEM%   8.1%   THREADS   4                           ||
+||READ   21M/s   WRITE   42M/s   VIRTUAL   16G                                  ||
+||ANCESTRY        launchd                                                       ||
+||CHILDREN        0                                                             ||
+||------------------------------------------------------------------------------||
+||DESCRIPTORS     6 of 42 listed, 36 not listed                                 ||
+||DESCENDANTS     0                                                             ||
+||NICE            0                                                             ||
+||CGROUP        - n/a                                                           ||
+||CONTAINER     - n/a                                                           ||
+||ANCESTOR      launchd (pid 1)                                                 ||
+||FD  0  file          PATH   /dev/null                                         ||
+||FD  1  pipe          PATH - n/a                                               ||
+||FD  4  file          PATH   /Users/dev/pgit/monitrs/target/debug/deps/libmo...||
+||FD  5  socket        PATH - n/a                                               ||
+||FD  9  file          PATH ! permission denied                                 ||
+||FD 12  event queue   PATH - n/a                                               ||
+|+------------------------------------------------------------------------------+|

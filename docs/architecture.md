@@ -84,7 +84,7 @@ enough that measuring them every second would itself distort the measurement.
 | Fast | 1 s | CPU, memory, process summary, network counters, disk counters |
 | Medium | 5 s | filesystem capacity, static device state, temperatures, battery |
 | Slow | 30 s | users, static system metadata, device/interface lists, cgroup metadata |
-| On demand | — | selected-process detail, ancestry, open files, socket counts, mount/device mapping |
+| On demand | — | selected-process detail, ancestry, open descriptors with their paths, socket counts, mount/device mapping |
 
 Filesystem capacity is in the medium tier specifically because a `statfs` on a
 stalled NFS mount can block for seconds, and the fast tier must not be able to
@@ -94,6 +94,14 @@ The on-demand tier exists because §2.4's process context is expensive per
 process: reading a working directory, counting file descriptors, and walking an
 ancestry chain for *every* process on *every* tick would dominate the sample
 budget. It is collected for the selected process only.
+
+Even there, one read is bounded rather than merely deferred. *Naming* a process's
+open descriptors costs one syscall each — a `proc_pidfdinfo` on macOS, a `readlink`
+on Linux — and a process can hold tens of thousands, so the list stops at
+`OpenFileList::MAX_LISTED` and the panel reports how many descriptors it did not
+name. Counting them is cheap by comparison and is not capped the same way: on macOS
+a single `PROC_PIDLISTFDS` returns the whole table with a type per descriptor, which
+is where both the open-file count and the socket count come from.
 
 The UI refresh rate may exceed the data sample rate, but an unchanged frame is
 not redrawn without reason.

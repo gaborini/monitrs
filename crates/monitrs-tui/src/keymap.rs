@@ -567,6 +567,7 @@ impl Keymap {
                     ViewId::Storage => "Go to the Storage view",
                     ViewId::Network => "Go to the Network view",
                     ViewId::Inspect => "Go to the Inspect view",
+                    ViewId::Battery => "Go to the Battery view",
                 },
             );
         }
@@ -1468,6 +1469,7 @@ mod tests {
             (KeyPress::char('4'), Action::ChangeView(ViewId::Storage)),
             (KeyPress::char('5'), Action::ChangeView(ViewId::Network)),
             (KeyPress::char('6'), Action::ChangeView(ViewId::Inspect)),
+            (KeyPress::char('7'), Action::ChangeView(ViewId::Battery)),
             (KeyPress::char(' '), Action::TogglePause),
             (KeyPress::char('L'), Action::ReturnLive),
             (KeyPress::char(':'), Action::OpenCommandPalette),

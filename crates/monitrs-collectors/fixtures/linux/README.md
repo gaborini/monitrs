@@ -44,3 +44,6 @@ the redaction §14.2 requires has something to redact.
 | `meminfo/malformed_units.txt` | `MemTotal` in `MB`. Assuming `kB` would understate memory a thousandfold. |
 | `sys_class_net/speed_unknown_negative.txt` | The `-1` an unnegotiated link reports. §7.4 forbids a utilisation percentage without a known speed. |
 | `dmi/sys_vendor_physical.txt` | A vendor string naming no hypervisor — which is *not* evidence of bare metal, and §7.5 has no such conclusion to draw. |
+| `power_supply/type_mains.txt`, `scope_device.txt` | The two entries in `/sys/class/power_supply` that are **not** the system battery: the charger, and a bluetooth peripheral's own cell. Both are present on an ordinary laptop, and reporting either would put a mouse's charge on the Battery screen. |
+| `power_supply/status_not_charging.txt` | `Not charging`, with the space the kernel writes. A pack held at 80% by a charge threshold is not `Full`, and calling it that would misreport it. |
+| `power_supply/temp_314.txt` | Tenths of a degree, which is the unit the ABI specifies. The `-2731` "no sensor" sentinel is not a fixture: it is a literal in `power.rs`, because the point of the test is that a number reading as a plausible −273.1 °C is rejected. |

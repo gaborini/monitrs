@@ -39,6 +39,77 @@ impl FilesystemKind {
     }
 }
 
+/// Inode occupancy of one filesystem.
+///
+/// A separate type from the byte figures because it answers a different question,
+/// and a classic operational surprise: a filesystem can refuse a `create` with
+/// `ENOSPC` while `df` shows plenty of free space, because what ran out was the
+/// inode table. Nothing else in this model can express that.
+///
+/// The fields are private so that the two invariants a reader relies on hold by
+/// construction: `total` is never zero — a filesystem with no inode table reports
+/// [`MetricState::Unsupported`] instead, never `0 of 0` (§4) — and `free` never
+/// exceeds `total`, so [`InodeUsage::used`] cannot underflow into a huge number.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize))]
+pub struct InodeUsage {
+    total: u64,
+    free: u64,
+}
+
+impl InodeUsage {
+    /// The state a `statfs`/`statvfs` `(f_files, f_ffree)` pair describes.
+    ///
+    /// A zero `total` is what a filesystem with no fixed inode table reports, and
+    /// many do: it is [`MetricState::Unsupported`], because "this filesystem has
+    /// no inode limit" and "0 inodes exist" are opposite claims and only the first
+    /// is true (§4, §26).
+    #[must_use]
+    pub const fn from_counts(total: u64, free: u64) -> MetricState<Self> {
+        if total == 0 {
+            return MetricState::Unsupported;
+        }
+        MetricState::Available(Self {
+            total,
+            // A kernel that reports more free inodes than it has is reporting
+            // something we cannot interpret; clamping keeps `used` meaningful
+            // rather than wrapping it round to near `u64::MAX`.
+            free: if free > total { total } else { free },
+        })
+    }
+
+    /// Size of the inode table.
+    #[must_use]
+    pub const fn total(self) -> u64 {
+        self.total
+    }
+
+    /// Inodes still allocatable.
+    #[must_use]
+    pub const fn free(self) -> u64 {
+        self.free
+    }
+
+    /// Inodes in use: one per file, directory, symlink, and device node.
+    #[must_use]
+    pub const fn used(self) -> u64 {
+        self.total.saturating_sub(self.free)
+    }
+
+    /// Share of the inode table in use.
+    ///
+    /// Infallible, unlike the byte-capacity percentage, because [`Self::from_counts`]
+    /// has already rejected the zero-total case. The fallback exists only because
+    /// [`Percent::ratio`] cannot see that invariant, and it is the pessimistic
+    /// reading on purpose: a table whose size somehow could not be divided by is
+    /// reported as full, never as empty, since "empty" is the reassuring answer and
+    /// an uninterpretable count is not a reassuring situation.
+    #[must_use]
+    pub fn usage(self) -> Percent {
+        Percent::ratio(self.used(), self.total).unwrap_or(Percent::FULL)
+    }
+}
+
 /// Capacity of one mounted filesystem.
 ///
 /// Contains no throughput fields at all; that is [`DiskSnapshot`]'s job.
@@ -61,10 +132,28 @@ pub struct FilesystemSnapshot {
     pub used_bytes: MetricState<u64>,
     /// Share of capacity used. Never mixed with device utilization (§7.3).
     pub usage: MetricState<Percent>,
+    /// Inode occupancy, where the filesystem has an inode table to report.
+    ///
+    /// A *medium*-tier read like the byte capacity, and from the same `statfs`
+    /// call — `sysinfo` does not expose `f_files`, so it is the native layers that
+    /// fill this in and the baseline that leaves it [`MetricState::Unsupported`].
+    pub inodes: MetricState<InodeUsage>,
     /// How the mount is classified.
     pub kind: FilesystemKind,
     /// Whether the mount is read-only.
     pub read_only: bool,
+}
+
+impl FilesystemSnapshot {
+    /// Share of the inode table in use, carrying the inode read's own availability.
+    ///
+    /// The percentage a display wants: a refused or absent inode count produces a
+    /// state and never a number, and a retained count produces a percentage that is
+    /// marked stale exactly as the count was (§4).
+    #[must_use]
+    pub fn inode_usage(&self) -> MetricState<Percent> {
+        self.inodes.as_ref().map(|inodes| inodes.usage())
+    }
 }
 
 /// Cumulative device counters, kept alongside rates so the Inspect screen can
@@ -173,6 +262,7 @@ mod tests {
             used_bytes: MetricState::Available(374_384_795_648),
             usage: Percent::ratio(374_384_795_648, 494_384_795_648)
                 .map_or(MetricState::Unsupported, MetricState::Available),
+            inodes: InodeUsage::from_counts(4_882_812_499, 4_395_698_642),
             kind: FilesystemKind::Physical,
             read_only: false,
         };
@@ -180,5 +270,62 @@ mod tests {
         assert!(fs.usage.fresh().is_some());
         let disk = DiskSnapshot::warming_up("disk0".into());
         assert_fields(&disk);
+    }
+
+    #[test]
+    fn a_filesystem_with_no_inode_table_is_unsupported_and_never_zero_of_zero() {
+        // The property §4 exists for. `f_files == 0` is what a filesystem without a
+        // fixed inode table reports, and rendering it as `0 of 0` would say the
+        // table is exhausted — the opposite of the truth.
+        assert_eq!(InodeUsage::from_counts(0, 0), MetricState::Unsupported);
+        assert_eq!(InodeUsage::from_counts(0, 12), MetricState::Unsupported);
+    }
+
+    #[test]
+    fn inode_usage_is_a_share_of_the_table_and_cannot_underflow() {
+        let inodes = InodeUsage::from_counts(1_000, 250)
+            .fresh()
+            .copied()
+            .expect("a thousand inodes is a table");
+        assert_eq!(inodes.used(), 750);
+        assert_eq!(inodes.free(), 250);
+        assert_eq!(inodes.usage(), Percent::new(75.0).expect("finite"));
+
+        // More free than total cannot be interpreted, and must not wrap `used`
+        // round to near u64::MAX.
+        let nonsense = InodeUsage::from_counts(10, 99)
+            .fresh()
+            .copied()
+            .expect("the table size is still known");
+        assert_eq!(nonsense.used(), 0);
+        assert_eq!(nonsense.free(), 10);
+    }
+
+    #[test]
+    fn the_inode_percentage_carries_the_counts_availability() {
+        // §4: a refused count produces a state, never a number, and a stale count
+        // produces a percentage that is still marked stale.
+        let mut fs = FilesystemSnapshot {
+            mount_point: "/".into(),
+            device: None,
+            fs_type: None,
+            total_bytes: 1,
+            available_bytes: MetricState::Unsupported,
+            used_bytes: MetricState::Unsupported,
+            usage: MetricState::Unsupported,
+            inodes: MetricState::PermissionDenied,
+            kind: FilesystemKind::Physical,
+            read_only: false,
+        };
+        assert_eq!(fs.inode_usage(), MetricState::PermissionDenied);
+
+        fs.inodes = InodeUsage::from_counts(4, 1);
+        assert_eq!(
+            fs.inode_usage().fresh().map(|percent| percent.value()),
+            Some(75.0)
+        );
+
+        fs.inodes = fs.inodes.into_stale(core::time::Duration::from_secs(9));
+        assert!(fs.inode_usage().is_stale());
     }
 }

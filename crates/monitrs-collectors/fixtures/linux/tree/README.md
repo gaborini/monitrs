@@ -17,6 +17,12 @@ ones §9.2 and §17.2 require to be covered:
 * PID 1 is `systemd`, PID 2 is the `kthreadd` kernel thread with an empty
   `cmdline` and no `io` file, PID 4242 is a container process, and PID 9182 is
   named `((weird) name) with spaces`;
+* `sys/class/power_supply` holds three entries and only one of them is the system
+  battery: `BAT0` (`type` `Battery`, `scope` `System`, an energy-reporting ACPI
+  pack), `AC` (`type` `Mains` — the charger), and `hid-e4-battery` (`type`
+  `Battery` but `scope` `Device` — a bluetooth peripheral's own cell). `BAT0`
+  exports no `charge_full` and no `time_to_empty_now`, which is what makes those
+  metrics `n/a` rather than zero;
 * PID 9999 deliberately does **not** exist, so a read of it exercises the
   vanished-process path.
 

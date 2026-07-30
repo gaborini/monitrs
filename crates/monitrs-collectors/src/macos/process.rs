@@ -28,6 +28,10 @@
 //! Measured on an M4 Pro with 962 processes: 272 µs for the table, 1.6 ms for the
 //! `proc_pidinfo` pass and 1.5 ms for the `proc_pid_rusage` pass, so about 3.4 ms
 //! against §16.1's budget. No per-process read is repeated on the slower tiers.
+//!
+//! [`read_descriptors`] is the exception that proves the rule: it costs a syscall
+//! per descriptor and is therefore on the on-demand tier of §8.6, reached only for
+//! the one process whose detail overlay is open, never from [`ProcessEnricher`].
 
 use core::ffi::{c_int, c_void};
 use core::mem::{MaybeUninit, size_of};
@@ -36,8 +40,9 @@ use std::collections::HashMap;
 use std::time::{Instant, SystemTime};
 
 use monitrs_core::model::{
-    AncestorEntry, MetricState, ProcessDetail, ProcessIdentity, ProcessIo, ProcessMemory,
-    ProcessSnapshot, ProcessState, UnavailableReason, UserIdentity,
+    AncestorEntry, MetricState, OpenFileEntry, OpenFileKind, OpenFileList, ProcessDetail,
+    ProcessIdentity, ProcessIo, ProcessMemory, ProcessSnapshot, ProcessState, UnavailableReason,
+    UserIdentity,
 };
 use monitrs_core::rates::{CounterWidth, KeyedProcessCpuTrackers, KeyedRateTrackers};
 use monitrs_core::units::Percent;
@@ -330,9 +335,15 @@ pub(super) fn read_disk_io(pid: u32) -> Result<DiskIoCounters, NativeError> {
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(super) struct VnodePaths {
     /// Current working directory.
-    pub(super) working_directory: Box<str>,
+    ///
+    /// [`MetricState::TemporarilyUnavailable`] rather than `""` if the kernel wrote
+    /// no name, which should not happen — every process has a working directory —
+    /// but §4 has no empty-string answer either way.
+    pub(super) working_directory: MetricState<Box<str>>,
     /// Filesystem root.
-    pub(super) root: Box<str>,
+    ///
+    /// `/` for a process that has not been `chroot`ed; see [`read_vnode_paths`].
+    pub(super) root: MetricState<Box<str>>,
 }
 
 /// Reads a process's working directory and root via `PROC_PIDVNODEPATHINFO`.
@@ -340,6 +351,15 @@ pub(super) struct VnodePaths {
 /// Refused with `EPERM` for another user's process, which is the case §9.3 singles
 /// out: the caller turns that into [`MetricState::PermissionDenied`] and never into
 /// an empty path.
+///
+/// # The empty `pvi_rdir`
+///
+/// The kernel fills `pvi_rdir` only for a process whose root directory differs from
+/// the filesystem root, so for every ordinary process it comes back as zero bytes.
+/// Passing that through rendered the `ROOT` row of the detail overlay as an empty
+/// cell — the one thing §4 does not allow, because an empty cell reads as a failed
+/// read. An absent `pvi_rdir` means "not chrooted", and the root of a process that
+/// is not chrooted is `/`, so that is what it reports.
 pub(super) fn read_vnode_paths(pid: u32) -> Result<VnodePaths, NativeError> {
     let pid = c_int::try_from(pid).map_err(|_| NativeError::Errno(libc::EINVAL))?;
     let mut info = MaybeUninit::<libc::proc_vnodepathinfo>::zeroed();
@@ -362,9 +382,19 @@ pub(super) fn read_vnode_paths(pid: u32) -> Result<VnodePaths, NativeError> {
     }
     // SAFETY: the call wrote the whole structure into the zeroed buffer.
     let info = unsafe { info.assume_init() };
+    let working_directory = path_from_vnode(&info.pvi_cdir.vip_path);
+    let root = path_from_vnode(&info.pvi_rdir.vip_path);
     Ok(VnodePaths {
-        working_directory: path_from_vnode(&info.pvi_cdir.vip_path),
-        root: path_from_vnode(&info.pvi_rdir.vip_path),
+        working_directory: if working_directory.is_empty() {
+            MetricState::TemporarilyUnavailable(UnavailableReason::ReadFailed)
+        } else {
+            MetricState::Available(working_directory)
+        },
+        root: if root.is_empty() {
+            MetricState::Available("/".into())
+        } else {
+            MetricState::Available(root)
+        },
     })
 }
 
@@ -381,16 +411,24 @@ fn path_from_vnode(chunks: &[[core::ffi::c_char; 32]; 32]) -> Box<str> {
     sysctl::c_char_array_to_text(&flat)
 }
 
-/// The open file descriptor count and niceness from `PROC_PIDTASKALLINFO`.
+/// The niceness from `PROC_PIDTASKALLINFO`.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(super) struct BsdCounters {
-    /// Open file descriptors.
-    pub(super) open_files: u32,
     /// Scheduling niceness.
     pub(super) nice: i32,
 }
 
 /// Reads `PROC_PIDTASKALLINFO`, which carries the BSD half of a process record.
+///
+/// # Why the open-file count is *not* taken from here
+///
+/// `pbi_nfiles` looks exactly like the count §7.2 asks for and is not: it is the
+/// size of the process's descriptor *table*, not the number of descriptors in it.
+/// Measured on macOS 26 — a process reporting `pbi_nfiles` 25 held 3 descriptors,
+/// opened twenty more, and still reported 25; another reporting 1600 held 453. A
+/// count that never moves when files open and close is not a measurement, and §26
+/// treats a plausible number that was never measured as worse than no number. The
+/// real count comes from [`read_descriptors`], which enumerates the table.
 pub(super) fn read_bsd_counters(pid: u32) -> Result<BsdCounters, NativeError> {
     let pid = c_int::try_from(pid).map_err(|_| NativeError::Errno(libc::EINVAL))?;
     let mut info = MaybeUninit::<libc::proc_taskallinfo>::zeroed();
@@ -414,9 +452,216 @@ pub(super) fn read_bsd_counters(pid: u32) -> Result<BsdCounters, NativeError> {
     // SAFETY: the call wrote the whole structure into the zeroed buffer.
     let info = unsafe { info.assume_init() };
     Ok(BsdCounters {
-        open_files: info.pbsd.pbi_nfiles,
         nice: info.pbsd.pbi_nice,
     })
+}
+
+/// The largest descriptor table one on-demand walk will enumerate.
+///
+/// `PROC_PIDLISTFDS` writes 8 bytes per descriptor, so this bounds the enumeration
+/// at 512 KiB and one syscall. It is deliberately far above
+/// [`OpenFileList::MAX_LISTED`], because the two caps bound different things:
+/// *classifying* a descriptor is free once the list exists, so the socket count can
+/// cover the whole table, while *naming* one costs a syscall and is capped much
+/// lower. The number matches Linux's `MAX_COUNTED_FDS` so both platforms give up at
+/// the same place.
+const MAX_ENUMERATED_DESCRIPTORS: usize = 65_536;
+
+/// `proc_fdtype` values from `<sys/proc_info.h>`, paired with the kind they mean.
+///
+/// A table rather than a `match` because the field the kernel fills is a `u32`
+/// while `libc`'s constants are `c_int`: comparing through `u32::try_from` makes it
+/// impossible for a negative constant to match a descriptor type by accident, and
+/// it keeps the whole mapping testable without a live process.
+const DESCRIPTOR_TYPES: [(c_int, OpenFileKind); 6] = [
+    (libc::PROX_FDTYPE_VNODE, OpenFileKind::File),
+    (libc::PROX_FDTYPE_SOCKET, OpenFileKind::Socket),
+    (libc::PROX_FDTYPE_PIPE, OpenFileKind::Pipe),
+    (libc::PROX_FDTYPE_KQUEUE, OpenFileKind::EventQueue),
+    (libc::PROX_FDTYPE_PSHM, OpenFileKind::SharedMemory),
+    (libc::PROX_FDTYPE_PSEM, OpenFileKind::Semaphore),
+];
+
+/// One process's descriptor table, as far as the caps allowed.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(super) struct DescriptorTable {
+    /// The descriptors whose paths were resolved.
+    pub(super) files: OpenFileList,
+    /// Sockets among *every* descriptor the kernel listed, not only the named ones.
+    ///
+    /// Free: `PROC_PIDLISTFDS` carries a `proc_fdtype` for each descriptor, so no
+    /// additional call is needed to tell a socket from a file.
+    pub(super) sockets: u32,
+}
+
+/// Walks one process's descriptor table (§7.2, §8.6).
+///
+/// # Cost
+///
+/// Two syscalls for the enumeration plus one `proc_pidfdinfo` per *named*
+/// descriptor. Measured on an M4 Pro against a 442-descriptor process: 3 µs for the
+/// enumeration and 216 µs for the 244 vnode paths in it, so a whole walk is well
+/// inside a millisecond and the [`OpenFileList::MAX_LISTED`] cap keeps it there for
+/// a process holding thousands. On-demand only — §8.6 puts it there and §16.1
+/// forbids it anywhere near the fast tier.
+pub(super) fn read_descriptors(pid: u32) -> Result<DescriptorTable, NativeError> {
+    let raw = c_int::try_from(pid).map_err(|_| NativeError::Errno(libc::EINVAL))?;
+    let listed = list_descriptors(raw)?;
+    let mut sockets = 0u32;
+    let mut entries = Vec::with_capacity(listed.len().min(OpenFileList::MAX_LISTED));
+    // One reusable 1200-byte buffer for the whole walk: a fresh one per descriptor
+    // would be the only allocation in the loop.
+    let mut info = MaybeUninit::<ffi::VnodeFdinfowithpath>::zeroed();
+    for descriptor in &listed {
+        let kind = descriptor_kind(descriptor.proc_fdtype);
+        if kind == OpenFileKind::Socket {
+            sockets = sockets.saturating_add(1);
+        }
+        // Past the cap the descriptor still counts towards the type tallies and
+        // towards `not_listed`; what it does not get is a syscall of its own.
+        if entries.len() >= OpenFileList::MAX_LISTED {
+            continue;
+        }
+        let path = if kind.has_path() {
+            read_descriptor_path(raw, descriptor.proc_fd, &mut info)
+        } else {
+            // §7.2's other half: a socket or a pipe has no path to withhold, and
+            // saying `permission denied` about one would be a false accusation.
+            MetricState::Unsupported
+        };
+        entries.push(OpenFileEntry {
+            descriptor: descriptor.proc_fd,
+            kind,
+            path,
+        });
+    }
+    Ok(DescriptorTable {
+        files: OpenFileList::listed(entries, listed.len()),
+        sockets,
+    })
+}
+
+/// The kind a `proc_fdtype` names, or [`OpenFileKind::Unknown`] for a type this
+/// build does not model.
+fn descriptor_kind(fdtype: u32) -> OpenFileKind {
+    DESCRIPTOR_TYPES
+        .iter()
+        .find(|(code, _)| u32::try_from(*code).is_ok_and(|code| code == fdtype))
+        .map_or(OpenFileKind::Unknown, |(_, kind)| *kind)
+}
+
+/// Enumerates one process's descriptors with `PROC_PIDLISTFDS`.
+///
+/// Two calls: a size probe and the read. The probe reports the size of the
+/// process's descriptor *table* rather than the number of descriptors in it — 360
+/// bytes for a process holding three, verified against macOS 26 — so it
+/// over-estimates and one allocation is always enough. If the table nevertheless
+/// grew past the buffer between the two calls the result is a prefix of it, which
+/// makes the total a floor; [`OpenFileList::listed`] then reports a floor for
+/// `not_listed` too, and that is the honest answer rather than a retry loop on a
+/// table that is changing under us.
+fn list_descriptors(pid: c_int) -> Result<Vec<libc::proc_fdinfo>, NativeError> {
+    let entry_size = size_of::<libc::proc_fdinfo>().max(1);
+    sysctl::clear_errno();
+    // SAFETY: a null buffer with a zero size is the documented size query for this
+    // flavour; the kernel writes nothing and returns the byte count it would need.
+    let needed =
+        unsafe { libc::proc_pidinfo(pid, libc::PROC_PIDLISTFDS, 0, core::ptr::null_mut(), 0) };
+    if needed <= 0 {
+        return empty_or_error();
+    }
+    let wanted = usize::try_from(needed).unwrap_or(0) / entry_size;
+    let capacity = wanted.clamp(1, MAX_ENUMERATED_DESCRIPTORS);
+    // Initialised rather than `MaybeUninit`, so a kernel that writes fewer entries
+    // than it promised leaves zeroes behind rather than anything to reason about.
+    let mut buffer = vec![
+        libc::proc_fdinfo {
+            proc_fd: 0,
+            proc_fdtype: 0,
+        };
+        capacity
+    ];
+    let want = c_int::try_from(capacity.saturating_mul(entry_size))
+        .map_err(|_| NativeError::Errno(libc::EINVAL))?;
+    sysctl::clear_errno();
+    // SAFETY: the buffer holds `capacity` initialised `proc_fdinfo`s and `want` is
+    // exactly its size in bytes, so the kernel cannot write past it. The flavour and
+    // the buffer element type match: `PROC_PIDLISTFDS` fills `proc_fdinfo`s.
+    let written = unsafe {
+        libc::proc_pidinfo(
+            pid,
+            libc::PROC_PIDLISTFDS,
+            0,
+            buffer.as_mut_ptr().cast::<c_void>(),
+            want,
+        )
+    };
+    if written <= 0 {
+        return empty_or_error();
+    }
+    buffer.truncate(usize::try_from(written).unwrap_or(0) / entry_size);
+    Ok(buffer)
+}
+
+/// Distinguishes "this process holds no descriptors" from "the read failed".
+///
+/// `PROC_PIDLISTFDS` reports both as zero bytes written: a process owned by another
+/// user answers 0 with `EPERM` and an exited one 0 with `ESRCH`, while a process
+/// that genuinely has an empty table answers 0 and leaves `errno` alone. Clearing
+/// `errno` before every call is what makes the two separable, and separating them is
+/// §26's rule: a refused table is not an empty one.
+fn empty_or_error() -> Result<Vec<libc::proc_fdinfo>, NativeError> {
+    if sysctl::errno() == 0 {
+        Ok(Vec::new())
+    } else {
+        Err(NativeError::last())
+    }
+}
+
+/// The path one descriptor points at, via `PROC_PIDFDVNODEPATHINFO`.
+///
+/// Never an empty string: a refusal is [`MetricState::PermissionDenied`] and a
+/// vnode the kernel has no name for is [`MetricState::Unsupported`] (§4).
+fn read_descriptor_path(
+    pid: c_int,
+    descriptor: i32,
+    info: &mut MaybeUninit<ffi::VnodeFdinfowithpath>,
+) -> MetricState<Box<str>> {
+    let Ok(want) = c_int::try_from(size_of::<ffi::VnodeFdinfowithpath>()) else {
+        return MetricState::Unsupported;
+    };
+    sysctl::clear_errno();
+    // SAFETY: `info` points at a `VnodeFdinfowithpath`-sized allocation and `want`
+    // is its real size, so the kernel cannot write past it. The flavour matches the
+    // buffer type: `PROC_PIDFDVNODEPATHINFO` fills exactly this structure.
+    let written = unsafe {
+        libc::proc_pidfdinfo(
+            pid,
+            descriptor,
+            ffi::PROC_PIDFDVNODEPATHINFO,
+            info.as_mut_ptr().cast::<c_void>(),
+            want,
+        )
+    };
+    if written != want {
+        // A descriptor closed between the listing and this call answers `EBADF`,
+        // which is a race rather than a defect; another user's process answers
+        // `EPERM`. Both are states, neither is a path.
+        return NativeError::last().to_state();
+    }
+    // SAFETY: the call wrote the whole structure, and the buffer was zeroed at
+    // construction in any case — `VnodeFdinfowithpath` is `Pod`, so every bit
+    // pattern of it is a valid value.
+    let filled = unsafe { info.assume_init_ref() };
+    let path = path_from_vnode(&filled.pvip.vip_path);
+    if path.is_empty() {
+        // The kernel resolved the descriptor but has no name for the object: an
+        // unlinked file, whose path will not come back on a retry. `Unsupported`
+        // rather than a temporary failure, and the entry's `kind` is what keeps it
+        // distinguishable from a socket.
+        return MetricState::Unsupported;
+    }
+    MetricState::Available(path)
 }
 
 /// Reads a process's argument vector via `kern.procargs2`.
@@ -976,8 +1221,8 @@ pub(super) fn detail_for(
     let mut detail = ProcessDetail::pending(identity, collected_at);
     match read_vnode_paths(pid) {
         Ok(paths) => {
-            detail.working_directory = MetricState::Available(paths.working_directory);
-            detail.root = MetricState::Available(paths.root);
+            detail.working_directory = paths.working_directory;
+            detail.root = paths.root;
         }
         Err(error) => {
             // §9.3's named case: another user's process hides its working
@@ -986,21 +1231,33 @@ pub(super) fn detail_for(
             detail.root = error.to_state();
         }
     }
-    match read_bsd_counters(pid) {
-        Ok(bsd) => {
-            detail.open_files = MetricState::Available(bsd.open_files);
-            detail.nice = MetricState::Available(bsd.nice);
+    detail.nice = match read_bsd_counters(pid) {
+        Ok(bsd) => MetricState::Available(bsd.nice),
+        Err(error) => error.to_state(),
+    };
+    // The descriptor walk answers three things at once, which is why it is one call
+    // site: `PROC_PIDLISTFDS` returns every descriptor with its `proc_fdtype`, so the
+    // count and the socket count both fall out of the enumeration that produces the
+    // list. This collector used to take the socket count as unreachable and the open
+    // count from `pbi_nfiles`; the first was wrong about the cost and the second was
+    // reading the table's *size* (see `read_bsd_counters`). Measured on an M4 Pro:
+    // 3 µs to enumerate a 442-descriptor process against 216 µs for the 244 vnode
+    // paths in it, so only the paths are capped.
+    match read_descriptors(pid) {
+        Ok(table) => {
+            detail.open_files =
+                MetricState::Available(u32::try_from(table.files.total()).unwrap_or(u32::MAX));
+            detail.sockets = MetricState::Available(table.sockets);
+            detail.open_file_list = MetricState::Available(table.files);
         }
         Err(error) => {
+            // §9.3 again: another user's descriptor table is refused wholesale, and
+            // a refused table is not an empty one (§26).
             detail.open_files = error.to_state();
-            detail.nice = error.to_state();
+            detail.sockets = error.to_state();
+            detail.open_file_list = error.to_state();
         }
     }
-    // Counting sockets means walking the descriptor table, which needs
-    // `PROC_PIDLISTFDS` and one `proc_pidfdinfo` per descriptor. §8.6 puts that on
-    // the on-demand tier, but §16.1's budget does not stretch to it for a process
-    // with thousands of descriptors, so it stays absent rather than sometimes-slow.
-    detail.sockets = MetricState::Unsupported;
     // No cgroups on macOS.
     detail.cgroup = MetricState::Unsupported;
     detail.container = MetricState::Unsupported;
@@ -1396,6 +1653,44 @@ mod tests {
             .expect("we can read our own cwd");
         assert!(cwd.starts_with('/'), "got {cwd}");
         assert!(mine.open_files.fresh().is_some_and(|count| *count > 0));
+        // `pvi_rdir` is empty for a process that has not been chrooted, which is every
+        // process this test can run in. §4 has no empty-string answer, so it must be
+        // the root it actually is.
+        assert_eq!(
+            mine.root.fresh().map(|root| &**root),
+            Some("/"),
+            "an unset root directory is `/`, never an empty cell"
+        );
+    }
+
+    #[test]
+    #[ignore = "platform smoke test: reads the live kernel"]
+    fn the_open_file_count_moves_when_a_file_is_opened() {
+        // The regression this guards: `pbi_nfiles` from `PROC_PIDTASKALLINFO` is the
+        // size of the descriptor table, not its occupancy, so it reads like a count and
+        // never changes. A number that cannot move is not a measurement (§26).
+        let me = std::process::id();
+        let before = detail_for(me, SystemTime::now(), ProcessIdentity::new(me, 1));
+        let before = *before.open_files.fresh().expect("our own descriptors");
+
+        let held: Vec<std::fs::File> = (0..8)
+            .filter_map(|_| std::fs::File::open("/etc/hosts").ok())
+            .collect();
+        assert_eq!(held.len(), 8, "the test needs eight open descriptors");
+        let during = detail_for(me, SystemTime::now(), ProcessIdentity::new(me, 1));
+        let during = *during.open_files.fresh().expect("our own descriptors");
+        assert!(
+            during >= before.saturating_add(8),
+            "opening eight files moved the count from {before} to {during}"
+        );
+
+        drop(held);
+        let after = detail_for(me, SystemTime::now(), ProcessIdentity::new(me, 1));
+        let after = *after.open_files.fresh().expect("our own descriptors");
+        assert!(
+            after < during,
+            "closing them moved it back: {after} < {during}"
+        );
     }
 
     #[test]
@@ -1475,6 +1770,150 @@ mod tests {
             names.resolve(unassigned),
             None,
             "a miss must be cached as a miss, not retried forever"
+        );
+    }
+
+    #[test]
+    fn every_documented_descriptor_type_maps_to_a_kind_and_the_rest_to_unknown() {
+        // The mapping is the only thing that decides whether a descriptor is
+        // described as a socket or accused of hiding its path, so it is worth
+        // pinning without a live process.
+        let expected = [
+            (libc::PROX_FDTYPE_VNODE, OpenFileKind::File),
+            (libc::PROX_FDTYPE_SOCKET, OpenFileKind::Socket),
+            (libc::PROX_FDTYPE_PIPE, OpenFileKind::Pipe),
+            (libc::PROX_FDTYPE_KQUEUE, OpenFileKind::EventQueue),
+            (libc::PROX_FDTYPE_PSHM, OpenFileKind::SharedMemory),
+            (libc::PROX_FDTYPE_PSEM, OpenFileKind::Semaphore),
+        ];
+        for (code, kind) in expected {
+            let code = u32::try_from(code).expect("the PROX_FDTYPE_* constants are non-negative");
+            assert_eq!(descriptor_kind(code), kind, "fdtype {code}");
+        }
+        // `PROX_FDTYPE_FSEVENTS`, `NETPOLICY`, `CHANNEL` and `NEXUS` exist and are
+        // deliberately not modelled: naming them would be guessing at what a user
+        // should make of them, and `unknown` is honest.
+        for code in [
+            libc::PROX_FDTYPE_ATALK,
+            libc::PROX_FDTYPE_FSEVENTS,
+            libc::PROX_FDTYPE_NETPOLICY,
+            libc::PROX_FDTYPE_CHANNEL,
+            libc::PROX_FDTYPE_NEXUS,
+        ] {
+            let code = u32::try_from(code).expect("non-negative");
+            if code == 0 {
+                // `ATALK` is 0, which is also what a zeroed buffer holds; it must not
+                // be mistaken for a file.
+                assert_eq!(descriptor_kind(code), OpenFileKind::Unknown);
+                continue;
+            }
+            assert_eq!(
+                descriptor_kind(code),
+                OpenFileKind::Unknown,
+                "fdtype {code}"
+            );
+        }
+        assert_eq!(descriptor_kind(u32::MAX), OpenFileKind::Unknown);
+    }
+
+    #[test]
+    #[ignore = "platform smoke test: reads the live kernel"]
+    fn our_own_descriptors_are_listed_with_paths_and_a_socket_count() {
+        // Open one file and one socket so both branches of the walk are exercised
+        // against the real kernel rather than against a hand-built table.
+        let file = std::fs::File::open("/etc/hosts").expect("/etc/hosts is readable");
+        let socket = std::net::UdpSocket::bind("127.0.0.1:0").expect("a loopback socket");
+        let table = read_descriptors(std::process::id()).expect("our own descriptors");
+
+        assert!(table.files.count() >= 2, "{:?}", table.files);
+        assert!(
+            table.files.is_complete(),
+            "a test binary cannot hold more than the cap"
+        );
+        assert!(table.sockets >= 1, "the bound socket must be counted");
+
+        // The kernel names the vnode, so a symlinked path comes back resolved:
+        // `/etc/hosts` is reported as `/private/etc/hosts` on macOS.
+        let named = table
+            .files
+            .entries()
+            .iter()
+            .filter(|entry| entry.kind == OpenFileKind::File)
+            .filter_map(|entry| entry.path.fresh())
+            .any(|path| path.ends_with("etc/hosts"));
+        assert!(named, "{:?}", table.files.entries());
+
+        for entry in table.files.entries() {
+            // §4: every descriptor answers with either a path or a named state, and
+            // never with an empty string.
+            match entry.path.fresh() {
+                Some(path) => assert!(
+                    !path.is_empty(),
+                    "fd {} has an empty path",
+                    entry.descriptor
+                ),
+                None => assert!(entry.path.placeholder().is_some()),
+            }
+            if !entry.kind.has_path() {
+                assert_eq!(
+                    entry.path,
+                    MetricState::Unsupported,
+                    "a {} has no path to refuse",
+                    entry.kind.label()
+                );
+            }
+        }
+        drop(file);
+        drop(socket);
+    }
+
+    #[test]
+    #[ignore = "platform smoke test: reads the live kernel"]
+    fn a_root_owned_descriptor_table_is_refused_rather_than_reported_as_empty() {
+        // §26: the difference between "launchd holds no files" and "we are not
+        // allowed to look" is the whole point of `MetricState`.
+        let error = read_descriptors(1).expect_err("launchd must refuse us");
+        assert!(error.is_permission_denied(), "{error:?}");
+        let state: MetricState<OpenFileList> = error.to_state();
+        assert_eq!(state, MetricState::PermissionDenied);
+
+        let detail = detail_for(1, SystemTime::now(), ProcessIdentity::new(1, 1));
+        assert_eq!(detail.open_file_list, MetricState::PermissionDenied);
+        assert_eq!(detail.sockets, MetricState::PermissionDenied);
+    }
+
+    #[test]
+    #[ignore = "platform smoke test: times the on-demand descriptor walk"]
+    fn the_descriptor_walk_is_bounded_even_for_the_busiest_process_on_the_machine() {
+        // §16.1 applies to the on-demand tier too: the cap is what makes a process
+        // holding thousands of descriptors cost the same as one holding hundreds.
+        let mut buffer = Vec::new();
+        let table = enumerate(&mut buffer).expect("readable");
+        let mut worst = Duration::ZERO;
+        let mut worst_pid = 0u32;
+        let mut listed = 0usize;
+        for process in &table {
+            let start = Instant::now();
+            let Ok(walked) = read_descriptors(process.identity.pid) else {
+                continue;
+            };
+            let elapsed = start.elapsed();
+            listed += 1;
+            assert!(walked.files.count() <= OpenFileList::MAX_LISTED);
+            if elapsed > worst {
+                worst = elapsed;
+                worst_pid = process.identity.pid;
+            }
+        }
+        assert!(listed > 0, "no process on this machine allowed a walk");
+        // Measured on an M4 Pro across the ~620 of 956 processes that allow a walk:
+        // 1.2 ms in a release build and 1.4 ms in a debug one for the worst of them,
+        // with one 26 ms outlier on the very first cold walk of a session. Fifty
+        // milliseconds is a ceiling that a regression in the cap would blow through
+        // while cold caches do not.
+        assert!(
+            worst < Duration::from_millis(50),
+            "pid {worst_pid} took {worst:?} over {listed} processes"
         );
     }
 

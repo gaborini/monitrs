@@ -1,0 +1,42 @@
+---
+source: crates/monitrs-tui/tests/view_snapshots.rs
+expression: text
+---
+|+ monitrs  host:dev-mbp  [>LIVE]  1s  up 3d 04:12 ---------------------------------------------------------------------------- 00:00:00Z --+|
+|| CPU .warming up [......................................................................................]  load .warming up  8 cpu  8 core||
+|| MEM .warming up [......................................................................................]  .warming up/32G  swap 205M/2.0G||
+|+ FILESYSTEM CAPACITY -------------------------------------------- 2 mounted, 1 virtual hidden, = shares a device, SIZE is not additive ---+|
+|| MOUNT              DEVICE     TYPE      SIZE  USED AVAIL  USE% INODE%  IFREE CAPACITY                                                    ||
+||=/                  disk0s1    fakefs    494G  374G  120G   76%   9.9%   4.4M [################=-----]                                    ||
+||=/System/...es/Data disk0s1    fakefs    494G  374G  120G   76%    93%   342K [################=-----]                                    ||
+|+ DEVICE THROUGHPUT ---------------------------------------------------------------------------------------------- busy - (unsupported) ---+|
+||DEVICE      READ/s WRITE/s   R-IOPS   W-IOPS MODEL            MOUNTS                                                                      ||
+||disk0      warming warming  warming  warming Fake NVMe        /                                                                           ||
+|+ TOP DISK I/O ------------------------------------------------------------------------------------------------------------ 5 processes ---+|
+|| READ/s WRITE/s TOTAL R TOTAL W      PID NAME                                                                                             ||
+||warming warming warming warming        1 launchd                                                                                          ||
+||warming warming warming warming      507 WindowServer                                                                                     ||
+||warming warming warming warming     1221 postgres                                                                                         ||
+||warming warming warming warming     9182 node                                                                                             ||
+||warming warming warming warming    31842 rustc                                                                                            ||
+||                                                                                                                                          ||
+||                                                                                                                                          ||
+||                                                                                                                                          ||
+||                                                                                                                                          ||
+||                                                                                                                                          ||
+||                                                                                                                                          ||
+||                                                                                                                                          ||
+||                                                                                                                                          ||
+||                                                                                                                                          ||
+||                                                                                                                                          ||
+||                                                                                                                                          ||
+||                                                                                                                                          ||
+||                                                                                                                                          ||
+||                                                                                                                                          ||
+||                                                                                                                                          ||
+||                                                                                                                                          ||
+|+ THROUGHPUT HISTORY 5m --------------------------------------------------------------------------------------------------- all devices ---+|
+|| READ                                                                                                                                     ||
+|| WRITE                                                                                                                                    ||
+|+------------------------------------------------------------------------------------------------------------------------------------------+|
+| 1 Overview  2 Processes  3 CPU [4 Storage] 5 Network  6 Inspect  7 Battery                                                 / filter  ? help|

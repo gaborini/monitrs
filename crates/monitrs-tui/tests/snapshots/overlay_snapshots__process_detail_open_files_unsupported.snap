@@ -1,0 +1,34 @@
+---
+source: crates/monitrs-tui/tests/overlay_snapshots.rs
+expression: text
+---
+|                                                                                                        |
+|                                                                                                        |
+|                                                                                                        |
+|                         + PROCESS ---------------------------- pid 31842 ---+                          |
+|                         |NAME rustc   STATE sleeping   USER   gabor         |                          |
+|                         |IDENTITY      pid 31842 start key 900100           |                          |
+|                         |EXECUTABLE    /usr/bin/rustc                       |                          |
+|                         |COMMAND       cargo build --release                |                          |
+|                         |AGE   01:20   STARTED   1970-01-01 00:00:00 UTC    |                          |
+|                         |CPU   287%   RSS   2.6G   MEM%   8.1%   THREADS   4|                          |
+|                         |READ   21M/s   WRITE   42M/s   VIRTUAL   16G       |                          |
+|                         |ANCESTRY        launchd                            |                          |
+|                         |CHILDREN        0                                  |                          |
+|                         |---------------------------------------------------|                          |
+|                         |CWD             /Users/dev/pgit/monitrs            |                          |
+|                         |ROOT            /                                  |                          |
+|                         |OPEN FILES      42                                 |                          |
+|                         |SOCKETS         3                                  |                          |
+|                         |DESCRIPTORS   - n/a                                |                          |
+|                         |DESCENDANTS     0                                  |                          |
+|                         |NICE            0                                  |                          |
+|                         |CGROUP        - n/a                                |                          |
+|                         |CONTAINER     - n/a                                |                          |
+|                         |ANCESTOR      launchd (pid 1)                      |                          |
+|                         |COLLECTED     1970-01-01 00:00:00 UTC              |                          |
+|                         +---------------------------------------------------+                          |
+|                                                                                                        |
+|                                                                                                        |
+|                                                                                                        |
+|                                                                                                        |

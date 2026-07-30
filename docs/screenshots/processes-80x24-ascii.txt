@@ -1,24 +1,24 @@
-+ monitrs  host:dev-mbp  [>LIVE]  250ms --------- 17:28:46Z --+
- CPU 32%  MEM 61%  load  8.56 7.61 6.11  29G/48G  swap off  dsk r204K/s w167K/s
++ monitrs  host:dev-mbp  [>LIVE]  250ms --------- 18:18:37Z --+
+ CPU 43%  MEM 63%  load  5.79 7.66 8.42  30G/48G  swap off  dsk r142K/s w692K/s
 + PROCESSES  sort CPU% desc  no kthreads ------------------------ 976 total ---+
 |      PID USER     S   CPU%  MEM%   RSS  READ/s WRITE/s NAME                  |
-|>   95563 me       R    41%  0.4%  219M    0B/s    0B/s iTerm2                |
-|    30770 me       R    20%  0.3%  158M    0B/s    0B/s Codex (Service)       |
-|    62728 me       R    16%  1.8%  873M    0B/s    0B/s claude                |
-|    12764 me       R    14%  1.0%  471M    0B/s    0B/s Google Chrome Helpe...|
-|    84339 me       R    11%  0.6%  302M    0B/s    0B/s Google Chrome Helper  |
-|    31229 me       R   8.6%  1.1%  563M    0B/s    0B/s Codex (Renderer)      |
-|    99823 me       R   7.8%  0.0%   19M    0B/s    0B/s capture-c2fa8e3cab7...|
-|     1398 me       R   7.4%  0.3%  166M    0B/s    0B/s Terminal              |
-|     1221 me       R   5.0%  0.1%   48M    0B/s    0B/s corespeechd           |
-|    95738 me       R   4.1%  0.1%   26M    0B/s    0B/s monitrs               |
-|    96397 me       R   3.9%  2.6%  1.3G    0B/s    0B/s Google Chrome Helpe...|
-|    84322 me       R   3.2%  1.7%  824M    0B/s    0B/s Google Chrome         |
-|     6229 me       R   3.1%  0.1%   54M    0B/s    0B/s VTDecoderXPCService   |
-|    84340 me       R   2.2%  0.5%  236M   18K/s  157K/s Google Chrome Helper  |
-|    91663 me       R   1.4%  0.7%  349M    0B/s    0B/s Google Chrome Helpe...|
-|     7365 me       R   0.8%  1.2%  581M    0B/s    0B/s Google Chrome Helpe...|
-|    84347 me       R   0.7%  0.4%  190M    0B/s    0B/s Google Chrome Helpe...|
-|     8930 me       R   0.6%  0.1%   59M    0B/s    0B/s AdobeResourceSynchr...|
+|>   95563 me       R    43%  0.4%  221M    0B/s    0B/s iTerm2                |
+|    31229 me       R    23%  1.1%  563M    0B/s    0B/s Codex (Renderer)      |
+|    30770 me       R    22%  0.3%  153M    0B/s    0B/s Codex (Service)       |
+|    23618 me       R    19%  0.1%   40M    0B/s    0B/s capture-32a1f72385b...|
+|     7365 me       R    17%  1.3%  624M    0B/s    0B/s Google Chrome Helpe...|
+|     1082 me       R    15%  0.0%   18M    0B/s  171K/s BiomeAgent            |
+|    62728 me       R    13%  2.0%  986M    0B/s    0B/s claude                |
+|     1398 me       R    12%  0.4%  206M    0B/s    0B/s Terminal              |
+|    84339 me       R   8.1%  0.7%  322M    0B/s    0B/s Google Chrome Helper  |
+|    30685 me       R   7.6%  0.9%  420M  398K/s    0B/s ChatGPT               |
+|     1440 me       R   7.6%  0.2%   90M    0B/s    0B/s Spotlight             |
+|     1063 me       R   6.9%  0.0%   18M    0B/s    0B/s trustd                |
+|     1089 me       R   6.6%  0.1%   26M  190K/s    0B/s ContextStoreAgent     |
+|    67436 me       R   5.4%  0.1%   26M    0B/s   28K/s spotlightknowledged...|
+|    23568 me       R   5.3%  0.1%   27M  9.5K/s    0B/s AddressBookSourceSync |
+|    95738 me       R   4.8%  0.1%   30M    0B/s    0B/s monitrs               |
+|     1402 me       R   3.0%  0.1%   50M    0B/s    0B/s Dock                  |
+|     1130 me       R   2.4%  0.1%   31M    0B/s    0B/s WindowManager         |
 +------------------------------------------------------------------------------+
- 1 [2] 3  4  5  6   filter:                                     / filter  ? help
+ 1 [2] 3  4  5  6  7   filter:                                  / filter  ? help

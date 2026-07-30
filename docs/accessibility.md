@@ -243,7 +243,7 @@ signals are:
   both of its colours are the terminal's default.
 
 The characters drawn are **identical** at all four depths. That is asserted for all
-five screens in all three themes: if a depth changed a character, one rendering
+seven screens in all three themes: if a depth changed a character, one rendering
 would be carrying meaning the other did not.
 
 A theme cannot add its own modifiers. `Token::emphasis` belongs to the token's
@@ -433,7 +433,7 @@ adversarial `NaN` and infinite inputs at every width from 0 to 40. That is a rea
 guarantee for the design system, but it did not cover the strings that reach the
 screen *around* the glyphs. Three gaps were closed:
 
-1. **Whole frames.** All five screens × ten fixtures (including the warming-up
+1. **Whole frames.** All seven screens × ten fixtures (including the warming-up
    first frame, the frame before any snapshot, permission-denied, stale, 256 cores,
    an empty process list, and a saturated machine) × five sizes (140×38, 110×30,
    80×24, 60×16, 52×12) are now asserted byte-by-byte. The previous frame-level
@@ -637,7 +637,7 @@ which costs one cell each and is the same `Cue` the radar already uses.
 ### Shortfall: the key hints disappear at 60×16
 
 At 60×16 the tab strip and the `? help` hint are dropped for the row they occupy.
-Every key still works — `?` still opens help, `1`–`5` still switch screens — but
+Every key still works — `?` still opens help, `1`–`7` still switch screens — but
 the only affordance telling a first-time user that is gone at exactly the size
 where the interface is least self-explanatory. **Not changed** — §5.7 asks only for
 "a stable minimal process list" at this size — and the fix costs one of the

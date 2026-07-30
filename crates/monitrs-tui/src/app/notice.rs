@@ -50,6 +50,13 @@ pub enum NoticeKind {
     Export,
     /// A terminal error.
     Terminal,
+    /// A Pressure Radar signal that crossed a threshold (§2.3, §11.3).
+    ///
+    /// Also not one of §14.1's error classes: nothing failed, and a `watch` is not
+    /// a fault. It is here because §14.1's log is the only place monitrs can say
+    /// anything while the alternate screen is up, and a signal escalating is the one
+    /// thing the user would otherwise have to keep watching the screen for.
+    Pressure,
     /// A request the interface declined to perform, such as a destructive action
     /// while the timeline is not live.
     ///
@@ -60,13 +67,14 @@ pub enum NoticeKind {
 
 impl NoticeKind {
     /// Every kind, for exhaustiveness tests and for the Inspect screen.
-    pub const ALL: [Self; 7] = [
+    pub const ALL: [Self; 8] = [
         Self::Collector,
         Self::Permission,
         Self::Config,
         Self::ProcessAction,
         Self::Export,
         Self::Terminal,
+        Self::Pressure,
         Self::Interaction,
     ];
 
@@ -80,6 +88,7 @@ impl NoticeKind {
             Self::ProcessAction => "process",
             Self::Export => "export",
             Self::Terminal => "terminal",
+            Self::Pressure => "pressure",
             Self::Interaction => "input",
         }
     }

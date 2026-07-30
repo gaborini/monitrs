@@ -39,4 +39,4 @@ expression: text_of(&buffer)
 ||                                                                                                                                          ||
 ||                                                                                                                                          ||
 |+------------------------------------------------------------------------------------------------------------------------------------------+|
-| 1 Overview [2 Processes] 3 CPU  4 Storage  5 Network  6 Inspect                                                            / filter  ? help|
+| 1 Overview [2 Processes] 3 CPU  4 Storage  5 Network  6 Inspect  7 Battery                                                 / filter  ? help|

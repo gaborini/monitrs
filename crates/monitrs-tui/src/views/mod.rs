@@ -1,4 +1,4 @@
-//! The five screens of §7, and the header and status footer that frame them
+//! The seven screens of §7, and the header and status footer that frame them
 //! (§5.5, §5.7).
 //!
 //! A *screen* is the layer above [`crate::widgets`]: it decides what belongs on
@@ -50,6 +50,7 @@
 //!
 //! [`MetricState`]: monitrs_core::model::MetricState
 
+pub mod battery;
 pub mod cpu;
 pub mod inspect;
 pub mod network;
@@ -229,6 +230,7 @@ pub fn render(frame: &mut Frame<'_>, area: Rect, state: &AppState, presentation:
         ViewId::Storage => storage::render(frame, area, state, presentation),
         ViewId::Network => network::render(frame, area, state, presentation),
         ViewId::Inspect => inspect::render(frame, area, state, presentation),
+        ViewId::Battery => battery::render(frame, area, state, presentation),
     }
 }
 
@@ -1561,7 +1563,7 @@ mod tests {
         snapshot.sensors.temperatures = MetricState::Available(vec![TemperatureReading {
             label: "package".into(),
             celsius: 106.0,
-            high_celsius: Some(95.0),
+            peak_celsius: Some(95.0),
             critical_celsius: Some(105.0),
         }]);
         snapshot.sensors.battery = MetricState::Available(BatterySnapshot {
@@ -1569,7 +1571,9 @@ mod tests {
             state: ChargeState::Discharging,
             time_remaining: MetricState::Unsupported,
             cycle_count: MetricState::Unsupported,
-            health: MetricState::Unsupported,
+            capacity: MetricState::Unsupported,
+            temperature_celsius: MetricState::Unsupported,
+            power_watts: MetricState::Unsupported,
         });
         let cpu = cpu_note_segments(&snapshot);
         let temperature = cpu

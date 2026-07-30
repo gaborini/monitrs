@@ -27,19 +27,24 @@
 #![allow(clippy::expect_used, clippy::unwrap_used)]
 
 use core::time::Duration;
+use std::sync::Arc;
 use std::time::{Instant, SystemTime};
 
 use monitrs_collectors::fake::{FakeCollector, FakeProcess, Pattern, Scenario};
 use monitrs_collectors::source::{SampleTick, SnapshotSource};
 use monitrs_collectors::tier::DueTiers;
 use monitrs_core::SystemSnapshot;
+use monitrs_core::diagnostics::PressureEngine;
 use monitrs_core::history::{HistoricalSample, HistoryConfig, HistoryRing};
 use monitrs_core::model::{
     ProcessDetail, ProcessDetailResult, ProcessIdentity, ProcessSnapshot, ProcessState,
 };
 use monitrs_core::process::{ProcessSort, ProcessSortKey, SortDirection};
 use monitrs_tui::action::{PendingProcessAction, SignalKind};
-use monitrs_tui::app::{AppSettings, AppState, Notice, NoticeKind, ProcessActionStage, TextInput};
+use monitrs_tui::app::{
+    AppSettings, AppState, Notice, NoticeKind, ProcessActionStage, TextInput, apply,
+};
+use monitrs_tui::event::Event;
 use monitrs_tui::glyphs::GlyphSet;
 use monitrs_tui::keymap::{InputMode, Keymap};
 use monitrs_tui::theme::{ColorDepth, ThemeId};
@@ -128,7 +133,17 @@ fn reaped_process() -> ProcessSnapshot {
 
 /// The on-demand detail of the reference process (§8.6).
 fn reference_detail(identity: ProcessIdentity) -> ProcessDetail {
-    let mut collector = FakeCollector::new(Scenario::default());
+    detail_from(Scenario::default(), identity)
+}
+
+/// The on-demand detail `scenario` produces for `identity`.
+///
+/// Taken from the fake rather than assembled by hand for the reason §17.5 gives: the
+/// three descriptor-listing states the snapshots below pin — listed, refused, and
+/// unsupported — are states a real machine has exactly one of at a time, and a
+/// hand-built `ProcessDetail` could drift into a shape no collector produces.
+fn detail_from(scenario: Scenario, identity: ProcessIdentity) -> ProcessDetail {
+    let mut collector = FakeCollector::new(scenario);
     match collector.process_detail(identity) {
         ProcessDetailResult::Loaded(detail) => *detail,
         other => panic!("the fake collector refused a detail it should have: {other:?}"),
@@ -176,6 +191,37 @@ fn session_notices() -> AppState {
         NoticeKind::ProcessAction,
         "PID 31842 has already exited; no signal was sent",
     ));
+    state
+}
+
+/// The notices a session produces when a pressure signal escalates (§2.3, §11.3).
+///
+/// Driven through the whole path rather than written out: the fake collector produces
+/// a saturated machine, [`PressureEngine`] derives the radar exactly as the runtime
+/// does (§2.3 puts the engine there, not in a collector), and the *reducer* is what
+/// decides a transition happened and records it. A notice assembled by hand here would
+/// still render beautifully with the wiring that produces it broken.
+///
+/// Fourteen samples because the §12 default `sustained_samples` is 10 and the first
+/// sample has no interval: the escalation lands part-way through, which is also what
+/// makes this a test of "once" rather than "once a second".
+fn pressure_alert_notices() -> AppState {
+    let mut state = AppState::new(AppSettings {
+        started_at: origin(),
+        size: (100, 30),
+        ..AppSettings::default()
+    });
+    let saturated = Scenario {
+        cpu: Pattern::Steady(98.0),
+        ..Scenario::default()
+    };
+    let mut engine = PressureEngine::default();
+    for mut snapshot in samples(saturated, 14) {
+        snapshot.pressure = engine.observe(&snapshot);
+        let at = snapshot.captured_at;
+        let _ = apply::<()>(&mut state, Event::Snapshot(Arc::new(snapshot)));
+        state.record_render(at, Duration::from_millis(4));
+    }
     state
 }
 
@@ -529,6 +575,85 @@ fn process_detail_with_refused_metrics() {
 }
 
 // ---------------------------------------------------------------------------
+// §7.2: the open-file and socket listing, in each of its three states
+// ---------------------------------------------------------------------------
+
+#[test]
+fn process_detail_open_files_listed() {
+    // The interesting case is not "a process with files" but a process whose files
+    // are of *different* kinds: a named file, a pipe and a socket with no path at
+    // all, and one descriptor the OS refused. §4 requires the three to be
+    // distinguishable from each other and from a zero, and this is the frame that
+    // proves they are.
+    //
+    // Rendered at §5.7's 80×24 floor, scrolled onto the listing, because that is
+    // where the two things most likely to break are visible at once: a path too long
+    // for the panel gets §5.4's truncation marker, and the header says how much of
+    // the list is off-screen.
+    let process = spiking_process();
+    let detail = reference_detail(process.identity);
+    let buffer = render(80, 24, |buffer, area| {
+        ProcessDetailOverlay::new(ascii(), process.identity, Some(&process), Some(&detail))
+            .with_scroll(4)
+            .render(area, buffer);
+    });
+    let text = text_of(&buffer);
+    assert!(text.contains("socket"), "{text}");
+    assert!(
+        text.contains("not listed"),
+        "the cap must be visible:\n{text}"
+    );
+    assert!(
+        text.contains("..."),
+        "a path too long for the panel:\n{text}"
+    );
+    assert_strict_ascii(&buffer);
+    insta::assert_snapshot!(text);
+}
+
+#[test]
+fn process_detail_open_files_refused() {
+    // Another user's process: the descriptor table is refused wholesale, so there are
+    // no rows at all and the summary row is the only thing that can say why.
+    let process = spiking_process();
+    let detail = detail_from(Scenario::permission_denied(), process.identity);
+    let buffer = render(WIDTH, HEIGHT, |buffer, area| {
+        ProcessDetailOverlay::new(ascii(), process.identity, Some(&process), Some(&detail))
+            .render(area, buffer);
+    });
+    let text = text_of(&buffer);
+    let row = text
+        .lines()
+        .find(|line| line.contains("DESCRIPTORS"))
+        .expect("the descriptor summary row");
+    assert!(row.contains("! permission denied"), "{row}");
+    assert_strict_ascii(&buffer);
+    insta::assert_snapshot!(text);
+}
+
+#[test]
+fn process_detail_open_files_unsupported() {
+    // A platform whose collector cannot name descriptors at all — everything on the
+    // bare `sysinfo` baseline. `n/a` and its `-`, never an empty list that would read
+    // as a process holding nothing open.
+    let process = spiking_process();
+    let detail = detail_from(Scenario::without_open_file_listing(), process.identity);
+    let buffer = render(WIDTH, HEIGHT, |buffer, area| {
+        ProcessDetailOverlay::new(ascii(), process.identity, Some(&process), Some(&detail))
+            .render(area, buffer);
+    });
+    let text = text_of(&buffer);
+    let row = text
+        .lines()
+        .find(|line| line.contains("DESCRIPTORS"))
+        .expect("the descriptor summary row");
+    assert!(row.contains("- n/a"), "{row}");
+    assert!(!row.contains("listed"), "{row}");
+    assert_strict_ascii(&buffer);
+    insta::assert_snapshot!(text);
+}
+
+// ---------------------------------------------------------------------------
 // §6.2: the filter editor and the sort selector
 // ---------------------------------------------------------------------------
 
@@ -641,6 +766,43 @@ fn notice_overlay_unicode() {
     let buffer = render(WIDTH, 16, |buffer, area| {
         NoticeOverlay::new(unicode(), state.notices())
             .with_dropped(state.notice_log().dropped())
+            .with_dismiss_hint("Esc")
+            .render(area, buffer);
+    });
+    insta::assert_snapshot!(text_of(&buffer));
+}
+
+#[test]
+fn a_pressure_escalation_is_announced_in_the_notice_panel_ascii() {
+    // §2.3, §14.1: the user should not have to watch the radar. The line has to name
+    // the signal, the state it reached, and the rule that produced it.
+    let state = pressure_alert_notices();
+    let buffer = render(WIDTH, 12, |buffer, area| {
+        NoticeOverlay::new(ascii(), state.notices())
+            .with_dismiss_hint("Esc")
+            .render(area, buffer);
+    });
+    assert_strict_ascii(&buffer);
+    let text = text_of(&buffer);
+    assert!(text.contains("pressure CPU is now critical"), "{text}");
+    assert!(
+        state
+            .notices()
+            .iter()
+            .filter(|notice| notice.kind == NoticeKind::Pressure)
+            .count()
+            == 1,
+        "fourteen snapshots of the same saturated CPU must produce one line: {:?}",
+        state.notices()
+    );
+    insta::assert_snapshot!(text);
+}
+
+#[test]
+fn a_pressure_escalation_is_announced_in_the_notice_panel_unicode() {
+    let state = pressure_alert_notices();
+    let buffer = render(WIDTH, 12, |buffer, area| {
+        NoticeOverlay::new(unicode(), state.notices())
             .with_dismiss_hint("Esc")
             .render(area, buffer);
     });

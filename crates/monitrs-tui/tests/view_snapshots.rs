@@ -748,14 +748,116 @@ fn the_cpu_screen_while_warming_up() {
 
 #[test]
 fn the_storage_screen() {
-    // §7.3: two clearly labelled sections, and no unlabelled percentage.
+    // §7.3: four clearly labelled sections, and no unlabelled percentage.
     let state = Fixture::new((140, 38), ViewId::Storage).build();
     let text = text_of(&frame(&state, ascii()));
     assert!(text.contains("FILESYSTEM CAPACITY"), "{text}");
     assert!(text.contains("DEVICE THROUGHPUT"), "{text}");
+    assert!(text.contains("TOP DISK I/O"), "{text}");
+    assert!(text.contains("THROUGHPUT HISTORY"), "{text}");
     // The fake platform cannot produce a device busy figure, so the column is not
     // drawn and the panel says why.
     assert!(!text.contains("BUSY"), "{text}");
+    // Inodes are a second percentage of a second thing, under their own heading.
+    assert!(text.contains("INODE%"), "{text}");
+    // Two mounts share the fake APFS container, so both are marked and the panel
+    // says what the mark means — without it a reader adds 494G to 494G.
+    assert!(text.contains("shares a device"), "{text}");
+    assert_eq!(
+        text.lines()
+            .filter(|line| line.starts_with("|=") || line.starts_with("||="))
+            .count(),
+        2,
+        "both shared mounts must carry the marker:\n{text}"
+    );
+    insta::assert_snapshot!(text);
+}
+
+#[test]
+fn the_storage_screen_ranks_the_processes_using_the_disk() {
+    // The panel the screen exists for: *what is writing to my disk right now*. A real
+    // machine has hundreds of processes, so this is the fixture that shows the ranking
+    // filling the panel rather than the five-process reference scenario.
+    let state = Fixture::new((140, 38), ViewId::Storage)
+        .with_scenario(Scenario::with_process_count(40))
+        .build();
+    let text = text_of(&frame(&state, ascii()));
+    assert!(text.contains("TOP DISK I/O"), "{text}");
+    // Ordered by read+write, so the busiest row is above the quietest.
+    let first = text
+        .lines()
+        .skip_while(|line| !line.contains("TOTAL R"))
+        .nth(1)
+        .expect("a first ranked row");
+    assert!(first.contains("rustc"), "{text}");
+    // §2.3, §2.5: a panel that dropped rows says how many.
+    assert!(text.contains("21 of 40"), "{text}");
+    insta::assert_snapshot!(text);
+}
+
+#[test]
+fn the_storage_screen_with_per_process_io_refused() {
+    // §4, §9.3: the rows stay — a process whose counters were refused is still a
+    // process — and the panel says once why every figure below reads the same.
+    let state = Fixture::new((140, 38), ViewId::Storage)
+        .with_scenario(Scenario::permission_denied())
+        .build();
+    let text = text_of(&frame(&state, ascii()));
+    assert!(text.contains("per-process io"), "{text}");
+    assert!(
+        text.contains("permission denied") || text.contains("denied"),
+        "{text}"
+    );
+    assert!(
+        !text.contains("0B/s"),
+        "a refused counter must not read as an idle process:\n{text}"
+    );
+    insta::assert_snapshot!(text);
+}
+
+#[test]
+fn the_storage_screen_with_nothing_running() {
+    // A locked-down container really can show no processes at all, and the I/O panel
+    // has to say so rather than looking like a panel that failed to draw.
+    let state = Fixture::new((140, 38), ViewId::Storage)
+        .with_scenario(Scenario::empty())
+        .build();
+    let text = text_of(&frame(&state, ascii()));
+    assert!(text.contains("no processes visible"), "{text}");
+    insta::assert_snapshot!(text);
+}
+
+#[test]
+fn the_storage_screen_while_warming_up() {
+    // §8.2: the first sample has no rates at all, so every throughput cell and the
+    // history say so rather than showing zero.
+    let state = Fixture::new((140, 38), ViewId::Storage)
+        .with_samples(1)
+        .build();
+    let text = text_of(&frame(&state, ascii()));
+    assert!(text.contains("warming"), "{text}");
+    assert!(
+        !text.contains("0B/s"),
+        "a warming-up rate read as zero:\n{text}"
+    );
+    insta::assert_snapshot!(text);
+}
+
+#[test]
+fn the_storage_screen_in_the_compact_band() {
+    // §4 permits hiding an optional field where space is scarce, but not hiding the
+    // fact that it was hidden: at 80 columns the inode columns go and the panel says
+    // they need a wider terminal.
+    let state = Fixture::new((80, 24), ViewId::Storage).build();
+    let text = text_of(&frame(&state, ascii()));
+    assert!(!text.contains("INODE%"), "{text}");
+    for line in text.lines() {
+        assert_eq!(
+            monitrs_core::units::display_width(line),
+            82,
+            "a row is not exactly 80 cells wide: {line:?}"
+        );
+    }
     insta::assert_snapshot!(text);
 }
 
@@ -780,6 +882,66 @@ fn the_network_screen_with_a_known_link_speed() {
         })
         .build();
     insta::assert_snapshot!(text_of(&frame(&state, ascii())));
+}
+
+#[test]
+fn the_battery_screen() {
+    // The laptop case: every field the screen can show, filled in. The three
+    // capacity-related figures — 82% charge, 92% health, 48.2 of 52.6 Wh — are
+    // deliberately distinct numbers, because a screen where two of them were swapped
+    // must be visibly wrong in the snapshot.
+    let state = Fixture::new((140, 38), ViewId::Battery).build();
+    let text = text_of(&frame(&state, ascii()));
+    assert!(text.contains("BATTERY"), "{text}");
+    assert!(text.contains("discharging"), "{text}");
+    assert!(text.contains("TO EMPTY"), "{text}");
+    assert!(text.contains("52.6 Wh design"), "{text}");
+    // §17.3: the thermal sensors get a panel of their own rather than surviving only
+    // as the single hottest figure in the Overview header.
+    assert!(text.contains("THERMAL SENSORS"), "{text}");
+    assert!(text.contains("performance"), "{text}");
+    insta::assert_snapshot!(text);
+}
+
+#[test]
+fn the_battery_screen_on_a_machine_with_no_battery() {
+    // §4 and §26, and the case every CI runner, server, container and desktop hits.
+    // The screen must name the absence and its reason, and must not put a zero, an
+    // empty bar, or a blank panel where the charge level would go.
+    let state = Fixture::new((140, 38), ViewId::Battery)
+        .with_scenario(Scenario::no_battery())
+        .build();
+    let text = text_of(&frame(&state, ascii()));
+    assert!(text.contains("no battery on this machine"), "{text}");
+    assert!(text.contains("n/a"), "{text}");
+    assert!(
+        !text.contains(" 0% "),
+        "an absent battery must never render as a charge level:\n{text}"
+    );
+    assert!(
+        !text.contains("TO EMPTY") && !text.contains("CYCLES"),
+        "the secondary fields belong to a pack that exists:\n{text}"
+    );
+    // The thermal sensors are a separate metric and are unaffected by the absence.
+    assert!(text.contains("THERMAL SENSORS"), "{text}");
+    assert!(text.contains("62.5C"), "{text}");
+    insta::assert_snapshot!(text);
+}
+
+#[test]
+fn the_battery_screen_while_charging() {
+    // Charging inverts the estimate's meaning, and an unlabelled `49m` would be read
+    // as time-to-empty by anyone who glanced at the discharging screen first.
+    let state = Fixture::new((140, 38), ViewId::Battery)
+        .with_scenario(Scenario::charging())
+        .build();
+    let text = text_of(&frame(&state, ascii()));
+    assert!(text.contains("charging"), "{text}");
+    assert!(text.contains("TO FULL"), "{text}");
+    assert!(!text.contains("TO EMPTY"), "{text}");
+    // §5.2: the charge state carries its own character as well as a colour.
+    assert!(text.contains("+charging"), "{text}");
+    insta::assert_snapshot!(text);
 }
 
 #[test]

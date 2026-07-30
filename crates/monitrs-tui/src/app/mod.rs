@@ -56,6 +56,7 @@
 mod command;
 mod notice;
 mod overlay;
+mod pressure;
 mod reducer;
 mod rows;
 mod selection;
@@ -90,6 +91,7 @@ pub use command::{
 };
 pub use notice::{MAX_NOTICES, Notice, NoticeKind, NoticeLog};
 pub use overlay::{MAX_NICE, MIN_NICE, Overlay, OverlayKind, OverlayStack, ProcessActionStage};
+pub use pressure::{PressureAlert, PressureWatch};
 pub use reducer::{apply, detail_line_count, help_line_count, reduce};
 pub use rows::{ProcessRow, ProcessRows, TreeShape};
 pub use selection::{Resync, Selection};
@@ -253,6 +255,12 @@ pub struct AppSettings {
     pub history: HistoryConfig,
     /// The requested sample interval (§12 `sampling.interval`).
     pub sample_interval: Duration,
+    /// Whether a signal escalating to `critical` also rings the terminal bell
+    /// (§12 `diagnostics.bell_on_critical`).
+    ///
+    /// Off by default: monitrs is often left running on a second screen, and a
+    /// program that beeps without being asked to is a program people stop running.
+    pub bell_on_critical: bool,
     /// Where configuration was read from, for `config path` (§6.3).
     pub config_path: Option<PathBuf>,
     /// The active keymap, already validated (§12).
@@ -280,6 +288,7 @@ impl Default for AppSettings {
             env: TerminalEnv::empty(),
             history: HistoryConfig::default(),
             sample_interval: monitrs_core::history::DEFAULT_SAMPLE_INTERVAL,
+            bell_on_critical: false,
             config_path: None,
             keymap: Keymap::builtin(),
             sequence_timeout: crate::keymap::DEFAULT_SEQUENCE_TIMEOUT,
@@ -313,6 +322,9 @@ pub struct AppState {
     pub(in crate::app) coalesced_by_ui: u64,
     pub(in crate::app) detail: Option<Box<ProcessDetail>>,
     pub(in crate::app) detail_request: Option<ProcessIdentity>,
+    /// The radar state each signal was last seen in, so an escalation is announced
+    /// once rather than once a second (§2.3, §11.3).
+    pub(in crate::app) pressure_watch: PressureWatch,
 
     // ---- the process table ----
     pub(in crate::app) filter_text: String,
@@ -333,6 +345,7 @@ pub struct AppState {
     pub(in crate::app) resolver: KeyResolver,
     pub(in crate::app) clock: Instant,
     pub(in crate::app) sample_interval: Duration,
+    pub(in crate::app) bell_on_critical: bool,
     pub(in crate::app) config_path: Option<PathBuf>,
     pub(in crate::app) notices: NoticeLog,
     pub(in crate::app) timing: RenderTiming,
@@ -371,6 +384,7 @@ impl AppState {
             env,
             history,
             sample_interval,
+            bell_on_critical,
             config_path,
             keymap,
             sequence_timeout,
@@ -393,6 +407,7 @@ impl AppState {
             coalesced_by_ui: 0,
             detail: None,
             detail_request: None,
+            pressure_watch: PressureWatch::new(),
             filter_text: filter,
             filter: compiled,
             only_user,
@@ -407,6 +422,7 @@ impl AppState {
             resolver: KeyResolver::with_timeout(keymap, sequence_timeout),
             clock: started_at,
             sample_interval,
+            bell_on_critical,
             config_path,
             notices: NoticeLog::new(),
             timing: RenderTiming::new(),
@@ -460,6 +476,14 @@ impl AppState {
             settings.hide_kernel_threads,
         );
         self.sample_interval = settings.sample_interval;
+        self.bell_on_critical = settings.bell_on_critical;
+        // `pressure_watch` is deliberately *not* reset. Reloaded thresholds reset the
+        // engine's hysteresis (§12's atomic reload does it in
+        // `PressureEngine::set_thresholds`), so every signal comes back warming up and
+        // the watch forgets its states by the ordinary rule for an unavailable signal.
+        // Clearing it here would be a second, differently-timed reset of the same
+        // state, and the two would eventually disagree about whether the next
+        // escalation is news.
         self.resolver =
             KeyResolver::with_timeout(settings.keymap.clone(), settings.sequence_timeout);
 
@@ -788,6 +812,22 @@ impl AppState {
     #[must_use]
     pub const fn sample_interval(&self) -> Duration {
         self.sample_interval
+    }
+
+    /// Whether an escalation to `critical` also rings the terminal bell (§12
+    /// `diagnostics.bell_on_critical`).
+    #[must_use]
+    pub const fn rings_the_bell_on_critical(&self) -> bool {
+        self.bell_on_critical
+    }
+
+    /// The state each radar signal was last seen in (§2.3).
+    ///
+    /// Read-only: the transition detection belongs to the reducer, and a caller that
+    /// could rewrite these would be able to suppress or manufacture an alert.
+    #[must_use]
+    pub const fn pressure_watch(&self) -> &PressureWatch {
+        &self.pressure_watch
     }
 
     /// Where configuration was read from, if anywhere (§6.3 `config path`).

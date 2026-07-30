@@ -10,8 +10,14 @@
 //! The cheap fields — identity, executable, command, user, CPU, memory, disk rates,
 //! threads, age — are on the [`ProcessSnapshot`] the fast tier collects for every
 //! process every tick. The expensive ones — working directory, ancestry, children,
-//! descendants, handles, sockets, cgroup — are on the [`ProcessDetail`] that §8.6
-//! loads on demand for the selected process only.
+//! descendants, handles, sockets, the open-descriptor list, cgroup — are on the
+//! [`ProcessDetail`] that §8.6 loads on demand for the selected process only.
+//!
+//! The descriptor list is the most expensive of them — one syscall per descriptor —
+//! so it is bounded by [`OpenFileList::MAX_LISTED`] in the collectors, and the
+//! `DESCRIPTORS` row is where the panel says how many it did not list. A panel that
+//! showed six of a process's four hundred descriptors without saying so would be
+//! making exactly the claim §4 forbids.
 //!
 //! That split is also the scrolling split. The snapshot block is *pinned*: it is what
 //! identifies the process, and losing it while scrolling would leave the user reading
@@ -35,13 +41,16 @@
 //! it tried; `nothing_here_can_show_an_environment_variable` states the intent where
 //! the next reader will look for it.
 
-use monitrs_core::model::{AncestorEntry, ProcessDetail, ProcessIdentity, ProcessSnapshot};
+use monitrs_core::model::{
+    AncestorEntry, OpenFileList, ProcessDetail, ProcessIdentity, ProcessSnapshot,
+};
+use monitrs_core::units::{display_width, pad_left, pad_right, truncate_middle};
 use ratatui::buffer::Buffer;
 use ratatui::layout::Rect;
 use ratatui::text::Line;
 use ratatui::widgets::Widget;
 
-use crate::app::OverlayKind;
+use crate::app::{OverlayKind, detail_line_count};
 use crate::theme::Token;
 use crate::widgets::Presentation;
 use crate::widgets::states::{
@@ -51,6 +60,17 @@ use crate::widgets::states::{
 use super::clock::format_timestamp;
 use super::frame::{Anchor, OverlayPanel};
 use super::row::{Pair, metric_field, muted, pairs, text_field};
+
+/// The widest a descriptor's path is rendered, in cells.
+///
+/// The panel sizes itself from its widest line, and a path can be a kilobyte long:
+/// one pathological descriptor would make the dialog ask for a thousand-cell frame
+/// and pad every other row out to match it. Eighty cells is wider than any of the
+/// fixed rows, so the cap only ever binds on a path — and it is truncated in the
+/// *middle*, because the leading directory says which tree the file is in and the
+/// trailing name says which file it is (§5.4). Presentation only: the model holds
+/// the whole path (§10.1).
+const PATH_CELLS: usize = 80;
 
 /// The ancestry breadcrumb separator (§2.4).
 ///
@@ -103,26 +123,12 @@ impl<'a> ProcessDetailOverlay<'a> {
 
     /// How many logical lines the scrolling block has.
     ///
-    /// Equal to [`crate::app::detail_line_count`] for the same record, which is what
-    /// the reducer clamps scrolling against.
+    /// Delegates to [`crate::app::detail_line_count`] rather than counting again: the
+    /// reducer clamps `j` against that number, and two implementations of one count
+    /// are two chances for the last line to become unreachable.
     #[must_use]
     pub fn line_count(&self) -> usize {
-        /// Rows that are always present, one per [`ProcessDetail`] scalar field plus
-        /// the collection timestamp.
-        const FIXED_ROWS: usize = 9;
-
-        let Some(detail) = self.detail else {
-            return 1;
-        };
-        let ancestry = detail
-            .ancestry
-            .fresh()
-            .map_or(0, |entries: &Vec<AncestorEntry>| entries.len());
-        let children = detail
-            .children
-            .fresh()
-            .map_or(0, |children: &Vec<ProcessIdentity>| children.len());
-        FIXED_ROWS.saturating_add(ancestry).saturating_add(children)
+        detail_line_count(self.detail)
     }
 
     /// The pinned block: everything the fast tier already knows, plus the two
@@ -274,6 +280,7 @@ impl<'a> ProcessDetailOverlay<'a> {
                 &describe_display(&detail.open_files),
             ),
             metric_field(presentation, "SOCKETS", &describe_display(&detail.sockets)),
+            self.descriptor_summary_line(detail),
             metric_field(
                 presentation,
                 "DESCENDANTS",
@@ -311,6 +318,7 @@ impl<'a> ProcessDetailOverlay<'a> {
                 ));
             }
         }
+        lines.extend(self.descriptor_lines(detail));
         lines.push(text_field(
             presentation,
             "COLLECTED",
@@ -318,6 +326,75 @@ impl<'a> ProcessDetailOverlay<'a> {
             Token::Muted,
         ));
         lines
+    }
+
+    /// The always-present row that says what the descriptor listing covers (§7.2).
+    ///
+    /// Always present for the same reason the `ANCESTRY` row is: §4 needs somewhere to
+    /// say `permission denied` when the whole table was refused, and a platform that
+    /// cannot list descriptors at all needs somewhere to say `n/a`. When the listing
+    /// *is* available this row is also the only place the cap is visible, which is the
+    /// difference between a panel that shows six of a process's descriptors and a
+    /// panel that claims a process has six.
+    fn descriptor_summary_line(&self, detail: &ProcessDetail) -> Line<'static> {
+        let display = describe(&detail.open_file_list, |files: &OpenFileList| {
+            let listed = files.count();
+            let total = files.total();
+            if files.is_complete() {
+                format!("{listed} of {total} listed")
+            } else {
+                format!(
+                    "{listed} of {total} listed, {} not listed",
+                    files.not_listed()
+                )
+            }
+        });
+        metric_field(self.presentation, "DESCRIPTORS", &display)
+    }
+
+    /// One row per listed descriptor: its number, its kind, and its path (§7.2).
+    ///
+    /// The number is right-aligned and the kind left-padded to the widest kind
+    /// *present*, so the paths line up into a column without reserving room for a
+    /// kind this process does not hold (§5.4). The kind is what makes the row readable
+    /// when there is no path: a socket says `socket` beside its `n/a`, so an absent
+    /// path reads as "there is none" rather than as a failed read.
+    fn descriptor_lines(&self, detail: &ProcessDetail) -> Vec<Line<'static>> {
+        let presentation = self.presentation;
+        let ellipsis = presentation.glyphs().ellipsis();
+        let Some(files) = detail.open_file_list.fresh() else {
+            return Vec::new();
+        };
+        let entries = files.entries();
+        let number_cells = entries
+            .iter()
+            .map(|entry| display_width(&entry.descriptor.to_string()))
+            .max()
+            .unwrap_or(0);
+        let kind_cells = entries
+            .iter()
+            .map(|entry| display_width(entry.kind.label()))
+            .max()
+            .unwrap_or(0);
+        entries
+            .iter()
+            .map(|entry| {
+                let number = pad_left(&entry.descriptor.to_string(), number_cells, ellipsis);
+                let kind = pad_right(entry.kind.label(), kind_cells, ellipsis);
+                pairs(
+                    presentation,
+                    &[
+                        Pair::text("FD", format!("{number}  {kind}")),
+                        Pair::metric(
+                            "PATH",
+                            &describe(&entry.path, |path| {
+                                truncate_middle(path, PATH_CELLS, ellipsis)
+                            }),
+                        ),
+                    ],
+                )
+            })
+            .collect()
     }
 
     /// The §2.4 ancestry breadcrumb, oldest ancestor first.
@@ -372,7 +449,10 @@ mod tests {
     use core::time::Duration;
     use std::time::SystemTime;
 
-    use monitrs_core::model::{MetricState, ProcessIo, ProcessMemory, ProcessState, UserIdentity};
+    use monitrs_core::model::{
+        MetricState, OpenFileEntry, OpenFileKind, OpenFileList, ProcessIo, ProcessMemory,
+        ProcessState, UserIdentity,
+    };
     use monitrs_core::units::{Percent, Rate, display_width};
 
     use super::*;
@@ -425,6 +505,32 @@ mod tests {
         }
     }
 
+    /// A descriptor listing with one of every state a real walk produces: a named
+    /// file, a socket with no path, a descriptor the OS refused, and a total larger
+    /// than the number of entries so the cap is exercised.
+    fn descriptors() -> OpenFileList {
+        OpenFileList::listed(
+            vec![
+                OpenFileEntry {
+                    descriptor: 0,
+                    kind: OpenFileKind::File,
+                    path: MetricState::Available("/dev/null".into()),
+                },
+                OpenFileEntry {
+                    descriptor: 4,
+                    kind: OpenFileKind::Socket,
+                    path: MetricState::Unsupported,
+                },
+                OpenFileEntry {
+                    descriptor: 11,
+                    kind: OpenFileKind::File,
+                    path: MetricState::PermissionDenied,
+                },
+            ],
+            42,
+        )
+    }
+
     fn detail() -> ProcessDetail {
         let mut detail = ProcessDetail::pending(
             identity(),
@@ -434,6 +540,7 @@ mod tests {
         detail.root = MetricState::Available("/".into());
         detail.open_files = MetricState::Available(42);
         detail.sockets = MetricState::PermissionDenied;
+        detail.open_file_list = MetricState::Available(descriptors());
         detail.descendants = MetricState::Available(3);
         detail.nice = MetricState::Available(0);
         detail.cgroup = MetricState::Unsupported;
@@ -513,6 +620,14 @@ mod tests {
         assert!(text.contains("THREADS"), "thread count missing:\n{text}");
         assert!(text.contains("OPEN FILES"), "handles missing:\n{text}");
         assert!(text.contains("SOCKETS"), "sockets missing:\n{text}");
+        assert!(
+            text.contains("DESCRIPTORS"),
+            "listing summary missing:\n{text}"
+        );
+        assert!(
+            text.contains("/dev/null"),
+            "descriptor path missing:\n{text}"
+        );
         assert!(text.contains("CGROUP"), "cgroup missing:\n{text}");
         assert!(text.contains("CONTAINER"), "container missing:\n{text}");
     }
@@ -622,6 +737,130 @@ mod tests {
             .expect("the ancestry row");
         assert!(row.contains("permission denied"), "{row}");
         assert!(!row.contains("->"), "{row}");
+    }
+
+    #[test]
+    fn a_capped_descriptor_listing_says_how_many_it_did_not_list() {
+        // §4: showing three of forty-two descriptors without saying so would claim the
+        // process has three.
+        let process = process();
+        let detail = detail();
+        let overlay =
+            ProcessDetailOverlay::new(presentation(), identity(), Some(&process), Some(&detail));
+        let text = full(overlay);
+        let row = text
+            .lines()
+            .find(|line| line.contains("DESCRIPTORS"))
+            .expect("the descriptor summary row");
+        assert!(row.contains("3 of 42 listed"), "{row}");
+        assert!(row.contains("39 not listed"), "{row}");
+    }
+
+    #[test]
+    fn a_complete_descriptor_listing_does_not_claim_anything_was_left_out() {
+        let process = process();
+        let mut detail = detail();
+        detail.open_file_list = MetricState::Available(OpenFileList::listed(
+            vec![OpenFileEntry {
+                descriptor: 3,
+                kind: OpenFileKind::File,
+                path: MetricState::Available("/etc/hosts".into()),
+            }],
+            1,
+        ));
+        let overlay =
+            ProcessDetailOverlay::new(presentation(), identity(), Some(&process), Some(&detail));
+        let text = full(overlay);
+        let row = text
+            .lines()
+            .find(|line| line.contains("DESCRIPTORS"))
+            .expect("the descriptor summary row");
+        assert!(row.contains("1 of 1 listed"), "{row}");
+        assert!(!row.contains("not listed"), "{row}");
+    }
+
+    #[test]
+    fn a_descriptor_with_no_path_names_its_kind_instead_of_leaving_a_blank() {
+        // The §5.2 pairing applied to a socket: `n/a` alone would read as a failed
+        // read, and the kind is what says there was never a path to read.
+        let process = process();
+        let detail = detail();
+        let overlay =
+            ProcessDetailOverlay::new(presentation(), identity(), Some(&process), Some(&detail));
+        let text = full(overlay);
+
+        let socket = text
+            .lines()
+            .find(|line| line.contains("socket"))
+            .expect("the socket's row");
+        assert!(socket.contains("FD"), "{socket}");
+        assert!(socket.contains("- n/a"), "{socket}");
+        assert!(
+            !socket.contains('0'),
+            "a missing path is not a zero: {socket}"
+        );
+
+        let refused = text
+            .lines()
+            .find(|line| line.contains("11") && line.contains("file"))
+            .expect("the refused descriptor's row");
+        assert!(refused.contains("! permission denied"), "{refused}");
+    }
+
+    #[test]
+    fn a_refused_descriptor_table_is_one_honest_row_rather_than_no_rows() {
+        // §4 needs somewhere to say it. A platform that cannot list descriptors and a
+        // process that refuses them both produce zero entries, and the summary row is
+        // the only thing that tells them apart.
+        let process = process();
+        for (state, expected) in [
+            (MetricState::PermissionDenied, "permission denied"),
+            (MetricState::Unsupported, "n/a"),
+        ] {
+            let mut detail = detail();
+            detail.open_file_list = state;
+            let overlay = ProcessDetailOverlay::new(
+                presentation(),
+                identity(),
+                Some(&process),
+                Some(&detail),
+            );
+            let text = full(overlay);
+            let row = text
+                .lines()
+                .find(|line| line.contains("DESCRIPTORS"))
+                .expect("the descriptor summary row");
+            assert!(row.contains(expected), "{row}");
+            assert!(!row.contains("listed"), "{row}");
+        }
+    }
+
+    #[test]
+    fn a_pathological_path_does_not_widen_the_panel_without_bound() {
+        // §5.4, and a practical matter: the panel sizes itself from its widest line, so
+        // one kilobyte-long path would pad every other row out to a kilobyte.
+        let process = process();
+        let mut detail = detail();
+        let long: String = std::iter::repeat_n("/very-long-directory-name", 60).collect();
+        detail.open_file_list = MetricState::Available(OpenFileList::listed(
+            vec![OpenFileEntry {
+                descriptor: 3,
+                kind: OpenFileKind::File,
+                path: MetricState::Available(format!("{long}/target.bin").into()),
+            }],
+            1,
+        ));
+        let overlay =
+            ProcessDetailOverlay::new(presentation(), identity(), Some(&process), Some(&detail));
+        assert!(
+            overlay.desired_width() < 140,
+            "the panel wanted {} cells",
+            overlay.desired_width()
+        );
+        let text = full(overlay);
+        // Middle truncation keeps both ends, so the file at the end is still visible.
+        assert!(text.contains("target.bin"), "{text}");
+        assert!(text.contains("..."), "{text}");
     }
 
     #[test]

@@ -13,6 +13,7 @@
 //! | `networks` | bytes, packets, errors | drops, link state, and link speed (§7.4) |
 //! | `processes` | whole-second start time | clock-tick start keys, kernel-thread flags, `io` counters |
 //! | `pressure.psi` | nothing | all three PSI resources (§2.3) |
+//! | `sensors.battery` | `unsupported` everywhere | `/sys/class/power_supply`: cycle count, wear, pack temperature, watts |
 //! | `host.environment` | nothing | the container/VM heuristic with evidence (§7.5) |
 //! | `memory.cgroup_limit_bytes` | nothing | the container limit, *beside* the host total (§9.2) |
 //!
@@ -35,9 +36,10 @@ use std::time::{Instant, SystemTime};
 
 use monitrs_core::SystemSnapshot;
 use monitrs_core::model::{
-    CapabilityState, CpuQuota, CpuUsage, DiskSnapshot, DiskTotals, HostEnvironment, InterfaceKind,
-    LinkState, MetricState, NetworkSnapshot, ProcessIdentity, ProcessIo, ProcessMemory,
-    PsiResource, PsiSnapshot, Tier, TrafficTotals, UnavailableReason, UserIdentity,
+    BatterySnapshot, CapabilityState, CpuQuota, CpuUsage, DiskSnapshot, DiskTotals,
+    HostEnvironment, InterfaceKind, LinkState, MetricState, NetworkSnapshot, ProcessIdentity,
+    ProcessIo, ProcessMemory, PsiResource, PsiSnapshot, Tier, TrafficTotals, UnavailableReason,
+    UserIdentity,
 };
 use monitrs_core::rates::{
     CounterTracker, CounterWidth, KeyedProcessCpuTrackers, KeyedRateTrackers, KeyedTrackers,
@@ -53,9 +55,12 @@ use crate::linux::diskstats::{DiskStats, parse_diskstats};
 use crate::linux::loadavg::{parse_loadavg, parse_uptime};
 use crate::linux::meminfo::parse_meminfo;
 use crate::linux::netdev::{parse_link_speed_mbps, parse_net_dev, parse_operstate};
+use crate::linux::power::{BatteryAttributes, PowerSupplyKind, battery_from, classify};
 use crate::linux::process::{parse_pid_io, parse_pid_stat, parse_pid_status};
 use crate::linux::psi::parse_pressure;
-use crate::linux::read::{LinuxSources, ReadDiagnostics, ReadFailure, SourceBytes};
+use crate::linux::read::{
+    LinuxSources, PowerSupplySources, ReadDiagnostics, ReadFailure, SourceBytes,
+};
 use crate::linux::stat::ProcStat;
 use crate::source::SampleTick;
 
@@ -112,6 +117,7 @@ pub struct LinuxEnrichment {
     cached_uptime: Option<Duration>,
     cached_boot_time_secs: Option<u64>,
     cached_links: HashMap<DeviceKey, LinkFacts>,
+    cached_battery: MetricState<BatterySnapshot>,
     cached_environment: MetricState<HostEnvironment>,
     cached_memory_limit: MetricState<u64>,
     cached_cpu_quota: MetricState<CpuQuota>,
@@ -172,6 +178,10 @@ impl LinuxEnrichment {
             cached_uptime: None,
             cached_boot_time_secs: None,
             cached_links: HashMap::new(),
+            // Warming up rather than unsupported until the medium tier has actually
+            // looked: claiming "this machine has no battery" before reading
+            // `/sys/class/power_supply` would be a fact asserted without evidence.
+            cached_battery: MetricState::WarmingUp,
             cached_environment: MetricState::WarmingUp,
             cached_memory_limit: MetricState::WarmingUp,
             cached_cpu_quota: MetricState::WarmingUp,
@@ -245,6 +255,7 @@ impl LinuxEnrichment {
         self.apply_disks(sources, snapshot, tick);
         self.apply_networks(sources, snapshot, tick);
         self.apply_pressure(sources, snapshot);
+        self.apply_battery(sources, snapshot);
         self.apply_processes(sources, snapshot, tick);
 
         if sources.processes_truncated {
@@ -815,6 +826,92 @@ impl LinuxEnrichment {
         }
     }
 
+    /// `/sys/class/power_supply` into the battery, or into an honest absence.
+    ///
+    /// The baseline leaves `sensors.battery` [`MetricState::Unsupported`] on every
+    /// tick, so the cached reading has to be written back on every tick too — not
+    /// only on the medium ones. §9.1 forbids re-reading for that, which is exactly
+    /// what the cache is for.
+    ///
+    /// **A machine with no battery is the case this method exists to get right.** A
+    /// server, a container, a CI runner and a desktop all reach the same two lines:
+    /// the class directory lists no system battery, and the metric stays
+    /// [`MetricState::Unsupported`] — a fact about the hardware, not a failed read,
+    /// not 0%, and not an omitted field (§4, §26).
+    fn apply_battery(&mut self, sources: &LinuxSources, snapshot: &mut SystemSnapshot) {
+        if let Some(supplies) = sources.power_supplies.as_ref() {
+            self.cached_battery = self.read_battery(supplies);
+        }
+        snapshot.sensors.battery = self.cached_battery;
+        snapshot.capabilities.battery = if self.cached_battery.is_available() {
+            CapabilityState::Available
+        } else if self.cached_battery.is_warming_up() {
+            CapabilityState::Unknown
+        } else {
+            CapabilityState::Unsupported
+        };
+    }
+
+    /// The first system battery among this tick's power supplies.
+    ///
+    /// "First" is by sorted directory name, which [`crate::linux::read::ProcRoot`]
+    /// guarantees, so a laptop with `BAT0` and `BAT1` always reports the same one
+    /// rather than alternating between them. Two packs are not summed: their charge
+    /// percentages are of different capacities, and averaging them would produce a
+    /// figure that describes neither.
+    fn read_battery(&mut self, supplies: &[PowerSupplySources]) -> MetricState<BatterySnapshot> {
+        for supply in supplies {
+            let path = |file: &str| format!("/sys/class/power_supply/{}/{file}", supply.name);
+            // An absent `type` or `scope` is not a failure worth reporting: `scope`
+            // is missing on most drivers by design, and a directory with no `type`
+            // is not something this layer claims to understand.
+            let kind = supply.kind.as_deref().ok();
+            let scope = supply.scope.as_deref().ok();
+            if classify(kind, scope) != PowerSupplyKind::SystemBattery {
+                continue;
+            }
+            let attributes = BatteryAttributes {
+                // Only the charge level is worth a diagnostic line: it is the one
+                // attribute whose absence discards the whole reading, and every
+                // other file here is legitimately missing on some driver.
+                status: supply.status.as_deref().ok(),
+                capacity: self.take_owned(path("capacity"), &supply.capacity),
+                cycle_count: supply.cycle_count.as_deref().ok(),
+                energy_full_design: supply.energy_full_design.as_deref().ok(),
+                energy_full: supply.energy_full.as_deref().ok(),
+                charge_full_design: supply.charge_full_design.as_deref().ok(),
+                charge_full: supply.charge_full.as_deref().ok(),
+                voltage_min_design: supply.voltage_min_design.as_deref().ok(),
+                power_now: supply.power_now.as_deref().ok(),
+                current_now: supply.current_now.as_deref().ok(),
+                voltage_now: supply.voltage_now.as_deref().ok(),
+                temp: supply.temp.as_deref().ok(),
+                time_to_empty: supply.time_to_empty.as_deref().ok(),
+                time_to_full: supply.time_to_full.as_deref().ok(),
+            };
+            return battery_from(&attributes);
+        }
+        // No system battery among the supplies — or no supplies at all, which is what
+        // `list_power_supplies` failing looks like from here.
+        MetricState::Unsupported
+    }
+
+    /// Reads one attribute, recording an unexpected failure against a runtime path.
+    ///
+    /// [`Self::take`] wants a `&'static str` source name because it is called per
+    /// process per tick and an owned string there would allocate thousands of times
+    /// a second. A power supply is read once every five seconds, so it can afford
+    /// the path that actually failed.
+    fn take_owned<'a>(&mut self, source: String, bytes: &'a SourceBytes) -> Option<&'a [u8]> {
+        match bytes {
+            Ok(bytes) => Some(bytes),
+            Err(failure) => {
+                self.diagnostics.record(&source, *failure);
+                None
+            }
+        }
+    }
+
     /// Enriches the baseline's process rows with native data.
     fn apply_processes(
         &mut self,
@@ -1074,6 +1171,33 @@ mod tests {
         Ok(bytes.to_vec())
     }
 
+    /// A power supply with nothing but a name and a `type`.
+    ///
+    /// Every other attribute is [`ReadFailure::Missing`], which is what a real
+    /// `/sys/class/power_supply` entry looks like: no driver exports all sixteen,
+    /// and the interesting cases are built by overriding the few that matter.
+    fn power_supply(name: &str, kind: SourceBytes) -> PowerSupplySources {
+        PowerSupplySources {
+            name: name.into(),
+            kind,
+            scope: Err(ReadFailure::Missing),
+            status: Err(ReadFailure::Missing),
+            capacity: Err(ReadFailure::Missing),
+            cycle_count: Err(ReadFailure::Missing),
+            energy_full_design: Err(ReadFailure::Missing),
+            energy_full: Err(ReadFailure::Missing),
+            charge_full_design: Err(ReadFailure::Missing),
+            charge_full: Err(ReadFailure::Missing),
+            voltage_min_design: Err(ReadFailure::Missing),
+            power_now: Err(ReadFailure::Missing),
+            current_now: Err(ReadFailure::Missing),
+            voltage_now: Err(ReadFailure::Missing),
+            temp: Err(ReadFailure::Missing),
+            time_to_empty: Err(ReadFailure::Missing),
+            time_to_full: Err(ReadFailure::Missing),
+        }
+    }
+
     /// One tick's worth of sources, from the fixtures.
     ///
     /// `second` selects the later reading of every counter file, so a two-call
@@ -1108,6 +1232,27 @@ mod tests {
                     name: "wlan0".into(),
                     operstate: ok(fx::OPERSTATE_DOWN),
                     speed: ok(fx::SPEED_UNKNOWN_NEGATIVE),
+                },
+            ]),
+            // A laptop: one energy-reporting ACPI battery, the charger beside it,
+            // and a bluetooth mouse whose own cell must not be mistaken for it.
+            power_supplies: Some(vec![
+                power_supply("AC", ok(fx::POWER_TYPE_MAINS)),
+                PowerSupplySources {
+                    status: ok(fx::POWER_STATUS_DISCHARGING),
+                    capacity: ok(fx::POWER_CAPACITY_82),
+                    cycle_count: ok(fx::POWER_CYCLE_COUNT_214),
+                    energy_full_design: ok(fx::POWER_ENERGY_FULL_DESIGN),
+                    energy_full: ok(fx::POWER_ENERGY_FULL),
+                    power_now: ok(fx::POWER_POWER_NOW),
+                    temp: ok(fx::POWER_TEMP_314),
+                    ..power_supply("BAT0", ok(fx::POWER_TYPE_BATTERY))
+                },
+                PowerSupplySources {
+                    scope: ok(fx::POWER_SCOPE_DEVICE),
+                    status: ok(fx::POWER_STATUS_DISCHARGING),
+                    capacity: ok(b"55\n"),
+                    ..power_supply("hid-e4-battery", ok(fx::POWER_TYPE_BATTERY))
                 },
             ]),
             cgroup: CgroupSources {
@@ -1359,6 +1504,98 @@ mod tests {
             snapshot.capabilities.cgroup_limits,
             CapabilityState::Available
         );
+    }
+
+    /// One tick with `sources`, returning the enriched snapshot.
+    fn one_tick(sources: &LinuxSources) -> SystemSnapshot {
+        let start = Instant::now();
+        let mut enrichment = LinuxEnrichment::new();
+        let tick = SampleTick::first(start, SystemTime::UNIX_EPOCH);
+        let mut snapshot = baseline(start);
+        enrichment.apply(&mut snapshot, sources, &tick);
+        snapshot
+    }
+
+    #[test]
+    fn the_system_battery_is_read_past_the_charger_and_past_the_mouse() {
+        // All three are in `/sys/class/power_supply` on an ordinary laptop. Picking
+        // the wrong one would put a bluetooth mouse's 55% on the Battery screen.
+        let snapshot = one_tick(&sources(false));
+        let battery = snapshot
+            .sensors
+            .battery
+            .fresh()
+            .copied()
+            .expect("the fixture laptop has a battery");
+        assert!((battery.charge.value() - 82.0).abs() < 0.01);
+        assert_eq!(battery.state, monitrs_core::model::ChargeState::Discharging);
+        assert_eq!(battery.cycle_count.fresh().copied(), Some(214));
+        assert_eq!(battery.temperature_celsius.fresh().copied(), Some(31.4));
+        assert_eq!(battery.power_watts.fresh().copied(), Some(12.4));
+        assert_eq!(
+            snapshot.capabilities.battery,
+            CapabilityState::Available,
+            "a battery that read must be declared available (§4)"
+        );
+    }
+
+    #[test]
+    fn a_desktop_reports_no_battery_rather_than_a_flat_one() {
+        // The case every server, container and CI runner takes. §4 and §26: the
+        // answer is "this machine has none", never 0%, and never a missing field.
+        let mut without = sources(false);
+        without.power_supplies = Some(Vec::new());
+        let snapshot = one_tick(&without);
+
+        assert!(snapshot.sensors.battery.is_unsupported());
+        assert!(snapshot.sensors.battery.fresh().is_none());
+        assert!(snapshot.sensors.battery.displayable().is_none());
+        assert_eq!(snapshot.sensors.battery.placeholder(), Some("n/a"));
+        assert_eq!(snapshot.capabilities.battery, CapabilityState::Unsupported);
+    }
+
+    #[test]
+    fn a_machine_with_only_a_charger_still_reports_no_battery() {
+        // A desktop with a UPS or a monitored PSU lists power supplies and has no
+        // battery. An empty-list check alone would report the charger as one.
+        let mut mains_only = sources(false);
+        mains_only.power_supplies = Some(vec![power_supply("AC", ok(fx::POWER_TYPE_MAINS))]);
+        assert!(one_tick(&mains_only).sensors.battery.is_unsupported());
+    }
+
+    #[test]
+    fn a_tick_that_did_not_read_the_battery_keeps_the_previous_reading() {
+        // §9.1: the medium tier runs every five seconds and the baseline blanks the
+        // field every tick, so the four fast ticks in between must not lose it.
+        let start = Instant::now();
+        let mut enrichment = LinuxEnrichment::new();
+        let tick = SampleTick::first(start, SystemTime::UNIX_EPOCH);
+        let mut first = baseline(start);
+        enrichment.apply(&mut first, &sources(false), &tick);
+        assert!(first.sensors.battery.is_available());
+
+        let mut fast_only = sources(false);
+        fast_only.power_supplies = None;
+        let later = start + Duration::from_secs(1);
+        let next = tick.advance(later, SystemTime::UNIX_EPOCH, DueTiers::ALL);
+        let mut second = baseline(later);
+        enrichment.apply(&mut second, &fast_only, &next);
+        assert_eq!(
+            second.sensors.battery.fresh().map(|battery| battery.charge),
+            first.sensors.battery.fresh().map(|battery| battery.charge)
+        );
+    }
+
+    #[test]
+    fn a_battery_never_looked_at_is_warming_up_rather_than_declared_absent() {
+        // Asserting "this machine has no battery" before reading
+        // `/sys/class/power_supply` would be a fact with no evidence behind it.
+        let mut unread = sources(false);
+        unread.power_supplies = None;
+        let snapshot = one_tick(&unread);
+        assert!(snapshot.sensors.battery.is_warming_up());
+        assert!(snapshot.sensors.battery.fresh().is_none());
+        assert_eq!(snapshot.capabilities.battery, CapabilityState::Unknown);
     }
 
     #[test]

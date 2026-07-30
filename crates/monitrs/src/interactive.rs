@@ -407,6 +407,11 @@ fn execute(effect: &Effect, state: &mut AppState, ctx: &mut EffectContext) -> Fl
             Flow::Continue
         }
 
+        Effect::RingBell => {
+            ring_bell(state);
+            Flow::Continue
+        }
+
         Effect::ReloadConfig => {
             match reload(&ctx.settings, state) {
                 Ok(reloaded) => {
@@ -540,6 +545,31 @@ fn execute(effect: &Effect, state: &mut AppState, ctx: &mut EffectContext) -> Fl
     }
 }
 
+/// Rings the terminal bell once, for a signal that just reached `critical` (§2.3).
+///
+/// §14.2 forbids *printing* to stdout while the alternate screen is up, and this does
+/// not print: `\x07` occupies no cell, moves no cursor and scrolls nothing, so it
+/// cannot corrupt the frame ratatui owns. What makes that safe is where it happens —
+/// effects are performed on the loop thread between draws, never from a worker and
+/// never mid-frame.
+///
+/// A terminal that refuses seven bits is one the next frame will fail on anyway, so a
+/// failure here is reported rather than escalated: the bell is the redundant cue and
+/// the notice the reducer already recorded is the real one (§5.2 in reverse — sound is
+/// never the only channel either).
+fn ring_bell(state: &mut AppState) {
+    use std::io::Write as _;
+
+    let mut out = std::io::stdout().lock();
+    if let Err(error) = out.write_all(b"\x07").and_then(|()| out.flush()) {
+        state.push_notice(Notice::new(
+            NoticeKind::Terminal,
+            Severity::Watch,
+            format!("the terminal bell could not be written: {error}"),
+        ));
+    }
+}
+
 /// Re-reads the configuration file, validating the whole candidate first (§12).
 /// The reducer's view of a configuration.
 ///
@@ -573,6 +603,7 @@ fn settings_to_app(settings: &Config, color_explicit: bool) -> Result<AppSetting
         },
         history: history_config(settings),
         sample_interval: settings.sampling.interval,
+        bell_on_critical: settings.diagnostics.bell_on_critical,
         // Propagated rather than defaulted: falling back to the built-in keymap here
         // would take away the working bindings the user currently has, on the
         // strength of a file they have just broken. §12's atomic reload means an
@@ -1005,6 +1036,28 @@ mod tests {
             settings_to_app(&settings, false).is_err(),
             "a conflicting binding must not be swapped for the built-in keymap, which \
              would take away the bindings the user still has"
+        );
+    }
+
+    /// The bell is a reducer decision, so the setting has to reach the reducer's state
+    /// — at startup *and* on reload, which is the half that would go untested.
+    #[test]
+    fn the_bell_setting_reaches_the_running_state_on_startup_and_on_reload() {
+        let mut settings = Config::default();
+        let mut state = state_from(&settings);
+        assert!(
+            !state.rings_the_bell_on_critical(),
+            "the documented default is off"
+        );
+
+        settings.diagnostics.bell_on_critical = true;
+        let translated = settings_to_app(&settings, false).expect("usable");
+        let history_rebuilt = state.reconfigure(&translated);
+
+        assert!(state.rings_the_bell_on_critical());
+        assert!(
+            !history_rebuilt,
+            "asking for a bell must not cost the user their retained samples"
         );
     }
 

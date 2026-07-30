@@ -196,13 +196,11 @@ fn text_of(buffer: &Buffer) -> String {
 }
 
 /// Every screen, so a claim is never checked on one view only.
-const VIEWS: [ViewId; 5] = [
-    ViewId::Overview,
-    ViewId::Processes,
-    ViewId::Storage,
-    ViewId::Network,
-    ViewId::Inspect,
-];
+///
+/// Taken from [`ViewId::ALL`] rather than listed, because a hand-written list is a
+/// list that silently stops covering the next screen someone adds — which is exactly
+/// what happened to the CPU screen while this array was spelled out.
+const VIEWS: [ViewId; ViewId::ALL.len()] = ViewId::ALL;
 
 /// The four §5.7 bands, by a representative size each.
 const SIZES: [(u16, u16); 5] = [(140, 38), (110, 30), (80, 24), (60, 16), (52, 12)];

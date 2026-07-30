@@ -23,8 +23,10 @@
 //! # Tiers
 //!
 //! Fast: CPU ticks, memory statistics, the process table, per-process counters.
-//! Medium: battery. Slow: machine facts, interface link state and speed. Nothing
-//! expensive is read more often than §8.6 asks for.
+//! Medium: battery, and filesystem inode counts — beside the byte capacity the
+//! baseline reads on the same tier, because they come from the same `statfs` data and
+//! neither belongs in a one-second loop. Slow: machine facts, interface link state
+//! and speed. Nothing expensive is read more often than §8.6 asks for.
 
 use core::time::Duration;
 use std::time::SystemTime;
@@ -37,9 +39,11 @@ use monitrs_core::rates::{CounterTracker, CounterWidth};
 
 use crate::common::CommonCollector;
 use crate::error::CollectorError;
+use crate::inodes::MountInodes;
 use crate::source::{SampleTick, SnapshotSource};
 
 use super::cpu::{self, CpuTracker};
+use super::filesystem;
 use super::memory::{self, SwapActivity};
 use super::network;
 use super::power;
@@ -196,6 +200,12 @@ pub struct MacosCollector {
     cached_battery: MetricState<monitrs_core::model::BatterySnapshot>,
     /// Interface link state and speed, refreshed on the slow tier (§8.6).
     cached_links: std::collections::HashMap<Box<str>, network::InterfaceLink>,
+    /// Inode counts per mount, refreshed on the medium tier with the capacity it
+    /// belongs beside (§8.6).
+    cached_inodes: Vec<MountInodes>,
+    /// Reused `getfsstat` buffer, so a medium tick allocates nothing after the
+    /// first one (§16.1).
+    mount_buffer: Vec<libc::statfs>,
 }
 
 impl MacosCollector {
@@ -226,9 +236,13 @@ impl MacosCollector {
         capabilities.per_process_threads = CapabilityState::Available;
         capabilities.per_process_open_files = CapabilityState::Available;
         capabilities.process_signals = CapabilityState::Available;
-        // Reading a socket count means one `proc_pidfdinfo` per descriptor, which
-        // §16.1's budget does not stretch to; absent beats sometimes-slow.
-        capabilities.per_process_sockets = CapabilityState::Unsupported;
+        // This used to be `Unsupported`, on the stated belief that a socket count
+        // costs one `proc_pidfdinfo` per descriptor. It does not: `PROC_PIDLISTFDS`
+        // already carries a `proc_fdtype` for every descriptor, so one syscall
+        // classifies the whole table — 3 µs for a 442-descriptor process on an M4
+        // Pro. The count is on the on-demand tier with the rest of the detail
+        // (§8.6), never on the fast tier.
+        capabilities.per_process_sockets = CapabilityState::Available;
         // §7.3 forbids approximating device busy time, and there is no documented
         // macOS API for it — IOKit's is private.
         capabilities.disk_busy = CapabilityState::Unsupported;
@@ -257,6 +271,8 @@ impl MacosCollector {
             capabilities,
             cached_battery: MetricState::WarmingUp,
             cached_links: std::collections::HashMap::new(),
+            cached_inodes: Vec::new(),
+            mount_buffer: Vec::new(),
         })
     }
 
@@ -311,6 +327,13 @@ impl MacosCollector {
             MetricState::PermissionDenied => CapabilityState::PermissionDenied,
             _ => CapabilityState::Unsupported,
         };
+        // A failed read leaves the previous readings in place rather than clearing
+        // them: the mount table does not change between medium ticks nearly as often
+        // as `getfsstat` could transiently fail, and the merge would otherwise flip
+        // every mount back to the baseline's `Unsupported` for one frame.
+        if let Ok(inodes) = filesystem::read_inode_usage(&mut self.mount_buffer) {
+            self.cached_inodes = inodes;
+        }
     }
 
     /// Overwrites the baseline's memory snapshot with the `host_statistics64` one.
@@ -482,6 +505,12 @@ impl SnapshotSource for MacosCollector {
         self.enrich_memory(&mut snapshot, tick);
         self.enrich_processes(&mut snapshot, tick);
         network::merge_into(&mut snapshot.networks, &self.cached_links);
+        // The baseline republishes its cached filesystems on every tick, so the
+        // inode readings have to be re-applied on every tick too — not only on the
+        // medium ones — or the field would carry a number for one frame in ten and
+        // `n/a` for the rest (§4: a state must not flicker for a reason the reader
+        // cannot see).
+        crate::inodes::merge_into(&mut snapshot.filesystems, &self.cached_inodes);
         snapshot.sensors.battery = self.cached_battery;
         // macOS has no PSI, and the baseline leaves the field `WarmingUp` because on
         // Linux it is filled in by the enrichment. Left alone, the radar's three PSI
@@ -874,6 +903,13 @@ mod tests {
                 );
                 assert!(detail.nice.fresh().is_some());
                 assert!(detail.cgroup.is_unsupported(), "macOS has no cgroups");
+                // §7.2's list, and the count that now comes with it for free.
+                let files = detail.open_file_list.fresh().expect("our own descriptors");
+                assert!(files.count() > 0, "a test binary holds descriptors");
+                assert!(
+                    detail.sockets.fresh().is_some(),
+                    "counted from the same walk"
+                );
             }
             other => panic!("expected our own detail to load, got {other:?}"),
         }
@@ -903,6 +939,9 @@ mod tests {
             capabilities.per_process_open_files,
             CapabilityState::Available
         );
+        // Free once the descriptor table is listed at all, which is why this stopped
+        // being `Unsupported`; see `MacosCollector::new`.
+        assert_eq!(capabilities.per_process_sockets, CapabilityState::Available);
         // §9.3: no private APIs, so no device busy time and no per-GPU metrics.
         assert_eq!(capabilities.disk_busy, CapabilityState::Unsupported);
         assert_eq!(capabilities.linux_psi, CapabilityState::Unsupported);

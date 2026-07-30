@@ -1,0 +1,28 @@
+---
+source: crates/monitrs-tui/tests/view_snapshots.rs
+expression: text
+---
+|+ monitrs  host:dev-mbp  [>LIVE]  1s  up 3d 04:12 ---------------- 00:00:23Z --+|
+| CPU 79%  MEM 71%  load  4.12 3.84 3.21  23G/32G  swap 205M/2.0G                |
+|+ FILESYSTEM CAPACITY ------ 2 mounted, 1 virtual hidden, = shares a device ---+|
+|| MOUNT              DEVICE     TYPE      SIZE  USED AVAIL  USE% CAPACITY      ||
+||=/                  disk0s1    fakefs    494G  374G  120G   76% [########=--] ||
+||=/System/...es/Data disk0s1    fakefs    494G  374G  120G   76% [########=--] ||
+|+ DEVICE THROUGHPUT ---------------------------------- busy - (unsupported) ---+|
+||DEVICE      READ/s WRITE/s   R-IOPS   W-IOPS MODEL            MOUNTS          ||
+||disk0        18M/s   42M/s      320      810 Fake NVMe        /               ||
+|+ TOP DISK I/O ------------------------------------------------ 5 processes ---+|
+|| READ/s WRITE/s TOTAL R TOTAL W      PID NAME                                 ||
+||  21M/s   42M/s     60G    120G    31842 rustc                                ||
+||  10M/s   21M/s     30G     60G      507 WindowServer                         ||
+|| 7.7M/s   15M/s     22G     44G     1221 postgres                             ||
+|| 3.1M/s  6.1M/s    8.8G     18G     9182 node                                 ||
+|| 256K/s  512K/s    736M    1.4G        1 launchd                              ||
+||                                                                              ||
+||                                                                              ||
+||                                                                              ||
+|+ THROUGHPUT HISTORY 5m --------------------- all devices, write peak 42M/s ---+|
+|| READ                                                  @@@@@@@@@@@@@@@@@@@@@@@||
+|| WRITE                                                 @@@@@@@@@@@@@@@@@@@@@@@||
+|+------------------------------------------------------------------------------+|
+| 1  2  3 [4] 5  6  7                                            / filter  ? help|

@@ -7,12 +7,18 @@
 //! `IOPSCopyPowerSourcesList`, `IOPSGetPowerSourceDescription` and
 //! `IOPSGetTimeRemainingEstimate` are all declared in
 //! `<IOKit/ps/IOPowerSources.h>` and documented by Apple. The richer numbers a
-//! battery reports — cycle count, design capacity, individual cell voltages — live
-//! in the `AppleSmartBattery` I/O Registry node under undocumented property names,
-//! so [`BatterySnapshot::cycle_count`] and [`BatterySnapshot::health`] are
-//! [`MetricState::Unsupported`] here rather than guessed at. Temperature is absent
-//! for the same reason: on Apple Silicon there is no documented thermal-sensor API
-//! at all, and `IOReport` and the SMC are explicitly out of bounds.
+//! battery reports — cycle count, design capacity, cell temperature, instantaneous
+//! amperage, individual cell voltages — live in the `AppleSmartBattery` I/O Registry
+//! node under undocumented property names, so [`BatterySnapshot::cycle_count`],
+//! [`BatterySnapshot::capacity`], [`BatterySnapshot::temperature_celsius`] and
+//! [`BatterySnapshot::power_watts`] are all [`MetricState::Unsupported`] here rather
+//! than guessed at. `IOReport` and the SMC are out of bounds for the same reason,
+//! which is also why on Apple Silicon there is no thermal-sensor reading at all.
+//!
+//! That is four fields the Battery screen renders as `n/a` on the machine this was
+//! written on, and it is the honest answer: those numbers are obtainable, but only
+//! by reading property names Apple has never published, and §9.3 does not trade a
+//! nicer screen for that.
 //!
 //! # CoreFoundation ownership
 //!
@@ -223,10 +229,14 @@ fn snapshot_from(description: CFTypeRef, estimate: f64) -> Option<BatterySnapsho
             current >= max,
         ),
         time_remaining: time_remaining(estimate),
-        // Both need `AppleSmartBattery` registry properties, which are not
-        // documented; §9.3 forbids reaching for them.
+        // Every one of these needs an `AppleSmartBattery` registry property, and
+        // none of those property names is documented; §9.3 forbids reaching for
+        // them. `Unsupported` and not a zero: this Mac has a 214-cycle battery at
+        // 31 °C drawing 12 W, and none of that is ours to read.
         cycle_count: MetricState::Unsupported,
-        health: MetricState::Unsupported,
+        capacity: MetricState::Unsupported,
+        temperature_celsius: MetricState::Unsupported,
+        power_watts: MetricState::Unsupported,
     })
 }
 
@@ -374,7 +384,10 @@ mod tests {
                 // §9.3: these need undocumented registry properties, so they must
                 // stay absent rather than be approximated.
                 assert!(reading.cycle_count.is_unsupported());
-                assert!(reading.health.is_unsupported());
+                assert!(reading.capacity.is_unsupported());
+                assert!(reading.health().is_unsupported());
+                assert!(reading.temperature_celsius.is_unsupported());
+                assert!(reading.power_watts.is_unsupported());
             }
             // A desktop Mac. Not a failure.
             MetricState::Unsupported => {}

@@ -34,7 +34,7 @@ what is known.
 A single "supported" flag per OS would be a lie in both directions: Linux exposes
 PSI and per-process I/O that macOS does not, and macOS exposes memory compression
 that Linux has no equivalent for. Every metric therefore carries its own
-availability, and the Inspect screen (`5`) shows what **your** machine provides
+availability, and the Inspect screen (`6`) shows what **your** machine provides
 right now — which is the only authoritative answer, since it also depends on your
 kernel version, your privileges, and whether you are in a container.
 
@@ -57,11 +57,14 @@ The table below is what to expect. `-` means the platform has no such concept,
 | Process thread count | yes | yes | |
 | Process I/O bytes | yes | partial | Linux: `/proc/<pid>/io`, **root** for other users' processes |
 | Process working directory | yes | own only | macOS restricts this for other users |
-| Process open files / sockets | yes | own only | |
+| Process open-file count | own only | own only | On-demand tier; needs root for others |
+| Process open-file list, with paths | own only | own only | Capped at 256 descriptors; the panel says how many it left out |
+| Process socket count | - | own only | macOS classifies the whole table in one call; `/proc/<pid>/fd` cannot |
 | Kernel threads distinguishable | yes | - | So "hide kernel threads" is Linux-only |
 | cgroup path and limits | yes (v2) | - | |
 | Container detection | heuristic | heuristic | Labelled as a heuristic with its evidence |
 | Filesystem capacity | yes | yes | |
+| Filesystem inode counts | yes | yes | `statfs`/`getfsstat`; `n/a` where a filesystem has no fixed table |
 | Device throughput | yes | yes | |
 | Device busy percentage | yes | - | Only where semantically correct — see `metrics.md` |
 | Device to mount-point mapping | yes | partial | On-demand tier; expensive |
@@ -71,7 +74,12 @@ The table below is what to expect. `-` means the platform has no such concept,
 | Per-process network | no | no | Out of scope for v1 |
 | Linux PSI | yes (4.20+) | - | The best memory and I/O pressure signal available |
 | Temperatures | hwmon | partial | Absent on most servers and many VMs |
-| Battery | yes | yes | Absent on desktops and servers |
+| Battery presence, charge, state | yes | yes | Absent on desktops, servers, VMs and containers |
+| Battery time remaining | driver-dependent | yes | Only where the platform publishes an estimate; never derived |
+| Battery cycle count | usually | - | macOS needs undocumented registry properties (§9.3) |
+| Battery design vs full capacity | usually | - | Same; this is the figure that shows wear |
+| Battery temperature | driver-dependent | - | Same |
+| Battery power draw in watts | usually | - | Same |
 | Process signals | yes | yes | Subject to permissions |
 | Renice | yes | yes | Lowering niceness needs privileges |
 
@@ -113,13 +121,18 @@ Read-only, on the tier indicated:
 | `/proc/<pid>/cmdline` | fast | command line |
 | `/proc/<pid>/cgroup` | slow | cgroup path, container identity |
 | `/proc/<pid>/cwd` | on demand | working directory (readlink) |
-| `/proc/<pid>/fd/` | on demand | open file and socket counts |
+| `/proc/<pid>/fd/` | on demand | open-file count (one directory read) |
+| `/proc/<pid>/fd/<n>` | on demand | what each descriptor points at (one `readlink` each, capped at 256) |
 | `/proc/pressure/{cpu,memory,io}` | fast | PSI |
 | `/sys/fs/cgroup/**` | slow | cgroup limits |
 | `/sys/class/net/*` | slow | link state, speed, interface type |
 | `/sys/class/hwmon/**` | medium | temperatures |
-| `/sys/class/power_supply/**` | medium | battery |
+| `/sys/class/power_supply/*/` — `type`, `scope`, `status`, `capacity`, `cycle_count`, `energy_full{,_design}`, `charge_full{,_design}`, `voltage_min_design`, `power_now`, `current_now`, `voltage_now`, `temp`, `time_to_{empty,full}_now` | medium | battery |
 | `/etc/passwd` (via libc) | slow | resolving uid to user name |
+
+Plus one syscall that is not a file read: `statfs(2)` on each mount point, on the
+medium tier, for the inode counts. Nothing under `/proc` reports `f_files`, so
+there is no file to read instead.
 
 Notes on the awkward parts:
 
@@ -135,6 +148,16 @@ Notes on the awkward parts:
 * Permission denial is a metric state, never a fatal error.
 * cgroup v2 is detected explicitly. Container limits are reported separately from
   host totals, and both are shown where observable.
+* `/sys/class/power_supply` is one directory level, capped at 16 entries, and every
+  attribute read is capped like any other `/sys` read. The directory is not a list of
+  batteries — the charger, a UPS and a bluetooth mouse's own cell all appear in it —
+  so the system battery is identified by `type` being `Battery` and `scope`, where
+  present, being `System`. Both are documented in the kernel's
+  `sysfs-class-power` ABI; a name whitelist would need extending for every new driver.
+* Two `/sys` attributes report zero for "I do not know", and both are treated as
+  unknown rather than as measurements: `cycle_count` (also `4294967295`, the ACPI
+  `_BIX` sentinel) and `time_to_empty_now`. `power_now` reporting zero *is* taken as a
+  measurement, because a full pack on mains really draws nothing. See `metrics.md`.
 
 ### macOS
 
@@ -149,9 +172,12 @@ Through documented libc, `sysctl`, and Mach interfaces:
 | `host_processor_info` (Mach) | per-CPU time counters |
 | `getloadavg` | load averages |
 | `proc_pidinfo` | per-process CPU, memory, and I/O counters |
-| `getfsstat` / `statfs` | mounted filesystems and capacity |
+| `proc_pidinfo` `PROC_PIDLISTFDS` | open descriptors and their kinds, on demand |
+| `proc_pidfdinfo` `PROC_PIDFDVNODEPATHINFO` | the path one descriptor points at, on demand |
+| `getfsstat` / `statfs` | mounted filesystems, capacity, and inode counts |
 | `getifaddrs` | interfaces, addresses, and counters |
-| IOKit (documented APIs only) | device throughput, battery |
+| IOKit `IOPowerSources` (documented) | battery presence, charge, state, time remaining |
+| IOKit (documented APIs only) | device throughput |
 
 Constraints, all of them deliberate:
 
@@ -160,10 +186,21 @@ Constraints, all of them deliberate:
 * **No private or undocumented APIs** in the default build. That includes
   `IOReport` and the private GPU interfaces, which is why per-GPU metrics are
   absent rather than approximated.
+* The same rule costs four battery fields. `IOPowerSources` publishes the charge,
+  the state, and the time-remaining estimate; cycle count, design capacity, pack
+  temperature and instantaneous amperage live in the `AppleSmartBattery` I/O Registry
+  node under property names Apple has never documented. All four read `n/a` on macOS,
+  and the Battery screen says so rather than showing a nicer screen built on
+  undocumented keys.
 * **Full Disk Access is not required.** monitrs works without it; some
   per-process details for other users' processes are unavailable, and say so.
-* Another user's process may hide its command line and working directory. That is
-  reported as `permission denied`, not as an empty string.
+* Another user's process may hide its command line, working directory, and whole
+  descriptor table. That is reported as `permission denied`, not as an empty string
+  and not as zero open files.
+* An open-file **path** is user data. It is shown on screen, never written to a log,
+  and never serialized: a descriptor's path is replaced by its availability state in
+  `ProcessDetail`'s own `Serialize` implementation, so no export can carry one
+  (§15.2, §19).
 * Any FFI needed is confined to the macOS collector module, keeps
   CoreFoundation ownership explicit, and every `unsafe` block carries a `SAFETY:`
   comment naming the invariant that makes it sound. `monitrs-core` and
@@ -175,8 +212,8 @@ monitrs runs unprivileged by design and **never escalates**. It does not invoke
 `sudo`, does not re-exec itself, and does not run any external command.
 
 Running as root additionally provides per-process I/O counters, working
-directories, and open-file counts for processes you do not own. Nothing else
-changes. Whether that is worth running a monitor as root is your decision; the
+directories, and open descriptors — count, socket count, and paths — for processes
+you do not own. Nothing else changes. Whether that is worth running a monitor as root is your decision; the
 Inspect screen tells you exactly what you are missing so you can make it.
 
 Elevated privileges cannot conjure a metric the kernel does not provide, which is

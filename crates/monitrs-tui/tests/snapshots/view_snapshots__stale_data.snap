@@ -39,4 +39,4 @@ expression: text
 || nothing pinned; p pins the selected process                         | NET   rx   18M/s  tx  2.3M/s                                       ||
 ||                                                                     | DISK  rd   18M/s  wr   42M/s                                       ||
 |+---------------------------------------------------------------------+--------------------------------------------------------------------+|
-|[1 Overview] 2 Processes  3 CPU  4 Storage  5 Network  6 Inspect                                                            / filter  ? help|
+|[1 Overview] 2 Processes  3 CPU  4 Storage  5 Network  6 Inspect  7 Battery                                                 / filter  ? help|

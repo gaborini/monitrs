@@ -5,7 +5,7 @@ expression: text
 |+ monitrs  host:dev-mbp  [>LIVE]  1s  lag 1400ms  up 3d 04:12 ---------------------------------------------------------------- 00:00:23Z --+|
 || CPU !permission denied [...........................................................................]  load  4.12 3.84 3.21  8 cpu  8 core||
 || MEM   71% [##############################################################=-------------------------]  23G/32G  swap 205M/2.0G            ||
-|+ SYSTEM ------------------------------------------ 22 of 23 lines ---+ DIAGNOSTICS -------------------------------------------------------+|
+|+ SYSTEM ------------------------------------------ 22 of 23 lines ---+ DIAGNOSTICS ------------------------------------ 32 of 33 lines ---+|
 ||  host         dev-mbp                                               |PRESSURE                                                            ||
 ||  os           fake-os 1.0                                           |? CPU     permission denied       denied                            ||
 ||  kernel       fake-kernel 1.0                                       |? NET     link speed unknown       18M/s                            ||
@@ -14,29 +14,29 @@ expression: text
 ||  cpu          8 logical, 8 physical                                 |? PSI-IO  warming up             warming                            ||
 ||  cpu model    Fake CPU at 3200 MHz                                  |UNAVAILABLE METRICS                                                 ||
 ||  memory       32 GiB total, swap 2.0 GiB                            |  ! process I/O             permission denied                       ||
-||  semantics    cross-platform baseline; c...r-byte comparable with it|  - CPU time breakdown      unsupported                             ||
-||  cgroup limit n/a                                                   |  - swap activity           unsupported                             ||
-||  environment  no container/VM evidence (heuristic, high confidenc...|  - disk busy               unsupported                             ||
-||COLLECTOR                                                            |  - network link speed      unsupported                             ||
-||  fast         last 3ms p95 5ms max 11ms ok 24 failed 1              |  - temperatures            unsupported                             ||
-||  medium       last 14ms p95 22ms max 31ms ok 5 failed 0             |  - battery                 unsupported                             ||
-||  slow         not sampled yet                                       |  - Linux PSI               unsupported                             ||
-||  on demand    not sampled yet                                       |  - cgroup limits           unsupported                             ||
-||RENDER                                                               |  - process signals         unsupported                             ||
-||  frames       1, 0 over budget                                      |  - renice                  unsupported                             ||
-||  duration     last 4ms max 4ms p95 4ms of 16ms budget               |  some reads were refused; running with more privilege would prov...||
-||  frame gap    n/a                                                   |STALE DATA                                                          ||
-||OWN OVERHEAD                                                         |  every headline metric is fresh                                    ||
-||  cpu          0.6% of one core, 23 MiB resident                     |COLLECTOR ERRORS                                                    ||
-|+ SELECTED PROCESS --------------------------------- 9 of 12 lines ---|  ! /proc/diskstats: permission denied (x2, 00:02 ago)              ||
-||  identity     31842 (start key 900100)                              |  ! hwmon: no sensors found (x1, 00:30 ago)                         ||
-||  name         rustc                                                 |NOTICES                                                             ||
-||  executable   /usr/bin/rustc                                        |  none                                                              ||
-||  command      cargo build --release                                 |SAMPLING                                                            ||
-||  state        sleeping                                              |  interval     1s                                                   ||
-||  user         gabor                                                 |  dropped      2                                                    ||
-||  cpu          120%                                                  |  coalesced    30                                                   ||
-||  memory       2.6G rss, 16G virt, 8.1% of total                     |  lag          1400ms                                               ||
-||  disk         !permission denied read, !permission denied write (...|  history      24 samples of 300, 162K                              ||
+||  semantics    cross-platform baseline; c...r-byte comparable with it|  ! process open files      permission denied                       ||
+||  cgroup limit n/a                                                   |  - CPU time breakdown      unsupported                             ||
+||  environment  no container/VM evidence (heuristic, high confidenc...|  - swap activity           unsupported                             ||
+||COLLECTOR                                                            |  - disk busy               unsupported                             ||
+||  fast         last 3ms p95 5ms max 11ms ok 24 failed 1              |  - network link speed      unsupported                             ||
+||  medium       last 14ms p95 22ms max 31ms ok 5 failed 0             |  - temperatures            unsupported                             ||
+||  slow         not sampled yet                                       |  - battery                 unsupported                             ||
+||  on demand    not sampled yet                                       |  - Linux PSI               unsupported                             ||
+||RENDER                                                               |  - cgroup limits           unsupported                             ||
+||  frames       1, 0 over budget                                      |  - process signals         unsupported                             ||
+||  duration     last 4ms max 4ms p95 4ms of 16ms budget               |  - renice                  unsupported                             ||
+||  frame gap    n/a                                                   |  some reads were refused; running with more privilege would prov...||
+||OWN OVERHEAD                                                         |STALE DATA                                                          ||
+||  cpu          0.6% of one core, 23 MiB resident                     |  every headline metric is fresh                                    ||
+|+ SELECTED PROCESS --------------------------------- 9 of 12 lines ---|COLLECTOR ERRORS                                                    ||
+||  identity     31842 (start key 900100)                              |  ! /proc/diskstats: permission denied (x2, 00:02 ago)              ||
+||  name         rustc                                                 |  ! hwmon: no sensors found (x1, 00:30 ago)                         ||
+||  executable   /usr/bin/rustc                                        |NOTICES                                                             ||
+||  command      cargo build --release                                 |  none                                                              ||
+||  state        sleeping                                              |SAMPLING                                                            ||
+||  user         gabor                                                 |  interval     1s                                                   ||
+||  cpu          120%                                                  |  dropped      2                                                    ||
+||  memory       2.6G rss, 16G virt, 8.1% of total                     |  coalesced    30                                                   ||
+||  disk         !permission denied read, !permission denied write (...|  lag          1400ms                                               ||
 |+---------------------------------------------------------------------+--------------------------------------------------------------------+|
-| 1 Overview  2 Processes  3 CPU  4 Storage  5 Network [6 Inspect]                                                           / filter  ? help|
+| 1 Overview  2 Processes  3 CPU  4 Storage  5 Network [6 Inspect] 7 Battery                                                 / filter  ? help|

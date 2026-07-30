@@ -1,0 +1,42 @@
+---
+source: crates/monitrs-tui/tests/view_snapshots.rs
+expression: text
+---
+|+ monitrs  host:dev-mbp  [>LIVE]  1s  up 3d 04:12 ---------------------------------------------------------------------------- 00:00:23Z --+|
+|| CPU   79% [############################################################=---------------]  load  4.12 3.84 3.21  8 cpu  8 core  temp 62.5C||
+|| MEM   71% [#####################################################=----------------------]  23G/32G  swap 205M/2.0G  bat 82%-              ||
+|+ FILESYSTEM CAPACITY -------------------------------------------- 2 mounted, 1 virtual hidden, = shares a device, SIZE is not additive ---+|
+|| MOUNT              DEVICE     TYPE      SIZE  USED AVAIL  USE% INODE%  IFREE CAPACITY                                                    ||
+||=/                  disk0s1    fakefs    494G  374G  120G   76%   9.9%   4.4M [################=-----]                                    ||
+||=/System/...es/Data disk0s1    fakefs    494G  374G  120G   76%    93%   342K [################=-----]                                    ||
+|+ DEVICE THROUGHPUT ---------------------------------------------------------------------------------------------- busy - (unsupported) ---+|
+||DEVICE      READ/s WRITE/s   R-IOPS   W-IOPS MODEL            MOUNTS                                                                      ||
+||disk0        18M/s   42M/s      320      810 Fake NVMe        /                                                                           ||
+|+ TOP DISK I/O --------------------------------------------------------------------------------------------------------------- 21 of 40 ---+|
+|| READ/s WRITE/s TOTAL R TOTAL W      PID NAME                                                                                             ||
+||  21M/s   42M/s     60G    120G    31842 rustc                                                                                            ||
+||  10M/s   21M/s     30G     60G      507 WindowServer                                                                                     ||
+|| 7.7M/s   15M/s     22G     44G     1221 postgres                                                                                         ||
+|| 3.1M/s  6.1M/s    8.8G     18G     9182 node                                                                                             ||
+|| 376K/s  752K/s    1.1G    2.1G    10039 worker                                                                                           ||
+|| 368K/s  736K/s    1.0G    2.1G    10038 worker                                                                                           ||
+|| 360K/s  720K/s    1.0G    2.0G    10037 worker                                                                                           ||
+|| 352K/s  704K/s   1012M    2.0G    10036 worker                                                                                           ||
+|| 344K/s  688K/s    989M    1.9G    10035 worker                                                                                           ||
+|| 336K/s  672K/s    966M    1.9G    10034 worker                                                                                           ||
+|| 328K/s  656K/s    943M    1.8G    10033 worker                                                                                           ||
+|| 320K/s  640K/s    920M    1.8G    10032 worker                                                                                           ||
+|| 312K/s  624K/s    897M    1.8G    10031 worker                                                                                           ||
+|| 304K/s  608K/s    874M    1.7G    10030 worker                                                                                           ||
+|| 296K/s  592K/s    851M    1.7G    10029 worker                                                                                           ||
+|| 288K/s  576K/s    828M    1.6G    10028 worker                                                                                           ||
+|| 280K/s  560K/s    805M    1.6G    10027 worker                                                                                           ||
+|| 272K/s  544K/s    782M    1.5G    10026 worker                                                                                           ||
+|| 264K/s  528K/s    759M    1.5G    10025 worker                                                                                           ||
+|| 256K/s  512K/s    736M    1.4G        1 launchd                                                                                          ||
+|| 256K/s  512K/s    736M    1.4G    10024 worker                                                                                           ||
+|+ THROUGHPUT HISTORY 5m --------------------------------------------------------------------------------- all devices, write peak 42M/s ---+|
+|| READ                                                                                                              @@@@@@@@@@@@@@@@@@@@@@@||
+|| WRITE                                                                                                             @@@@@@@@@@@@@@@@@@@@@@@||
+|+------------------------------------------------------------------------------------------------------------------------------------------+|
+| 1 Overview  2 Processes  3 CPU [4 Storage] 5 Network  6 Inspect  7 Battery                                                 / filter  ? help|

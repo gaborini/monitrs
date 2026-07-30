@@ -33,12 +33,18 @@ use std::path::PathBuf;
 
 use monitrs_core::model::ProcessIdentity;
 
-/// The six top-level views, bound to `1`–`6` by §6.2.
+/// The seven top-level views, bound to `1`–`7` by §6.2.
 ///
 /// `Cpu` sits next to `Processes` on purpose: "which process is busy" and "which core
 /// is busy" are the same question asked from two ends, and a user who has just sorted
 /// the table by CPU is one key away from the cores. It cost renumbering the three
 /// screens after it, which is a real price paid once.
+///
+/// `Battery` goes last for the opposite reason. On most machines it is the screen with
+/// the least to say — a server has no battery at all, and says so — so a screen that
+/// reads `n/a` on half the hosts monitrs runs on has no claim on a low digit. Putting
+/// it at the end also renumbered nothing, which is why it is there rather than beside
+/// the sensors it shares a screen with.
 #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
 pub enum ViewId {
     /// §7.1: CPU, memory, load, pressure radar, top processes.
@@ -53,17 +59,20 @@ pub enum ViewId {
     Network,
     /// §7.5: the detailed explanation surface.
     Inspect,
+    /// Battery charge, wear, and power draw, plus the thermal sensors.
+    Battery,
 }
 
 impl ViewId {
-    /// Every view, in `1`–`6` order.
-    pub const ALL: [Self; 6] = [
+    /// Every view, in `1`–`7` order.
+    pub const ALL: [Self; 7] = [
         Self::Overview,
         Self::Processes,
         Self::Cpu,
         Self::Storage,
         Self::Network,
         Self::Inspect,
+        Self::Battery,
     ];
 
     /// The digit key §6.2 binds this view to.
@@ -76,6 +85,7 @@ impl ViewId {
             Self::Storage => '4',
             Self::Network => '5',
             Self::Inspect => '6',
+            Self::Battery => '7',
         }
     }
 
@@ -89,6 +99,7 @@ impl ViewId {
             '4' => Some(Self::Storage),
             '5' => Some(Self::Network),
             '6' => Some(Self::Inspect),
+            '7' => Some(Self::Battery),
             _ => None,
         }
     }
@@ -103,6 +114,7 @@ impl ViewId {
             Self::Storage => "Storage",
             Self::Network => "Network",
             Self::Inspect => "Inspect",
+            Self::Battery => "Battery",
         }
     }
 
@@ -116,6 +128,7 @@ impl ViewId {
             Self::Storage => "storage",
             Self::Network => "network",
             Self::Inspect => "inspect",
+            Self::Battery => "battery",
         }
     }
 
@@ -733,6 +746,15 @@ pub enum Effect {
         /// The requested nice value.
         nice: i8,
     },
+    /// Ring the terminal bell once (`\x07`).
+    ///
+    /// Not in §10.5's list. It exists because §10.5's rule is absolute — the
+    /// reducer performs no I/O — and a bell is a byte written to the terminal, so
+    /// the *decision* to alert can live with the state that detected the
+    /// escalation while the write stays outside. Emitted only for an escalation
+    /// into `critical`, and only when §12's `diagnostics.bell_on_critical` asks
+    /// for it.
+    RingBell,
     /// Re-read the configuration file (§6.3 `reload config`). The loader must
     /// validate the whole candidate before replacing anything (§12).
     ReloadConfig,
@@ -868,10 +890,11 @@ mod tests {
         }
         assert_eq!(
             ViewId::ALL.map(ViewId::digit),
-            ['1', '2', '3', '4', '5', '6'],
-            "§6.2 binds the views to 1-6 in this order, with CPU inserted at 3"
+            ['1', '2', '3', '4', '5', '6', '7'],
+            "§6.2 binds the views to 1-7 in this order, with CPU inserted at 3 and \
+             Battery appended at 7"
         );
-        assert_eq!(ViewId::from_digit('7'), None);
+        assert_eq!(ViewId::from_digit('8'), None);
         assert_eq!(ViewId::from_digit('0'), None);
     }
 
@@ -1127,6 +1150,7 @@ mod tests {
             Effect::RequestRedraw,
             Effect::RequestSample,
             Effect::FetchProcessDetail(identity()),
+            Effect::RingBell,
             Effect::ReloadConfig,
             Effect::ExportSnapshot(PathBuf::from("/tmp/snapshot.json")),
             Effect::Shutdown,

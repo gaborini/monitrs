@@ -16,13 +16,21 @@ thiserror.workspace = true
 [target.'cfg(target_os = "macos")'.dependencies]
 libc = { workspace = true, optional = true }
 
+# `statfs(2)`'s struct layout differs by architecture and C library, which is the one
+# kind of declaration §13 does not want hand-transcribed: `libc` already gets it right
+# for every Linux target, and it is compiled into a Linux build regardless because
+# `sysinfo` depends on it. Contrast `crate::renice` and `crate::linux::signal`, which
+# declare their calls by hand because there the *signature* is what varies.
+[target.'cfg(target_os = "linux")'.dependencies]
+libc = { workspace = true, optional = true }
+
 [dev-dependencies]
 monitrs-core = { workspace = true, features = ["serde"] }
 
 [features]
 default = ["linux-native", "macos-native"]
 # Native /proc and /sys enrichment beyond the sysinfo baseline. No-op off Linux.
-linux-native = []
+linux-native = ["dep:libc"]
 # Documented libc/sysctl enrichment beyond the sysinfo baseline. No-op off macOS.
 macos-native = ["dep:libc"]
 

@@ -1,0 +1,42 @@
+---
+source: crates/monitrs-tui/tests/view_snapshots.rs
+expression: text
+---
+|+ monitrs  host:dev-mbp  [>LIVE]  1s  up 3d 04:12 ---------------------------------------------------------------------------- 00:00:23Z --+|
+|| CPU !permission denied [...........................................................................]  load  4.12 3.84 3.21  8 cpu  8 core||
+|| MEM   71% [##############################################################=-------------------------]  23G/32G  swap 205M/2.0G            ||
+|+ FILESYSTEM CAPACITY -------------------------------------------- 2 mounted, 1 virtual hidden, = shares a device, SIZE is not additive ---+|
+|| MOUNT              DEVICE     TYPE      SIZE  USED AVAIL  USE% INODE%  IFREE CAPACITY                                                    ||
+||=/                  disk0s1    fakefs    494G  374G  120G   76%   9.9%   4.4M [################=-----]                                    ||
+||=/System/...es/Data disk0s1    fakefs    494G  374G  120G   76%    93%   342K [################=-----]                                    ||
+|+ DEVICE THROUGHPUT ---------------------------------------------------------------------------------------------- busy - (unsupported) ---+|
+||DEVICE      READ/s WRITE/s   R-IOPS   W-IOPS MODEL            MOUNTS                                                                      ||
+||disk0        18M/s   42M/s      320      810 Fake NVMe        /                                                                           ||
+|+ TOP DISK I/O ----------------------------------------------------------------------------------- per-process io ! (permission denied) ---+|
+|| READ/s WRITE/s TOTAL R TOTAL W      PID NAME                                                                                             ||
+|| denied  denied  denied  denied        1 launchd                                                                                          ||
+|| denied  denied  denied  denied      507 WindowServer                                                                                     ||
+|| denied  denied  denied  denied     1221 postgres                                                                                         ||
+|| denied  denied  denied  denied     9182 node                                                                                             ||
+|| denied  denied  denied  denied    31842 rustc                                                                                            ||
+||                                                                                                                                          ||
+||                                                                                                                                          ||
+||                                                                                                                                          ||
+||                                                                                                                                          ||
+||                                                                                                                                          ||
+||                                                                                                                                          ||
+||                                                                                                                                          ||
+||                                                                                                                                          ||
+||                                                                                                                                          ||
+||                                                                                                                                          ||
+||                                                                                                                                          ||
+||                                                                                                                                          ||
+||                                                                                                                                          ||
+||                                                                                                                                          ||
+||                                                                                                                                          ||
+||                                                                                                                                          ||
+|+ THROUGHPUT HISTORY 5m --------------------------------------------------------------------------------- all devices, write peak 42M/s ---+|
+|| READ                                                                                                              @@@@@@@@@@@@@@@@@@@@@@@||
+|| WRITE                                                                                                             @@@@@@@@@@@@@@@@@@@@@@@||
+|+------------------------------------------------------------------------------------------------------------------------------------------+|
+| 1 Overview  2 Processes  3 CPU [4 Storage] 5 Network  6 Inspect  7 Battery                                                 / filter  ? help|

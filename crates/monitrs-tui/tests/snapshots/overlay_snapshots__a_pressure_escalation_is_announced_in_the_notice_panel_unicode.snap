@@ -1,0 +1,16 @@
+---
+source: crates/monitrs-tui/tests/overlay_snapshots.rs
+expression: text_of(&buffer)
+---
+|                                                                                                        |
+|                                                                                                        |
+|                                                                                                        |
+|                                                                                                        |
+|       ┌ NOTICES ──────────────────────────────────────────────────────────────── 1 critical ───┐       |
+|       │X pressure CPU is now critical (held 1s): cpu busy at or above diagnostics.cpu_watch_pe…│       |
+|       │Esc dismiss                                                                             │       |
+|       └────────────────────────────────────────────────────────────────────────────────────────┘       |
+|                                                                                                        |
+|                                                                                                        |
+|                                                                                                        |
+|                                                                                                        |

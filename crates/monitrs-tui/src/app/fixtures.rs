@@ -20,9 +20,10 @@ use core::time::Duration;
 use std::sync::{Arc, OnceLock};
 use std::time::{Instant, SystemTime};
 
+use monitrs_core::diagnostics::signal_rule_text;
 use monitrs_core::model::{
-    CapabilitySnapshot, CapabilityState, MetricState, ProcessIdentity, ProcessIo, ProcessMemory,
-    ProcessSnapshot, ProcessState, SystemSnapshot, UserIdentity,
+    CapabilitySnapshot, CapabilityState, MetricState, PressureId, PressureState, ProcessIdentity,
+    ProcessIo, ProcessMemory, ProcessSnapshot, ProcessState, SystemSnapshot, UserIdentity,
 };
 use monitrs_core::units::Percent;
 
@@ -288,6 +289,60 @@ pub(super) fn snapshot_with(
 #[must_use]
 pub(super) fn arc_snapshot(sequence: u64, processes: &[Fake]) -> Arc<SystemSnapshot> {
     Arc::new(snapshot_of(sequence, processes))
+}
+
+/// The normalized severity a fixture's derived signal reports.
+///
+/// Any value in range would do; a constant keeps the radar's bar length out of the
+/// reducer tests, which are about the *state*.
+const FIXTURE_SEVERITY: f32 = 72.0;
+
+/// Overwrites one radar signal with a derived state (§2.3).
+///
+/// A fixture cannot obtain a derived radar by collecting: §2.3's ownership boundary
+/// puts [`monitrs_core::diagnostics::PressureEngine`] in the runtime, and a collector
+/// only ever emits `warming_up`. So the signal is written directly, keeping the
+/// invariants the engine keeps — an available state carries a severity and a held
+/// duration, an unavailable one carries neither (§4) — and taking the rule text from
+/// the engine's own table rather than inventing a sentence.
+pub(super) fn set_pressure(
+    snapshot: &mut SystemSnapshot,
+    id: PressureId,
+    state: MetricState<PressureState>,
+) {
+    let Some(signal) = snapshot
+        .pressure
+        .signals
+        .iter_mut()
+        .find(|signal| signal.id == id)
+    else {
+        return;
+    };
+    signal.state = state;
+    signal.severity = match state {
+        MetricState::Available(_) | MetricState::Stale { .. } => {
+            Percent::new(FIXTURE_SEVERITY).map_or(MetricState::WarmingUp, MetricState::Available)
+        }
+        MetricState::WarmingUp => MetricState::WarmingUp,
+        MetricState::PermissionDenied => MetricState::PermissionDenied,
+        MetricState::Unsupported => MetricState::Unsupported,
+        MetricState::TemporarilyUnavailable(reason) => MetricState::TemporarilyUnavailable(reason),
+    };
+    signal.held_for = state.fresh().map(|_| FIXTURE_INTERVAL);
+    signal.rule = signal_rule_text(id);
+}
+
+/// A shared snapshot whose radar reports `state` for `id`.
+#[must_use]
+pub(super) fn arc_snapshot_with_pressure(
+    sequence: u64,
+    processes: &[Fake],
+    id: PressureId,
+    state: MetricState<PressureState>,
+) -> Arc<SystemSnapshot> {
+    let mut snapshot = snapshot_of(sequence, processes);
+    set_pressure(&mut snapshot, id, state);
+    Arc::new(snapshot)
 }
 
 #[cfg(test)]
