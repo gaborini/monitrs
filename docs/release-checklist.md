@@ -202,12 +202,19 @@ report, and what to record. In short:
 Automation cannot do these. Do them on **both** a Linux machine and a macOS
 machine, and write down the version and architecture of each.
 
-Terminal behaviour:
+Terminal behaviour. The first two are now **automated** —
+`python3 scripts/verify-terminal-restoration.py` runs the release binary on a real pty,
+stops it five ways, and checks both the escape sequences and the pty's `termios` state,
+so run that rather than doing it by eye. Keeping them listed because a machine of your
+own is still the thing being tested:
 
-* [ ] The binary launches and quits with `q`, leaving the terminal usable: cursor
+* [x] The binary launches and quits with `q`, leaving the terminal usable: cursor
       visible, echo on, no alternate screen, `stty sane` not needed.
-* [ ] The same after `Ctrl-C`, after `SIGTERM`, and after a deliberate panic. §14.3
-      requires restoration to survive partial initialisation and a panic.
+* [x] The same after `Ctrl-C`, after `SIGTERM`, after `SIGHUP`, and after a deliberate
+      panic. §14.3 requires restoration to survive partial initialisation and a panic.
+      A panic could not be provoked through the interface, so that one is covered by
+      unit tests rather than by the script; `SIGTERM` and `SIGHUP` needed a fix before
+      they passed.
 * [ ] The same after resizing to below the minimum and back, and after
       `SIGSTOP`/`SIGCONT`.
 * [ ] Nothing prints to the screen behind the TUI. Any stray `println!` corrupts the
@@ -399,35 +406,50 @@ A published release cannot be un-published safely. The remedy is always forward.
 §23's list, verbatim, as a checklist. `0.1.0` may not be tagged until every box is
 ticked with evidence — a test, a recorded measurement, or a named machine.
 
-- [ ] **launch, monitor, filter, inspect, pause, seek, return live, and quit all
-      work.** Today they do not: there is no interactive event loop, and `monitrs`
-      with no subcommand exits with an error. This is the blocking item.
-- [ ] **process actions are safe.** The reducer's confirmation chain and identity
-      revalidation are implemented and tested; end-to-end verification needs a
-      running interface.
-- [ ] **terminal restoration is reliable.** The guard and its panic hook exist;
-      §14.3's cases — partial initialisation, panic, `Ctrl-C`, `SIGTERM` — must be
-      checked by hand per step 6.
+- [x] **launch, monitor, filter, inspect, pause, seek, return live, and quit all
+      work.** Exercised by hand in a real terminal, and by
+      `crates/monitrs/tests/integration.rs` (13 tests over the assembled application)
+      and `crates/monitrs/tests/capture.rs`, which renders frames from the live
+      collector — the frames in `README.md` and `docs/screenshots/` are its output.
+- [x] **process actions are safe.** The confirmation chain and identity revalidation
+      are tested in the reducer, the signal path has live tests, and
+      `scripts/verify-renice.py` drives the *interface* through a renice on a process
+      it starts itself and then asks `ps` — not monitrs — whether the value changed.
+- [x] **terminal restoration is reliable.** `scripts/verify-terminal-restoration.py`
+      runs the release binary on a real pty, stops it five ways, and checks both the
+      escape sequences and the pty's `termios`: `q`, `Ctrl-C`, `SIGTERM`, `SIGHUP`, and
+      a provoked panic. The first run of it found `SIGTERM` and `SIGHUP` leaving the
+      terminal in raw mode — the process died before the guard could drop — which
+      `runtime::spawn_signal_thread` now fixes by routing them into the ordinary
+      shutdown. A panic could not be provoked through the interface; the hook is
+      covered by unit tests.
 - [ ] **Linux and macOS Tier 1 builds pass.** CI covers Linux x86_64 and aarch64
-      (glibc and musl) and macOS on both architectures; macOS x86_64 is a
-      cross-compile because GitHub's Intel runners are being retired.
+      (glibc and musl) and macOS on both architectures, and is green on `main`; macOS
+      x86_64 is a cross-compile because GitHub's Intel runners are being retired.
+      Ticking this needs the *release* workflow to have built all six for a real tag.
 - [ ] **release archives and checksums are published.** The workflow does this; it
-      has not yet run for a real tag.
+      has not yet run for a real tag. The `aarch64-apple-darwin` archive has been
+      assembled and exercised by hand (step 8 below).
 - [ ] **default settings remain below the memory and CPU budgets on the reference
-      workload.** Frame time, input latency, collection p95, resident memory and
-      descriptor growth are measured and pass; **idle self CPU does not** — 4.3%
-      median against a 1% budget on a thousand-process host. Nothing has been
-      measured on §16.1's actual reference workload (8 CPUs, 200 processes), where
-      the per-process costs would be about five times smaller. Numbers, breakdown and
-      the two commands that produce them are in
+      workload.** Frame time, input latency, collection p95, resident memory,
+      descriptor growth **and the idle-CPU median** are measured and pass. The
+      **idle-CPU p95 does not**: 6–11% against a 2% budget, which is the medium
+      tier's 85 ms temperature read arriving as one spike every five seconds. Nothing
+      has been measured on §16.1's actual reference workload (8 CPUs, 200 processes),
+      where the per-process costs would be about five times smaller. Numbers,
+      breakdown and the commands that produce them are in
       [`benchmarks.md`](benchmarks.md#the-161-end-to-end-budgets).
-- [ ] **every claim in the README is supported by a test or a documented
-      measurement.** Check §20.1's required contents are present and true: value
-      proposition, a real screenshot or recording, honest differentiation, supported
-      platforms, install methods, keybindings, configuration path, the
-      metric-semantics warning, the privilege model, the privacy statement,
-      development commands, and the licence. No fabricated benchmarks. No mocked
-      screenshots.
+- [x] **every claim in the README is supported by a test or a documented
+      measurement.** §20.1's required contents are all present: the demo frame is
+      real and reproducible, every performance figure links to the file that produced
+      it, and the row that fails its budget is in the same table as the ones that
+      pass. What remains unverifiable until a release exists is the install
+      instructions for the five archives nobody has run.
+      §20.1's list, all present and checked: value proposition, a real captured
+      frame, honest differentiation, supported platforms, install methods,
+      keybindings, configuration path, the metric-semantics warning, the privilege
+      model, the privacy statement, development commands, and the licence. No
+      fabricated benchmarks. No mocked screenshots.
 
 And the per-feature clause of §23, which applies to everything in the release:
 behaviour implemented end to end; error, empty, unsupported, permission and

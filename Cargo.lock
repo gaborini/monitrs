@@ -1129,6 +1129,7 @@ dependencies = [
  "ratatui",
  "serde",
  "serde_json",
+ "signal-hook",
  "sysinfo",
  "thiserror 2.0.19",
  "toml",

@@ -52,7 +52,7 @@ use crate::config::{self, Config};
 use crate::runtime::{
     DetailRequest, SampleRequest, SamplingControl, Shutdown, Workers, detail_channel,
     drain_to_newest_snapshot, event_channel, spawn_detail_worker, spawn_input_thread,
-    spawn_sampler_thread, spawn_tick_thread,
+    spawn_sampler_thread, spawn_signal_thread, spawn_tick_thread,
 };
 use crate::signals;
 
@@ -152,6 +152,9 @@ pub(crate) fn run(cli: &Cli, log_notices: Vec<String>) -> color_eyre::Result<Exi
     let mut workers = Workers::new();
 
     spawn_input_thread(&mut workers, sender.clone(), shutdown.clone(), LOOP_POLL)?;
+    // Installed before the loop, so a `kill` at any point after this restores the
+    // terminal instead of leaving it in raw mode (§14.3).
+    let signals = spawn_signal_thread(&mut workers, shutdown.clone())?;
     spawn_tick_thread(
         &mut workers,
         sender.clone(),
@@ -250,6 +253,9 @@ pub(crate) fn run(cli: &Cli, log_notices: Vec<String>) -> color_eyre::Result<Exi
 
     // --- 8. shutdown, in this order ---------------------------------------
     shutdown.trigger();
+    // Closed before the join, or the signal thread stays blocked on a signal that will
+    // never arrive and `join_all` waits out its whole timeout.
+    signals.close();
     // The terminal is released and the screen restored *before* joining, so a
     // worker that will not stop promptly does not leave the user looking at a
     // frozen alternate screen (§10.3).

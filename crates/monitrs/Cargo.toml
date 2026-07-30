@@ -31,6 +31,7 @@ directories.workspace = true
 ratatui.workspace = true
 serde.workspace = true
 serde_json.workspace = true
+signal-hook.workspace = true
 # Read for the self-overhead measurement only: one single-process refresh of our
 # own PID (§26). The same crate the common collector uses, so measuring ourselves
 # adds no second platform path and no unsafe code to this crate.

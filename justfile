@@ -53,6 +53,17 @@ check-linux:
 check-workflows:
     python3 .github/scripts/check_workflows.py
 
+# The three verifications that need a real terminal or a real machine.
+#
+# None of them can run in CI: two drive the release binary on a pty and one measures
+# this machine's CPU, so their answers are about the machine you run them on. Build
+# first — they use `target/release/monitrs`.
+verify-by-hand:
+    cargo build --release -p monitrs
+    python3 scripts/verify-terminal-restoration.py
+    python3 scripts/verify-renice.py
+    python3 scripts/measure-overhead.py
+
 # Everything CI runs, in CI order.
 ci: check-workflows fmt-check check check-linux clippy test doc deny
     @echo "all quality gates passed"

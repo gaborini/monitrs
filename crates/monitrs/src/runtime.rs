@@ -403,6 +403,54 @@ where
     })
 }
 
+/// Turns a termination signal into the ordinary shutdown, so the terminal is restored.
+///
+/// Without this, `kill` leaves the terminal in raw mode with the alternate screen still
+/// active: the process dies before [`monitrs_tui::terminal::TerminalGuard`] can drop, and
+/// the user needs `reset`. Measured, not assumed —
+/// `scripts/verify-terminal-restoration.py` checked all four of the release checklist's
+/// cases and this was the one that failed.
+///
+/// A thread waiting on the signal rather than a handler doing the work: a handler may
+/// only call async-signal-safe functions, which restoring a terminal is not, whereas
+/// triggering [`Shutdown`] lets the *existing* path run — signal the workers, drop the
+/// terminal, restore the screen, then join (§10.3's order, which is already tested).
+///
+/// `SIGINT` is included for completeness. In raw mode `ISIG` is off, so `Ctrl-C` arrives
+/// as a key press and never as a signal; an explicit `kill -INT` still gets here.
+///
+/// The returned handle must be closed during shutdown, or this thread stays blocked on a
+/// signal that will never come and `join_all` waits for it.
+///
+/// One limitation, and it is inherent: if the UI thread is wedged — blocked writing to a
+/// terminal nobody is reading — the shutdown it is being asked to perform cannot happen,
+/// and `SIGKILL` remains the answer. What this removes is the common case, where monitrs
+/// is perfectly healthy and someone simply told it to stop.
+#[allow(
+    dead_code,
+    reason = "spawned by the interactive loop; the soak and integration harnesses \
+              include this module by path and have no terminal to restore"
+)]
+pub(crate) fn spawn_signal_thread(
+    workers: &mut Workers,
+    shutdown: Shutdown,
+) -> std::io::Result<signal_hook::iterator::Handle> {
+    use signal_hook::consts::{SIGHUP, SIGINT, SIGTERM};
+    use signal_hook::iterator::Signals;
+
+    let mut signals = Signals::new([SIGTERM, SIGHUP, SIGINT])?;
+    let handle = signals.handle();
+    workers.spawn("monitrs-signals", move || {
+        // One signal is enough: the second one would be asking for something already
+        // under way, and a user who wants it faster has `SIGKILL`.
+        if let Some(signal) = (&mut signals).into_iter().next() {
+            tracing::info!(signal, "terminating on a signal; restoring the terminal");
+            shutdown.trigger();
+        }
+    })?;
+    Ok(handle)
+}
+
 /// Emits a monotonic tick so the reducer can expire multi-key sequences.
 ///
 /// §6.2's `gg` sequence needs a timeout, and the keymap's `poll_timeout` can only

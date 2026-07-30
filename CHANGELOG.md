@@ -97,8 +97,13 @@ cannot produce.
 * `--debug-log` on every subcommand, carrying collector durations and the
   dropped/coalesced counts, and never writing to a terminal that is showing the
   interface.
-* **The terminal is restored** on quit, on error, and on panic — before the panic
-  report is printed, and before slow workers are joined.
+* **The terminal is restored** on quit, on `Ctrl-C`, on `SIGTERM`, on `SIGHUP`, on
+  error, and on panic — before the panic report is printed, and before slow workers
+  are joined. A signal reaches the ordinary shutdown path rather than killing the
+  process where it stands, so `kill` gives the terminal back instead of leaving it
+  needing `reset`. Verified on a real pty by
+  `scripts/verify-terminal-restoration.py`, which checks the escape sequences *and*
+  the pty's `termios` state for each case.
 
 ### Measured
 
