@@ -2,6 +2,23 @@
 
 **A fast, keyboard-first system cockpit for Linux and macOS, built in Rust.**
 
+<p align="center">
+  <img src="https://raw.githubusercontent.com/gaborini/monitrs/main/docs/demo/monitrs.gif"
+       alt="monitrs running: the Overview screen with live meters, the pressure radar, history sparklines and the process table">
+</p>
+
+<p align="center">
+  <a href="https://crates.io/crates/monitrs"><img
+    src="https://img.shields.io/crates/v/monitrs?style=flat-square" alt="crates.io"></a>
+  <a href="https://github.com/gaborini/monitrs/actions/workflows/ci.yml"><img
+    src="https://img.shields.io/github/actions/workflow/status/gaborini/monitrs/ci.yml?branch=main&style=flat-square&label=ci" alt="CI"></a>
+  <a href="https://docs.rs/monitrs-core"><img
+    src="https://img.shields.io/docsrs/monitrs-core?style=flat-square&label=docs" alt="docs.rs"></a>
+  <img src="https://img.shields.io/crates/msrv/monitrs?style=flat-square" alt="MSRV">
+  <img src="https://img.shields.io/badge/platform-linux%20%7C%20macos-informational?style=flat-square" alt="platforms">
+  <img src="https://img.shields.io/crates/l/monitrs?style=flat-square" alt="licence: MIT OR Apache-2.0">
+</p>
+
 monitrs shows you what your machine is doing right now — and, unlike most
 terminal monitors, what it was doing thirty seconds ago. Pause the timeline,
 scrub back to a spike, and see which processes were most strongly correlated
@@ -30,7 +47,8 @@ has the full 160-column frame of every screen that has one — Overview, CPU, St
 Inspect and Battery — plus the Unicode variant and the 80×24 compact layout. The hostname and the login name are
 substituted for the machine this was taken on — every measurement, process name and
 state is exactly as rendered, and the substitutes are the same width so no column
-moves.
+moves. The animation at the top of this file is a plain screen recording with nothing
+substituted, which is why the two show different host names.
 
 ```text
 + monitrs  host:dev-mbp  [>LIVE]  250ms  up 9d 03:41 -----------------------------------------------------------------
