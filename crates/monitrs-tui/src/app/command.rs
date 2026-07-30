@@ -65,10 +65,20 @@ pub enum CommandError {
     #[error("no command")]
     Empty,
     /// The command word is not one of §6.3's.
-    #[error("unknown command {input:?}; press ? for the command list")]
+    ///
+    /// A near miss carries a suggestion, but the command is still **rejected**
+    /// rather than auto-corrected: §6.3 requires parsing to be deterministic, and
+    /// silently running something the user did not type would be worse than a
+    /// clear refusal.
+    #[error("unknown command {input:?}{}", suggestion.map_or_else(
+        || "; press ? for the command list".to_owned(),
+        |s| format!("; did you mean `{s}`?"),
+    ))]
     Unknown {
         /// What was typed.
         input: String,
+        /// The closest known command word, when one is close enough to help.
+        suggestion: Option<&'static str>,
     },
     /// The command needs an argument that was not given.
     #[error("`{command}` needs {expected}")]
@@ -312,6 +322,7 @@ pub fn parse(line: &str) -> Result<Command, CommandError> {
         }
         _ => Err(CommandError::Unknown {
             input: word.to_owned(),
+            suggestion: closest_command(word),
         }),
     }
 }
@@ -343,6 +354,59 @@ fn require<'a>(
 /// ambiguous between a second and a millisecond — so the expectation names the
 /// units rather than just saying "a duration".
 const DURATION_GRAMMAR: &str = "a whole number followed by ms, s, m or h";
+
+/// The known command word within edit distance 2 of `word`.
+///
+/// Ported from the standalone palette module that was removed as a duplicate of
+/// this parser: this was the one thing it had that this did not, and a command
+/// palette that refuses `vie` without mentioning `view` is needlessly unhelpful.
+#[must_use]
+pub(super) fn closest_command(word: &str) -> Option<&'static str> {
+    const WORDS: [&str; 11] = [
+        "view", "sort", "filter", "interval", "history", "theme", "glyphs", "color", "export",
+        "config", "reload",
+    ];
+    let lower = word.to_ascii_lowercase();
+    WORDS
+        .into_iter()
+        .map(|candidate| (edit_distance(&lower, candidate), candidate))
+        .filter(|(distance, _)| *distance <= 2)
+        .min_by_key(|(distance, _)| *distance)
+        .map(|(_, candidate)| candidate)
+}
+
+/// Levenshtein distance, iterative so a long input cannot overflow the stack.
+fn edit_distance(left: &str, right: &str) -> usize {
+    let right_chars: Vec<char> = right.chars().collect();
+    let mut previous: Vec<usize> = (0..=right_chars.len()).collect();
+    let mut current = vec![0usize; right_chars.len() + 1];
+
+    for (i, left_char) in left.chars().enumerate() {
+        current[0] = i + 1;
+        for (j, &right_char) in right_chars.iter().enumerate() {
+            let substitution = previous
+                .get(j)
+                .copied()
+                .unwrap_or(usize::MAX)
+                .saturating_add(usize::from(left_char != right_char));
+            let deletion = previous
+                .get(j + 1)
+                .copied()
+                .unwrap_or(usize::MAX)
+                .saturating_add(1);
+            let insertion = current
+                .get(j)
+                .copied()
+                .unwrap_or(usize::MAX)
+                .saturating_add(1);
+            if let Some(slot) = current.get_mut(j + 1) {
+                *slot = substitution.min(deletion).min(insertion);
+            }
+        }
+        std::mem::swap(&mut previous, &mut current);
+    }
+    previous.last().copied().unwrap_or(0)
+}
 
 #[cfg(test)]
 mod tests {
@@ -579,5 +643,40 @@ mod tests {
             2,
             "color and config both start with c"
         );
+    }
+
+    #[test]
+    fn a_near_miss_is_still_refused_but_names_the_command_it_resembles() {
+        // §6.3 requires determinism: the suggestion is advice, never a correction.
+        let error = parse("vie overview").expect_err("`vie` is not a command");
+        match &error {
+            CommandError::Unknown { input, suggestion } => {
+                assert_eq!(input, "vie");
+                assert_eq!(*suggestion, Some("view"));
+            }
+            other => panic!("expected Unknown, got {other:?}"),
+        }
+        let message = error.to_string();
+        assert!(message.contains("did you mean `view`?"), "{message}");
+    }
+
+    #[test]
+    fn a_word_resembling_nothing_gets_no_suggestion_and_points_at_the_list() {
+        let error = parse("xyzzy").expect_err("not a command");
+        match &error {
+            CommandError::Unknown { suggestion, .. } => assert_eq!(*suggestion, None),
+            other => panic!("expected Unknown, got {other:?}"),
+        }
+        assert!(error.to_string().contains("press ? for the command list"));
+    }
+
+    #[test]
+    fn suggestions_are_case_insensitive_and_bounded() {
+        assert_eq!(closest_command("VIEW"), Some("view"));
+        assert_eq!(closest_command("sortt"), Some("sort"));
+        assert_eq!(closest_command("colour"), Some("color"));
+        // Two edits is the limit; three is not a near miss.
+        assert_eq!(closest_command("xxxxxx"), None);
+        assert_eq!(closest_command(""), None);
     }
 }
