@@ -18,6 +18,17 @@ collection. These are v1 scope decisions rather than oversights.
 smoke-tested, but glibc-specific metrics may behave differently and the musl
 targets do not gate a release.
 
+**macOS x86_64 is cross-compiled and has not run on a genuine Intel Mac.** GitHub is
+retiring its Intel runners, so CI builds that target and cannot execute it. It has been
+run by hand — under Rosetta on Apple Silicon, where it works: same process count, same
+capabilities, one exception. It reports **temperatures as `unsupported`** where the arm64
+build on the same machine reports them as available, because the sensor enumeration goes
+through IOKit and a translated process does not see the same components. That is most
+likely an artefact of the translation rather than of the target, and it is *reported
+honestly either way* — `unsupported` rather than a fabricated zero (§4). Nobody has
+checked it on real Intel hardware, and until somebody has, this paragraph is the whole of
+what is known.
+
 ## Support is per metric, not per platform
 
 A single "supported" flag per OS would be a lie in both directions: Linux exposes

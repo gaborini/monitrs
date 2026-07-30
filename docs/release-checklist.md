@@ -34,14 +34,20 @@ not monitrs — whether the value changed. What is still missing before `0.1.0`:
   is pushed on another day, change that line first. The workflow's `verify` job does
   not check the date, only that the section exists.
 
-  The archive itself has been assembled and exercised by hand for
-  `aarch64-apple-darwin`, following the workflow's own steps: the tarball contains
-  the binary, both licences, the README, the five shell completions and the manpage;
-  its checksum verifies; the extracted binary reports `monitrs 0.1.0`, prints its
-  help, and produces a snapshot of 970 processes with 17 of 22 capabilities
-  available; the manpage renders under `man`; and the bash and zsh completions parse
-  under `bash -n` and `zsh -n`. What remains untested is the other five targets,
-  which only CI can build.
+  **Both macOS archives** have been assembled and exercised by hand, following the
+  workflow's own steps: each tarball holds the binary, both licences, the README, the
+  changelog excerpt, five shell completions and the manpage — eleven files; both
+  checksums verify; both extracted binaries report `monitrs 0.1.0` and produce a
+  snapshot of 1027 processes; both manpages render under `man`; both sets of bash and
+  zsh completions parse under `bash -n` and `zsh -n`.
+
+  That includes `x86_64-apple-darwin`, which **CI builds but cannot run** — it skips
+  the smoke test for that target because GitHub's Intel runners are being retired. Run
+  under Rosetta here it works, with one honest difference: temperatures come back
+  `unsupported` where the arm64 build says available (see
+  [`platform-support.md`](platform-support.md)). The four Linux archives cannot be
+  built on this machine — no cross-linker — so they remain CI's to produce and
+  nobody's to have run.
 
 So this file is currently a **procedure, not a plan**. It is complete and it is
 followed as written, but the [§23 gate](#the-23-gate-for-010) at the bottom is what
