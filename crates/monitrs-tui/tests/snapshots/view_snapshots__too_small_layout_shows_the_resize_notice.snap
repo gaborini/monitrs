@@ -1,0 +1,17 @@
+---
+source: crates/monitrs-tui/tests/view_snapshots.rs
+assertion_line: 435
+expression: text
+---
+|                                                    |
+|                                                    |
+|                                                    |
+|                                                    |
+|            monitrs needs at least 60x16            |
+|              current terminal: 52x12               |
+|             resize or press q to quit              |
+|                                                    |
+|                                                    |
+|                                                    |
+|                                                    |
+|                                                    |

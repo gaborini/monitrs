@@ -1,0 +1,24 @@
+---
+source: crates/monitrs-tui/tests/overlay_snapshots.rs
+expression: text_of(&buffer)
+---
+|                                                                                                        |
+|                                                                                                        |
+|                                                                                                        |
+|                                                                                                        |
+|                       + HELP --------------------------------- confirm mode ---+                       |
+|                       |Global                                                  |                       |
+|                       | q          Quit                                        |                       |
+|                       | Ctrl-C     Quit safely from any mode                   |                       |
+|                       | Esc        Close the overlay or cancel the current mode|                       |
+|                       |Process control                                         |                       |
+|                       | Enter / y  Confirm the pending action                  |                       |
+|                       | Y          Confirm a forceful action such as SIGKILL   |                       |
+|                       | n          Cancel without acting                       |                       |
+|                       | j / Down   Next choice                                 |                       |
+|                       | k / Up     Previous choice                             |                       |
+|                       +--------------------------------------------------------+                       |
+|                                                                                                        |
+|                                                                                                        |
+|                                                                                                        |
+|                                                                                                        |

@@ -1,0 +1,33 @@
+---
+source: crates/monitrs-tui/tests/view_snapshots.rs
+assertion_line: 682
+expression: text
+---
+|+ monitrs  host:dev-mbp  [>LIVE]  1s  up 3d 04:12 ------------------------------------ 00:00:23Z --+|
+|| CPU   79% [############################=-------]  load  4.12 3.84 3.21  8 cpu  8 core  temp 62.5C||
+|| MEM   71% [#########################=----------]  23G/32G  swap 205M/2.0G  bat 82%-              ||
+|+ PROCESSES  sort PID asc ------------------------------------------------------------- 4 total ---+|
+||      PID USER     S   CPU%  MEM%   RSS  READ/s WRITE/s  THR      AGE NAME                        ||
+||>       1 gabor    S   0.1%  0.1%   32M  256K/s  512K/s    4    01:23 launchd                     ||
+||Z    1221 postgres Z     0%  0.1%   32M  256K/s  512K/s    4    01:23 postgres                    ||
+||D    4410 root     D     0%  0.1%   32M  256K/s  512K/s    4    01:23 nfsd                        ||
+||    31842 gabor    S   287%  8.2%  2.6G   21M/s   42M/s    4    01:23 rustc                       ||
+||                                                                                                  ||
+||                                                                                                  ||
+||                                                                                                  ||
+||                                                                                                  ||
+||                                                                                                  ||
+||                                                                                                  ||
+||                                                                                                  ||
+||                                                                                                  ||
+||                                                                                                  ||
+||                                                                                                  ||
+||                                                                                                  ||
+||                                                                                                  ||
+||                                                                                                  ||
+||                                                                                                  ||
+||                                                                                                  ||
+||                                                                                                  ||
+||                                                                                                  ||
+|+--------------------------------------------------------------------------------------------------+|
+| 1 Overview [2 Processes] 3 Storage  4 Network  5 Inspect                           / filter  ? help|

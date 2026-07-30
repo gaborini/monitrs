@@ -1,0 +1,34 @@
+---
+source: crates/monitrs-tui/tests/overlay_snapshots.rs
+expression: text
+---
+|                                                                                                        |
+|                                                                                                        |
+|                                                                                                        |
+|                                                                                                        |
+|              + CONFIRM ----------------------------------------------------------------+               |
+|              |NAME          rustc                                                      |               |
+|              |PID           31842                                                      |               |
+|              |IDENTITY      pid 31842 start key 900100                                 |               |
+|              |USER            gabor                                                    |               |
+|              |STATE         sleeping                                                   |               |
+|              |STARTED         1970-01-01 00:00:00 UTC                                  |               |
+|              |AGE             01:20                                                    |               |
+|              |THREADS         4                                                        |               |
+|              |COMMAND       cargo build --release                                      |               |
+|              |-------------------------------------------------------------------------|               |
+|              |REQUESTED ACTION                                                         |               |
+|              |ACTION        SIGKILL (signal 9)                                         |               |
+|              |CONSEQUENCE                                                              |               |
+|              |  terminates the process immediately, with no cleanup and no unsaved work|               |
+|              |X this signal cannot be caught, blocked or ignored                       |               |
+|              |                                                                         |               |
+|              |the identity above is re-read immediately before delivery;               |               |
+|              |if this PID has become another process the action is abandoned           |               |
+|              |Y send SIGKILL (signal 9)   Esc cancel                                   |               |
+|              |! Enter will not confirm a forceful action; Y is required                |               |
+|              +-------------------------------------------------------------------------+               |
+|                                                                                                        |
+|                                                                                                        |
+|                                                                                                        |
+|                                                                                                        |

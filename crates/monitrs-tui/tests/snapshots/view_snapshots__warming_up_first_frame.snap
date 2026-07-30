@@ -1,0 +1,43 @@
+---
+source: crates/monitrs-tui/tests/view_snapshots.rs
+assertion_line: 588
+expression: text
+---
+|+ monitrs  host:dev-mbp  [>LIVE]  1s  up 3d 04:12 ---------------------------------------------------------------------------- 00:00:00Z --+|
+|| CPU .warming up [......................................................................................]  load .warming up  8 cpu  8 core||
+|| MEM .warming up [......................................................................................]  .warming up/32G  swap 205M/2.0G||
+|+ PRESSURE ------------ 5 of 8 ---+ HISTORY 5m --------------------------------------------------------------------------------------------+|
+|| ? CPU     n/a           n/a     | CPU                                                                                                    ||
+|| ? MEM     n/a           n/a     | MEM                                                                                                    ||
+|| ? NET     n/a           n/a     | I/O                                                                                                    ||
+|| ? SWAP    n/a           n/a     | CORE                                                                                                   ||
+|| ? LOAD    n/a           n/a     |                                                                                                        ||
+|+ PROCESSES  sort CPU% desc --------------------------------------------------------------------------------------------------- 5 total ---+|
+||      PID USER     S   CPU%  MEM%   RSS  VIRT  READ/s WRITE/s  THR      AGE NAME                     COMMAND                              ||
+||>       1 gabor    S    n/a  0.1%   32M  192M     n/a     n/a    4    01:00 launchd                  /sbin/launchd                        ||
+||      507 gabor    S    n/a  4.1%  1.3G  7.8G     n/a     n/a    4    01:00 WindowServer             /System/Library/WindowServer         ||
+||     1221 postgres S    n/a  3.0%  982M  5.8G     n/a     n/a    4    01:00 postgres                 postgres: checkpointer               ||
+||     9182 gabor    S    n/a  1.2%  392M  2.3G     n/a     n/a    4    01:00 node                     node server.js                       ||
+||    31842 gabor    S    n/a  8.1%  2.6G   16G     n/a     n/a    4    01:00 rustc                    cargo build --release                ||
+||                                                                                                                                          ||
+||                                                                                                                                          ||
+||                                                                                                                                          ||
+||                                                                                                                                          ||
+||                                                                                                                                          ||
+||                                                                                                                                          ||
+||                                                                                                                                          ||
+||                                                                                                                                          ||
+||                                                                                                                                          ||
+||                                                                                                                                          ||
+||                                                                                                                                          ||
+||                                                                                                                                          ||
+||                                                                                                                                          ||
+||                                                                                                                                          ||
+||                                                                                                                                          ||
+||                                                                                                                                          ||
+||                                                                                                                                          ||
+|+ PINS ---------------------------------------------------------------+ NETWORK -----------------------------------------------------------+|
+|| nothing pinned; p pins the selected process                         | NET   rx    n/a  tx    n/a                                         ||
+||                                                                     | DISK  rd    n/a  wr    n/a                                         ||
+|+---------------------------------------------------------------------+--------------------------------------------------------------------+|
+|[1 Overview] 2 Processes  3 Storage  4 Network  5 Inspect                                                                   / filter  ? help|

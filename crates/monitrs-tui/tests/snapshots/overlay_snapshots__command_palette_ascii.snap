@@ -1,0 +1,24 @@
+---
+source: crates/monitrs-tui/tests/overlay_snapshots.rs
+expression: text_of(&buffer)
+---
+|                                                                                                        |
+|                                                                                                        |
+|                                                                                                        |
+|                                                                                                        |
+|                                                                                                        |
+|+ COMMAND ----------------------------------------------------------------------------- 11 commands ---+|
+||:                                                                                                     ||
+||------------------------------------------------------------------------------------------------------||
+||> view <overview|processes|storage|network|inspect>  switch to a main view                            ||
+||  sort <cpu|memory|read|write|pid|name|age>          order the process table by a column              ||
+||  filter <text>                                      match name, command, PID or user; empty clears   ||
+||  interval <duration>                                set the sample interval, such as 500ms or 2s     ||
+||  history <duration>                                 set the retained history span, such as 5m        ||
+||  theme <default-dark|default-light|high-contrast>   select a built-in theme                          ||
+||  glyphs <auto|unicode|ascii>                        select the glyph set                             ||
+||  color <auto|truecolor|256|16|off>                  select the colour depth                          ||
+||  export snapshot <path>                             write a redacted JSON snapshot                   ||
+||  config path                                        show where configuration is read from            ||
+||  reload config                                      re-read the configuration file                   ||
+|+------------------------------------------------------------------------------------------------------+|

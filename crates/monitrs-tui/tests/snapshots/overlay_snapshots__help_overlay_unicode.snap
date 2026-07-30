@@ -1,0 +1,44 @@
+---
+source: crates/monitrs-tui/tests/overlay_snapshots.rs
+expression: text_of(&buffer)
+---
+|                   ┌ HELP ─────────────────────────────────────────── 1-38 of 43 ───┐                   |
+|                   │Global                                                          │                   |
+|                   │ q                  Quit                                        │                   |
+|                   │ Ctrl-C             Quit safely from any mode                   │                   |
+|                   │ Esc                Close the overlay or cancel the current mode│                   |
+|                   │ ?                  Toggle context-aware help                   │                   |
+|                   │ Tab                Focus the next panel                        │                   |
+|                   │ Shift-Tab          Focus the previous panel                    │                   |
+|                   │ 1                  Go to the Overview view                     │                   |
+|                   │ 2                  Go to the Processes view                    │                   |
+|                   │ 3                  Go to the Storage view                      │                   |
+|                   │ 4                  Go to the Network view                      │                   |
+|                   │ 5                  Go to the Inspect view                      │                   |
+|                   │ Space              Pause or resume the visible timeline        │                   |
+|                   │ L                  Return to the live sample                   │                   |
+|                   │ :                  Open the command palette                    │                   |
+|                   │ r                  Force a refresh                             │                   |
+|                   │ t                  Cycle the theme                             │                   |
+|                   │ g                  Cycle the glyph mode                        │                   |
+|                   │Lists and tables                                                │                   |
+|                   │ j / Down           Next row                                    │                   |
+|                   │ k / Up             Previous row                                │                   |
+|                   │ Ctrl-D / PageDown  Page down                                   │                   |
+|                   │ Ctrl-U / PageUp    Page up                                     │                   |
+|                   │ gg / Home          First row                                   │                   |
+|                   │ G / End            Last row                                    │                   |
+|                   │ Enter              Inspect the selected item                   │                   |
+|                   │ /                  Edit the filter                             │                   |
+|                   │ n                  Next filter match                           │                   |
+|                   │ N                  Previous filter match                       │                   |
+|                   │ s                  Open the sort selector                      │                   |
+|                   │ S                  Reverse the current sort                    │                   |
+|                   │ p                  Pin or unpin the selected process           │                   |
+|                   │ f                  Toggle flat and tree process views          │                   |
+|                   │Time Lens                                                       │                   |
+|                   │ [                  Step one sample back                        │                   |
+|                   │ ]                  Step one sample forward                     │                   |
+|                   │ {                  Leap ten samples back                       │                   |
+|                   │ }                  Leap ten samples forward                    │                   |
+|                   └────────────────────────────────────────────────────────────────┘                   |

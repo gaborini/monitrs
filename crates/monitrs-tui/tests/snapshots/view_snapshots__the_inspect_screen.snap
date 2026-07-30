@@ -1,0 +1,43 @@
+---
+source: crates/monitrs-tui/tests/view_snapshots.rs
+assertion_line: 743
+expression: text
+---
+|+ monitrs  host:dev-mbp  [>LIVE]  1s  lag 1400ms  up 3d 04:12 ---------------------------------------------------------------- 00:00:23Z --+|
+|| CPU   79% [############################################################=---------------]  load  4.12 3.84 3.21  8 cpu  8 core  temp 62.5C||
+|| MEM   71% [#####################################################=----------------------]  23G/32G  swap 205M/2.0G  bat 82%-              ||
+|+ SYSTEM ------------------------------------------ 22 of 23 lines ---+ DIAGNOSTICS -------------------------------------------------------+|
+||  host         dev-mbp                                               |PRESSURE                                                            ||
+||  os           fake-os 1.0                                           |? NET     link speed unknown       18M/s                            ||
+||  kernel       fake-kernel 1.0                                       |? PSI-CPU warming up                 n/a                            ||
+||  arch         aarch64                                               |? PSI-MEM warming up                 n/a                            ||
+||  uptime       3d 04:12 (booted 00:00:00Z)                           |? PSI-IO  warming up                 n/a                            ||
+||  cpu          8 logical, 8 physical                                 |UNAVAILABLE METRICS                                                 ||
+||  cpu model    Fake CPU at 3200 MHz                                  |  - CPU time breakdown      unsupported                             ||
+||  memory       32 GiB total, swap 2.0 GiB                            |  - swap activity           unsupported                             ||
+||  semantics    cross-platform baseline; c...r-byte comparable with it|  - disk busy               unsupported                             ||
+||  cgroup limit n/a                                                   |  - network link speed      unsupported                             ||
+||  environment  no container/VM evidence (heuristic, high confidenc...|  - Linux PSI               unsupported                             ||
+||COLLECTOR                                                            |  - cgroup limits           unsupported                             ||
+||  fast         last 3ms p95 5ms max 11ms ok 24 failed 1              |  - process signals         unsupported                             ||
+||  medium       last 14ms p95 22ms max 31ms ok 5 failed 0             |  - renice                  unsupported                             ||
+||  slow         not sampled yet                                       |STALE DATA                                                          ||
+||  on demand    not sampled yet                                       |  every headline metric is fresh                                    ||
+||RENDER                                                               |COLLECTOR ERRORS                                                    ||
+||  frames       1, 0 over budget                                      |  ! /proc/diskstats: permission denied (x2, 00:02 ago)              ||
+||  duration     last 4ms max 4ms p95 4ms of 16ms budget               |  ! hwmon: no sensors found (x1, 00:30 ago)                         ||
+||  frame gap    n/a                                                   |NOTICES                                                             ||
+||OWN OVERHEAD                                                         |  none                                                              ||
+||  cpu          0.6% of one core, 23 MiB resident                     |SAMPLING                                                            ||
+|+ SELECTED PROCESS --------------------------------- 9 of 12 lines ---|  interval     1s                                                   ||
+||  identity     1 (start key 1)                                       |  dropped      2                                                    ||
+||  name         launchd                                               |  coalesced    30                                                   ||
+||  executable   /usr/bin/launchd                                      |  lag          1400ms                                               ||
+||  command      /sbin/launchd                                         |  history      24 samples of 300, 190K                              ||
+||  state        sleeping                                              |                                                                    ||
+||  user         gabor                                                 |                                                                    ||
+||  cpu          0.1%                                                  |                                                                    ||
+||  memory       32M rss, 192M virt, 0.1% of total                     |                                                                    ||
+||  disk         256K/s read, 512K/s write (736M / 1.4G total)         |                                                                    ||
+|+---------------------------------------------------------------------+--------------------------------------------------------------------+|
+| 1 Overview  2 Processes  3 Storage  4 Network [5 Inspect]                                                                  / filter  ? help|

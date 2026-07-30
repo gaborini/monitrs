@@ -1,0 +1,20 @@
+---
+source: crates/monitrs-tui/tests/overlay_snapshots.rs
+expression: text_of(&buffer)
+---
+|                                                                                                        |
+|                                                                                                        |
+|                                                                                                        |
+|       ┌ NOTICES ──────────────────────────────────────────────────────────────── 6 critical ───┐       |
+|       │! config sampling.history 24h clamped to 1h: above the supported maximum                │       |
+|       │! config sampling.history 1h clamped to 1825s: would exceed the history memory budget   │       |
+|       │! collector /proc/diskstats read failed                                                 │       |
+|       │! permission per-process I/O is not permitted at this privilege level; monitrs does not…│       |
+|       │. export wrote 12 KiB to /tmp/monitrs.json                                              │       |
+|       │X process PID 31842 has already exited; no signal was sent                              │       |
+|       │Esc dismiss                                                                             │       |
+|       └────────────────────────────────────────────────────────────────────────────────────────┘       |
+|                                                                                                        |
+|                                                                                                        |
+|                                                                                                        |
+|                                                                                                        |

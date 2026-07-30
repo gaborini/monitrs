@@ -1,0 +1,34 @@
+---
+source: crates/monitrs-tui/tests/overlay_snapshots.rs
+expression: text
+---
+|                                                                                                        |
+|               + SPIKE ATTRIBUTION -------------------- sample 22:13:50 UTC  -00:37 ---+                |
+|               |top contributors, correlated with this sample                          |                |
+|               |METRIC PROCESS             PID      VALUE   DELTA/RATE   SHARE         |                |
+|               |-----------------------------------------------------------------------|                |
+|               |CPU    rustc             31842       287%        +167%     77%         |                |
+|               |CPU    postgres           1221        54%          +0%     14%         |                |
+|               |CPU    WindowServer        507        21%          +0%    5.6%         |                |
+|               |CPU    node               9182        12%          +0%    3.2%         |                |
+|               |CPU    launchd               1       0.1%          +0%    0.0%         |                |
+|               |MEM    rustc             31842    2.6 GiB         +0 B     49%         |                |
+|               |MEM    WindowServer        507    1.3 GiB         +0 B     25%         |                |
+|               |MEM    postgres           1221    982 MiB         +0 B     18%         |                |
+|               |MEM    node               9182    392 MiB         +0 B    7.3%         |                |
+|               |MEM    launchd               1     32 MiB         +0 B    0.6%         |                |
+|               |READ   rustc             31842      21M/s        +0B/s     49%         |                |
+|               |READ   WindowServer        507      10M/s        +0B/s     25%         |                |
+|               |READ   postgres           1221     7.7M/s        +0B/s     18%         |                |
+|               |READ   node               9182     3.1M/s        +0B/s    7.3%         |                |
+|               |READ   launchd               1     256K/s        +0B/s    0.6%         |                |
+|               |WRITE  rustc             31842      42M/s        +0B/s     49%         |                |
+|               |WRITE  WindowServer        507      21M/s        +0B/s     25%         |                |
+|               |WRITE  postgres           1221      15M/s        +0B/s     18%         |                |
+|               |WRITE  node               9182     6.1M/s        +0B/s    7.3%         |                |
+|               |WRITE  launchd               1     512K/s        +0B/s    0.6%         |                |
+|               |evidence coverage CPU   100%                 MEM   100%                |                |
+|               |                  READ   100%                WRITE   100%              |                |
+|               |correlation within one retained sample, not a proof of cause           |                |
+|               +-----------------------------------------------------------------------+                |
+|                                                                                                        |

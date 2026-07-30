@@ -1,0 +1,799 @@
+//! Snapshot tests for the five screens and their chrome (§17.3).
+//!
+//! Every fixture comes from `monitrs-collectors`' `FakeCollector`, driven through
+//! the real reducer: a snapshot is delivered as an [`Event::Snapshot`] exactly as
+//! the runtime would deliver it, so the history ring fills, the selection
+//! initialises, and the frame under test is the frame a user would see. §17.3 asks
+//! for states a real machine cannot be put into on demand — the warming-up first
+//! frame, permission-denied metrics, stale data, an empty process list — and §17.5
+//! requires them to come from a deterministic fake rather than from hand-written
+//! structs.
+//!
+//! The Pressure Radar is derived the way §11's ownership boundary says it must be:
+//! the collector emits `PressureSnapshot::warming_up`, the runtime records the
+//! sample into the ring and then asks the [`PressureEngine`] for the states. The
+//! harness below does the same, so the radar rows in these snapshots are the rows
+//! the diagnostic engine really produces rather than a plausible-looking fixture.
+//!
+//! Two things are snapshotted, not one:
+//!
+//! * the **characters**, through ratatui's `TestBackend`, which is what a user
+//!   reads; and
+//! * the **styles**, as a run-length map, because a `TestBackend` view discards
+//!   them entirely — and a no-colour snapshot identical to a true-colour one would
+//!   prove nothing about §5.2's "colour is never the only indicator".
+//!
+//! Nondeterminism is excluded rather than normalised: the fake host name is fixed,
+//! uptime is a function of the sample sequence, wall time advances one second per
+//! sample from the Unix epoch, and no screen reads a clock of its own (§10.5).
+//!
+//! [`Event::Snapshot`]: monitrs_tui::event::Event::Snapshot
+//! [`PressureEngine`]: monitrs_core::diagnostics::PressureEngine
+
+// An integration test is its own crate, so the library's `cfg(test)` allowance
+// does not reach here. `expect` is how a test asserts a precondition: a fixture
+// that cannot be built is a broken test, and failing loudly at that line is the
+// wanted behaviour. Production code keeps both lints denied (§18.2).
+#![allow(clippy::expect_used, clippy::unwrap_used)]
+
+use core::fmt::Write as _;
+use core::time::Duration;
+use std::sync::Arc;
+use std::time::{Instant, SystemTime};
+
+use monitrs_collectors::fake::{FakeCollector, FakeProcess, Pattern, Scenario};
+use monitrs_collectors::source::{SampleTick, SnapshotSource};
+use monitrs_collectors::tier::DueTiers;
+use monitrs_core::diagnostics::{PressureEngine, Thresholds};
+use monitrs_core::model::{CollectorHealth, ProcessState, SelfOverhead, TierHealth};
+use monitrs_core::process::{ProcessSort, ProcessSortKey};
+use monitrs_core::units::Percent;
+use monitrs_tui::action::ViewId;
+use monitrs_tui::app::{AppSettings, AppState};
+use monitrs_tui::event::Event;
+use monitrs_tui::glyphs::GlyphSet;
+use monitrs_tui::theme::{ColorDepth, ThemeId};
+use monitrs_tui::views;
+use monitrs_tui::widgets::Presentation;
+use ratatui::Terminal;
+use ratatui::backend::TestBackend;
+use ratatui::buffer::Buffer;
+use ratatui::layout::Rect;
+
+// ---------------------------------------------------------------------------
+// Fixtures
+// ---------------------------------------------------------------------------
+
+/// How the state under test should be configured before the snapshots arrive.
+#[derive(Clone, Debug)]
+struct Fixture {
+    scenario: Scenario,
+    samples: u64,
+    size: (u16, u16),
+    view: ViewId,
+    tree: bool,
+    sort: ProcessSort,
+    /// Extra collector health, for the Inspect screen's diagnostics section.
+    health: Option<CollectorHealth>,
+    /// Whether to freeze the timeline after the last sample (§2.1).
+    paused: bool,
+}
+
+impl Fixture {
+    /// The reference scenario at `size`, on `view`.
+    fn new(size: (u16, u16), view: ViewId) -> Self {
+        Self {
+            scenario: Scenario::default(),
+            samples: 24,
+            size,
+            view,
+            tree: false,
+            sort: ProcessSort::descending(ProcessSortKey::Cpu),
+            health: None,
+            paused: false,
+        }
+    }
+
+    fn with_scenario(mut self, scenario: Scenario) -> Self {
+        self.scenario = scenario;
+        self
+    }
+
+    fn with_samples(mut self, samples: u64) -> Self {
+        self.samples = samples;
+        self
+    }
+
+    fn with_tree(mut self, tree: bool) -> Self {
+        self.tree = tree;
+        self
+    }
+
+    fn with_sort(mut self, sort: ProcessSort) -> Self {
+        self.sort = sort;
+        self
+    }
+
+    fn with_health(mut self, health: CollectorHealth) -> Self {
+        self.health = Some(health);
+        self
+    }
+
+    fn paused(mut self) -> Self {
+        self.paused = true;
+        self
+    }
+
+    /// Builds the state by driving the reducer with the fake collector's output.
+    fn build(self) -> AppState {
+        let mut state = AppState::new(AppSettings {
+            started_at: Instant::now(),
+            size: self.size,
+            view: self.view,
+            tree_mode: self.tree,
+            sort: self.sort,
+            ..AppSettings::default()
+        });
+        let mut collector = FakeCollector::new(self.scenario);
+        let mut engine = PressureEngine::new(Thresholds::default());
+        let start = Instant::now();
+        let mut tick = SampleTick::first(start, SystemTime::UNIX_EPOCH);
+
+        for index in 0..self.samples {
+            if index > 0 {
+                tick = tick.advance(
+                    start + Duration::from_secs(index),
+                    SystemTime::UNIX_EPOCH + Duration::from_secs(index),
+                    DueTiers::ALL,
+                );
+            }
+            let Ok(mut snapshot) = collector.sample(&tick) else {
+                continue;
+            };
+            // §11's ownership boundary, in the order it documents: record the sample,
+            // then derive the radar from it.
+            snapshot.pressure = engine.observe(&snapshot);
+            let _ = monitrs_tui::app::apply(&mut state, Event::<()>::Snapshot(Arc::new(snapshot)));
+        }
+        if let Some(health) = self.health {
+            let _ = monitrs_tui::app::apply(&mut state, Event::<()>::health(health));
+        }
+        if self.paused {
+            let _ = monitrs_tui::app::reduce(&mut state, monitrs_tui::action::Action::TogglePause);
+        }
+        // One recorded frame, so the Inspect screen's render timing is not empty. The
+        // duration is fixed rather than measured: §17.3 forbids nondeterminism.
+        let at = state.clock() + Duration::from_millis(100);
+        state.record_render(at, Duration::from_millis(4));
+        state
+    }
+}
+
+/// A scenario whose host name is far longer than any header (§17.3).
+fn long_hostname_scenario() -> Scenario {
+    Scenario {
+        hostname: "build-agent-eu-west-1b-really-quite-long-hostname.example.internal".into(),
+        ..Scenario::default()
+    }
+}
+
+/// A scenario with the zombie and uninterruptible-sleep rows §7.2 singles out.
+fn notable_states_scenario() -> Scenario {
+    Scenario {
+        processes: vec![
+            FakeProcess::new(31_842, 900_100, "rustc", "cargo build --release")
+                .with_cpu(Pattern::Steady(287.0))
+                .with_rss(2_814_509_056),
+            FakeProcess::new(1_221, 700_050, "postgres", "postgres: checkpointer")
+                .with_cpu(Pattern::Steady(0.0))
+                .with_state(ProcessState::Zombie)
+                .with_user("postgres", 70),
+            FakeProcess::new(4_410, 660_000, "nfsd", "nfsd")
+                .with_cpu(Pattern::Steady(0.0))
+                .with_state(ProcessState::UninterruptibleSleep)
+                .with_user("root", 0),
+            FakeProcess::new(1, 1, "launchd", "/sbin/launchd").with_cpu(Pattern::Steady(0.1)),
+        ],
+        ..Scenario::default()
+    }
+}
+
+/// A process tree with real depth, for the tree-mode snapshot.
+fn tree_scenario() -> Scenario {
+    let mut processes = vec![
+        FakeProcess::new(1, 1, "launchd", "/sbin/launchd").with_cpu(Pattern::Steady(0.1)),
+        FakeProcess::new(500, 2, "sshd", "sshd: gabor").with_cpu(Pattern::Steady(1.0)),
+        FakeProcess::new(501, 3, "bash", "-bash").with_cpu(Pattern::Steady(2.0)),
+        FakeProcess::new(502, 4, "cargo", "cargo build --release").with_cpu(Pattern::Steady(9.0)),
+        FakeProcess::new(503, 5, "rustc", "rustc --crate-name monitrs")
+            .with_cpu(Pattern::Steady(287.0)),
+        FakeProcess::new(504, 6, "rustc", "rustc --crate-name monitrs_core")
+            .with_cpu(Pattern::Steady(140.0)),
+        FakeProcess::new(600, 7, "cron", "/usr/sbin/cron").with_cpu(Pattern::Steady(0.0)),
+    ];
+    // launchd -> {sshd -> bash -> cargo -> {rustc, rustc}, cron}
+    for (pid, parent) in [
+        (500u32, 1u32),
+        (501, 500),
+        (502, 501),
+        (503, 502),
+        (504, 502),
+        (600, 1),
+    ] {
+        if let Some(process) = processes
+            .iter_mut()
+            .find(|process| process.identity.pid == pid)
+        {
+            process.parent_pid = Some(parent);
+        }
+    }
+    Scenario {
+        processes,
+        ..Scenario::default()
+    }
+}
+
+/// Collector health with something to report in every §7.5 diagnostics field.
+fn busy_health() -> CollectorHealth {
+    let mut health = CollectorHealth {
+        fast: TierHealth {
+            last_duration: Duration::from_millis(3),
+            max_duration: Duration::from_millis(11),
+            p95_duration: Duration::from_millis(5),
+            completed: 24,
+            failed: 1,
+            since_last: Some(Duration::from_millis(200)),
+        },
+        medium: TierHealth {
+            last_duration: Duration::from_millis(14),
+            max_duration: Duration::from_millis(31),
+            p95_duration: Duration::from_millis(22),
+            completed: 5,
+            failed: 0,
+            since_last: Some(Duration::from_secs(2)),
+        },
+        dropped_samples: 2,
+        coalesced_samples: 7,
+        lag: Duration::from_millis(1_400),
+        self_overhead: Some(SelfOverhead {
+            cpu: Percent::new(0.6).expect("finite"),
+            rss_bytes: 23 * 1024 * 1024,
+            history_bytes: 2 * 1024 * 1024 + 512 * 1024,
+            open_files: monitrs_core::model::MetricState::Available(14),
+        }),
+        ..CollectorHealth::default()
+    };
+    health.record_issue(
+        "/proc/diskstats",
+        "permission denied",
+        Duration::from_secs(3),
+    );
+    health.record_issue(
+        "/proc/diskstats",
+        "permission denied",
+        Duration::from_secs(2),
+    );
+    health.record_issue("hwmon", "no sensors found", Duration::from_secs(30));
+    health
+}
+
+// ---------------------------------------------------------------------------
+// Rendering harness
+// ---------------------------------------------------------------------------
+
+/// The three presentations §17.3 names: strict ASCII, enhanced Unicode, no colour.
+fn ascii() -> Presentation<'static> {
+    Presentation::new(
+        GlyphSet::ascii(),
+        ThemeId::DefaultDark.theme(),
+        ColorDepth::TrueColor,
+    )
+}
+
+fn unicode() -> Presentation<'static> {
+    ascii().with_glyphs(GlyphSet::unicode())
+}
+
+fn no_color() -> Presentation<'static> {
+    ascii().with_depth(ColorDepth::Off)
+}
+
+/// Renders one whole frame of `state` and returns the buffer.
+fn frame(state: &AppState, presentation: Presentation<'_>) -> Buffer {
+    let (width, height) = state.size();
+    let mut terminal = Terminal::new(TestBackend::new(width.max(1), height.max(1)))
+        .expect("a test backend never fails to initialise");
+    terminal
+        .draw(|frame| {
+            let area = Rect::new(0, 0, width, height);
+            views::render(frame, area, state, presentation);
+        })
+        .expect("drawing to a test backend never fails");
+    terminal.backend().buffer().clone()
+}
+
+/// The characters of a buffer, one framed line per row.
+///
+/// The frame makes trailing whitespace visible, which matters: a panel that stops
+/// one cell short of its border is a §5.4 bug and an unframed snapshot hides it.
+///
+/// A double-width grapheme occupies two cells and ratatui blanks the second, so
+/// the continuation cell is skipped rather than printed as a space.
+fn text_of(buffer: &Buffer) -> String {
+    let mut out = String::new();
+    for y in buffer.area.top()..buffer.area.bottom() {
+        out.push('|');
+        let mut skip = 0u16;
+        for x in buffer.area.left()..buffer.area.right() {
+            if skip > 0 {
+                skip -= 1;
+                continue;
+            }
+            match buffer.cell((x, y)) {
+                Some(cell) => {
+                    let symbol = cell.symbol();
+                    out.push_str(symbol);
+                    skip = u16::try_from(monitrs_core::units::display_width(symbol))
+                        .unwrap_or(1)
+                        .saturating_sub(1);
+                }
+                None => out.push('?'),
+            }
+        }
+        out.push('|');
+        out.push('\n');
+    }
+    out
+}
+
+/// A run-length map of the styles in a buffer.
+fn styles_of(buffer: &Buffer) -> String {
+    let mut out = String::new();
+    for y in buffer.area.top()..buffer.area.bottom() {
+        let _ = write!(out, "{y:>2}:");
+        let mut run: Option<(String, u16)> = None;
+        for x in buffer.area.left()..buffer.area.right() {
+            let Some(cell) = buffer.cell((x, y)) else {
+                continue;
+            };
+            let key = format!("{:?}/{:?}/{:?}", cell.fg, cell.bg, cell.modifier);
+            match &mut run {
+                Some((current, count)) if *current == key => *count += 1,
+                Some((current, count)) => {
+                    let _ = write!(out, " {count}x{current}");
+                    run = Some((key, 1));
+                }
+                None => run = Some((key, 1)),
+            }
+        }
+        if let Some((current, count)) = run {
+            let _ = write!(out, " {count}x{current}");
+        }
+        out.push('\n');
+    }
+    out
+}
+
+// ---------------------------------------------------------------------------
+// §17.3: breakpoints
+// ---------------------------------------------------------------------------
+
+#[test]
+fn wide_live_overview() {
+    let state = Fixture::new((140, 38), ViewId::Overview).build();
+    let text = text_of(&frame(&state, ascii()));
+    // §2.1: the header says which of the three timeline states this is.
+    assert!(text.contains("[>LIVE]"), "{text}");
+    // §5.5: the process panel's trailing count.
+    assert!(text.contains(" total "), "{text}");
+    insta::assert_snapshot!(text);
+}
+
+#[test]
+fn wide_live_overview_in_unicode_mode() {
+    let state = Fixture::new((140, 38), ViewId::Overview).build();
+    insta::assert_snapshot!(text_of(&frame(&state, unicode())));
+}
+
+#[test]
+fn standard_layout() {
+    // §5.7: header meters, compact history, process table, one focus-selected
+    // lower summary panel.
+    let state = Fixture::new((110, 30), ViewId::Overview).build();
+    insta::assert_snapshot!(text_of(&frame(&state, ascii())));
+}
+
+#[test]
+fn compact_eighty_by_twenty_four() {
+    // §5.7's Compact band, and the size every terminal is guaranteed to have.
+    let state = Fixture::new((80, 24), ViewId::Overview).build();
+    let text = text_of(&frame(&state, ascii()));
+    for line in text.lines() {
+        assert_eq!(
+            monitrs_core::units::display_width(line),
+            82,
+            "a row is not exactly 80 cells wide: {line:?}"
+        );
+    }
+    insta::assert_snapshot!(text);
+}
+
+#[test]
+fn too_small_layout_keeps_a_minimal_process_list() {
+    // §5.7: a stable minimal process list down to 60x16.
+    let state = Fixture::new((60, 16), ViewId::Overview).build();
+    insta::assert_snapshot!(text_of(&frame(&state, ascii())));
+}
+
+#[test]
+fn too_small_layout_shows_the_resize_notice() {
+    // Below 60x16 the interface is replaced by §5.7's three lines, verbatim.
+    let state = Fixture::new((52, 12), ViewId::Overview).build();
+    let text = text_of(&frame(&state, ascii()));
+    assert!(text.contains("monitrs needs at least 60x16"), "{text}");
+    assert!(text.contains("current terminal: 52x12"), "{text}");
+    insta::assert_snapshot!(text);
+}
+
+// ---------------------------------------------------------------------------
+// §17.3: glyph and colour modes
+// ---------------------------------------------------------------------------
+
+#[test]
+fn ascii_mode_emits_only_printable_seven_bit_output() {
+    // §5.1's crate-wide promise, asserted over a whole frame rather than a widget.
+    let state = Fixture::new((140, 38), ViewId::Processes).build();
+    let buffer = frame(&state, ascii());
+    for cell in buffer.content() {
+        for byte in cell.symbol().bytes() {
+            assert!(
+                (0x20..=0x7e).contains(&byte),
+                "strict ASCII mode emitted {:?}",
+                cell.symbol()
+            );
+        }
+    }
+    insta::assert_snapshot!(text_of(&buffer));
+}
+
+#[test]
+fn unicode_mode_uses_the_enhanced_character_set() {
+    let state = Fixture::new((140, 38), ViewId::Processes).build();
+    insta::assert_snapshot!(text_of(&frame(&state, unicode())));
+}
+
+#[test]
+fn no_color_mode_renders_the_same_characters() {
+    let state = Fixture::new((140, 38), ViewId::Overview).build();
+    let coloured = frame(&state, ascii());
+    let plain = frame(&state, no_color());
+    assert_eq!(
+        text_of(&coloured),
+        text_of(&plain),
+        "§5.2: turning colour off must not lose a character"
+    );
+    assert_ne!(
+        styles_of(&coloured),
+        styles_of(&plain),
+        "the two depths must be distinguishable at all"
+    );
+    insta::assert_snapshot!(text_of(&plain));
+}
+
+#[test]
+fn no_color_mode_styles() {
+    // The characters are identical with colour on and off, so this is the snapshot
+    // that shows meaning survives: §5.2's states still differ by modifier.
+    let state = Fixture::new((100, 28), ViewId::Overview).build();
+    insta::assert_snapshot!(styles_of(&frame(&state, no_color())));
+}
+
+#[test]
+fn true_color_mode_styles() {
+    let state = Fixture::new((100, 28), ViewId::Overview).build();
+    insta::assert_snapshot!(styles_of(&frame(&state, ascii())));
+}
+
+// ---------------------------------------------------------------------------
+// §17.3: metric states
+// ---------------------------------------------------------------------------
+
+#[test]
+fn empty_process_list() {
+    // A locked-down container really can show nothing, and it is not a failure.
+    let state = Fixture::new((140, 38), ViewId::Processes)
+        .with_scenario(Scenario::empty())
+        .build();
+    assert_eq!(state.rows().len(), 0);
+    let text = text_of(&frame(&state, ascii()));
+    assert!(text.contains("no processes visible"), "{text}");
+    insta::assert_snapshot!(text);
+}
+
+#[test]
+fn permission_denied_metrics() {
+    let state = Fixture::new((140, 38), ViewId::Overview)
+        .with_scenario(Scenario::permission_denied())
+        .build();
+    let text = text_of(&frame(&state, ascii()));
+    assert!(
+        text.contains("permission denied") || text.contains("n/a"),
+        "{text}"
+    );
+    // §4: never silently zero.
+    assert!(
+        !text.contains(" 0% ["),
+        "a denied meter drew a zero bar:\n{text}"
+    );
+    insta::assert_snapshot!(text);
+}
+
+#[test]
+fn permission_denied_metrics_on_the_inspect_screen() {
+    // §7.5 asks for the unavailable metrics *and why*, which is the panel that
+    // turns a wall of `n/a` into an explanation.
+    let state = Fixture::new((140, 38), ViewId::Inspect)
+        .with_scenario(Scenario::permission_denied())
+        .with_health(busy_health())
+        .build();
+    let text = text_of(&frame(&state, ascii()));
+    assert!(text.contains("UNAVAILABLE METRICS"), "{text}");
+    insta::assert_snapshot!(text);
+}
+
+#[test]
+fn stale_data() {
+    // §4: a retained value may be shown only if it is visibly marked stale *and*
+    // carries its age.
+    let state = Fixture::new((140, 38), ViewId::Overview)
+        .with_scenario(Scenario {
+            stale_from: Some(6),
+            ..Scenario::default()
+        })
+        .build();
+    let text = text_of(&frame(&state, ascii()));
+    assert!(text.contains('~'), "the stale marker is missing:\n{text}");
+    insta::assert_snapshot!(text);
+}
+
+#[test]
+fn stale_data_is_explained_on_the_inspect_screen() {
+    let state = Fixture::new((140, 38), ViewId::Inspect)
+        .with_scenario(Scenario {
+            stale_from: Some(6),
+            ..Scenario::default()
+        })
+        .build();
+    let text = text_of(&frame(&state, ascii()));
+    assert!(text.contains("STALE DATA"), "{text}");
+    insta::assert_snapshot!(text);
+}
+
+#[test]
+fn warming_up_first_frame() {
+    // §8.2, §26: the first delta sample is warming up, never zero. This snapshot is
+    // the one that would change if a screen ever rendered `0%` here.
+    let state = Fixture::new((140, 38), ViewId::Overview)
+        .with_samples(1)
+        .build();
+    let text = text_of(&frame(&state, ascii()));
+    assert!(
+        text.contains("warming up") || text.contains("n/a"),
+        "{text}"
+    );
+    assert!(
+        !text.contains("0B/s"),
+        "a warming-up rate read as zero:\n{text}"
+    );
+    insta::assert_snapshot!(text);
+}
+
+#[test]
+fn the_very_first_frame_before_any_snapshot() {
+    // The runtime draws before the collector has answered at all.
+    let state = Fixture::new((140, 38), ViewId::Overview)
+        .with_samples(0)
+        .build();
+    assert!(state.snapshot().is_none());
+    insta::assert_snapshot!(text_of(&frame(&state, ascii())));
+}
+
+// ---------------------------------------------------------------------------
+// §17.3: names, cores, and modes
+// ---------------------------------------------------------------------------
+
+#[test]
+fn a_long_hostname() {
+    // The header must stay inside its frame, and the title is what gives way.
+    let state = Fixture::new((100, 28), ViewId::Overview)
+        .with_scenario(long_hostname_scenario())
+        .build();
+    let text = text_of(&frame(&state, ascii()));
+    for line in text.lines() {
+        assert_eq!(
+            monitrs_core::units::display_width(line),
+            102,
+            "a row is not exactly 100 cells wide: {line:?}"
+        );
+    }
+    insta::assert_snapshot!(text);
+}
+
+#[test]
+fn a_long_hostname_in_a_compact_header() {
+    let state = Fixture::new((80, 24), ViewId::Overview)
+        .with_scenario(long_hostname_scenario())
+        .build();
+    insta::assert_snapshot!(text_of(&frame(&state, ascii())));
+}
+
+#[test]
+fn a_high_core_count() {
+    // §7.1: hundreds of cores are aggregated into a strip, never rendered as rows.
+    let state = Fixture::new((140, 38), ViewId::Overview)
+        .with_scenario(Scenario::many_cores())
+        .build();
+    let text = text_of(&frame(&state, ascii()));
+    assert_eq!(
+        text.lines().count(),
+        38,
+        "256 cores must not add rows to the frame"
+    );
+    insta::assert_snapshot!(text);
+}
+
+#[test]
+fn tree_mode() {
+    let state = Fixture::new((140, 38), ViewId::Processes)
+        .with_scenario(tree_scenario())
+        .with_tree(true)
+        .with_sort(ProcessSort::ascending(ProcessSortKey::Pid))
+        .build();
+    let text = text_of(&frame(&state, ascii()));
+    assert!(text.contains("tree"), "the panel says which mode it is in");
+    assert!(text.contains("`-") || text.contains("+-"), "{text}");
+    insta::assert_snapshot!(text);
+}
+
+#[test]
+fn tree_mode_in_unicode_mode() {
+    let state = Fixture::new((140, 38), ViewId::Processes)
+        .with_scenario(tree_scenario())
+        .with_tree(true)
+        .with_sort(ProcessSort::ascending(ProcessSortKey::Pid))
+        .build();
+    insta::assert_snapshot!(text_of(&frame(&state, unicode())));
+}
+
+#[test]
+fn notable_process_states_are_visibly_distinct_without_colour() {
+    // §7.2: zombie and uninterruptible-sleep rows. The marker column carries the
+    // state code so the cue survives the STATE column being dropped.
+    let state = Fixture::new((100, 28), ViewId::Processes)
+        .with_scenario(notable_states_scenario())
+        .with_sort(ProcessSort::ascending(ProcessSortKey::Pid))
+        .build();
+    let text = text_of(&frame(&state, no_color()));
+    assert!(text.contains("|Z"), "a zombie row lost its marker:\n{text}");
+    assert!(
+        text.contains("|D"),
+        "a D-state row lost its marker:\n{text}"
+    );
+    insta::assert_snapshot!(text);
+}
+
+// ---------------------------------------------------------------------------
+// §17.3: the remaining screens
+// ---------------------------------------------------------------------------
+
+#[test]
+fn the_processes_screen() {
+    let state = Fixture::new((140, 38), ViewId::Processes).build();
+    insta::assert_snapshot!(text_of(&frame(&state, ascii())));
+}
+
+#[test]
+fn the_storage_screen() {
+    // §7.3: two clearly labelled sections, and no unlabelled percentage.
+    let state = Fixture::new((140, 38), ViewId::Storage).build();
+    let text = text_of(&frame(&state, ascii()));
+    assert!(text.contains("FILESYSTEM CAPACITY"), "{text}");
+    assert!(text.contains("DEVICE THROUGHPUT"), "{text}");
+    // The fake platform cannot produce a device busy figure, so the column is not
+    // drawn and the panel says why.
+    assert!(!text.contains("BUSY"), "{text}");
+    insta::assert_snapshot!(text);
+}
+
+#[test]
+fn the_network_screen() {
+    // §7.4: no utilization percentage without a link speed.
+    let state = Fixture::new((140, 38), ViewId::Network).build();
+    let text = text_of(&frame(&state, ascii()));
+    assert!(text.contains("INTERFACES"), "{text}");
+    assert!(text.contains("launch rx"), "{text}");
+    assert!(text.contains("os rx"), "{text}");
+    insta::assert_snapshot!(text);
+}
+
+#[test]
+fn the_network_screen_with_a_known_link_speed() {
+    // The other half of §7.4's rule: where the speed is known, the figure is real.
+    let state = Fixture::new((140, 38), ViewId::Network)
+        .with_scenario(Scenario {
+            link_speed_mbps: Some(1_000),
+            ..Scenario::default()
+        })
+        .build();
+    insta::assert_snapshot!(text_of(&frame(&state, ascii())));
+}
+
+#[test]
+fn the_inspect_screen() {
+    let state = Fixture::new((140, 38), ViewId::Inspect)
+        .with_health(busy_health())
+        .build();
+    let text = text_of(&frame(&state, ascii()));
+    assert!(text.contains("SYSTEM"), "{text}");
+    assert!(text.contains("SELECTED PROCESS"), "{text}");
+    assert!(text.contains("DIAGNOSTICS"), "{text}");
+    // §7.5, §15.2: environment-variable values must not appear, and the model has
+    // no field for them.
+    assert!(!text.contains("PATH="), "{text}");
+    insta::assert_snapshot!(text);
+}
+
+#[test]
+fn the_inspect_screen_in_one_column() {
+    let state = Fixture::new((90, 26), ViewId::Inspect)
+        .with_health(busy_health())
+        .build();
+    insta::assert_snapshot!(text_of(&frame(&state, ascii())));
+}
+
+#[test]
+fn the_inspect_screen_in_a_container() {
+    // §9.2: a cgroup limit is shown beside the host total, both labelled.
+    let state = Fixture::new((140, 38), ViewId::Inspect)
+        .with_scenario(Scenario::containerised())
+        .build();
+    let text = text_of(&frame(&state, ascii()));
+    assert!(text.contains("cgroup limit"), "{text}");
+    assert!(text.contains("heuristic"), "{text}");
+    insta::assert_snapshot!(text);
+}
+
+// ---------------------------------------------------------------------------
+// §17.3: the Time Lens (§2.1, §26)
+// ---------------------------------------------------------------------------
+
+#[test]
+fn a_paused_overview_is_unmistakable_from_a_live_one() {
+    let state = Fixture::new((140, 38), ViewId::Overview).paused().build();
+    let text = text_of(&frame(&state, ascii()));
+    assert!(text.contains("[=PAUSED]"), "{text}");
+    assert!(
+        text.contains("L live"),
+        "§2.1's one explicit action:\n{text}"
+    );
+    insta::assert_snapshot!(text);
+}
+
+#[test]
+fn a_history_overview_carries_its_offset_and_a_caret() {
+    let mut state = Fixture::new((140, 38), ViewId::Overview).build();
+    for _ in 0..8 {
+        let _ = monitrs_tui::app::reduce(
+            &mut state,
+            monitrs_tui::action::Action::SeekHistory(monitrs_tui::action::Seek::Backward(1)),
+        );
+    }
+    let text = text_of(&frame(&state, ascii()));
+    assert!(text.contains("[<HISTORY -"), "{text}");
+    assert!(
+        text.contains("selected"),
+        "the caret note is missing:\n{text}"
+    );
+    assert!(text.contains('^'), "the caret is missing:\n{text}");
+    insta::assert_snapshot!(text);
+}

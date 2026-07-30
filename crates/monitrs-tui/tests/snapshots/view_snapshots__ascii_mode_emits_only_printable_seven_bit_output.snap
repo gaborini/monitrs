@@ -1,0 +1,43 @@
+---
+source: crates/monitrs-tui/tests/view_snapshots.rs
+assertion_line: 456
+expression: text_of(&buffer)
+---
+|+ monitrs  host:dev-mbp  [>LIVE]  1s  up 3d 04:12 ---------------------------------------------------------------------------- 00:00:23Z --+|
+|| CPU   79% [############################################################=---------------]  load  4.12 3.84 3.21  8 cpu  8 core  temp 62.5C||
+|| MEM   71% [#####################################################=----------------------]  23G/32G  swap 205M/2.0G  bat 82%-              ||
+|+ PROCESSES  sort CPU% desc --------------------------------------------------------------------------------------------------- 5 total ---+|
+||      PID USER     S   CPU%  MEM%   RSS  VIRT  READ/s WRITE/s  THR      AGE NAME                     COMMAND                              ||
+||    31842 gabor    S   120%  8.1%  2.6G   16G   21M/s   42M/s    4    01:23 rustc                    cargo build --release                ||
+||     1221 postgres S    54%  3.0%  982M  5.8G  7.7M/s   15M/s    4    01:23 postgres                 postgres: checkpointer               ||
+||      507 gabor    S    21%  4.1%  1.3G  7.8G   10M/s   21M/s    4    01:23 WindowServer             /System/Library/WindowServer         ||
+||     9182 gabor    S    12%  1.2%  392M  2.3G  3.1M/s  6.1M/s    4    01:23 node                     node server.js                       ||
+||>       1 gabor    S   0.1%  0.1%   32M  192M  256K/s  512K/s    4    01:23 launchd                  /sbin/launchd                        ||
+||                                                                                                                                          ||
+||                                                                                                                                          ||
+||                                                                                                                                          ||
+||                                                                                                                                          ||
+||                                                                                                                                          ||
+||                                                                                                                                          ||
+||                                                                                                                                          ||
+||                                                                                                                                          ||
+||                                                                                                                                          ||
+||                                                                                                                                          ||
+||                                                                                                                                          ||
+||                                                                                                                                          ||
+||                                                                                                                                          ||
+||                                                                                                                                          ||
+||                                                                                                                                          ||
+||                                                                                                                                          ||
+||                                                                                                                                          ||
+||                                                                                                                                          ||
+||                                                                                                                                          ||
+||                                                                                                                                          ||
+||                                                                                                                                          ||
+||                                                                                                                                          ||
+||                                                                                                                                          ||
+||                                                                                                                                          ||
+||                                                                                                                                          ||
+||                                                                                                                                          ||
+|+------------------------------------------------------------------------------------------------------------------------------------------+|
+| 1 Overview [2 Processes] 3 Storage  4 Network  5 Inspect                                                                   / filter  ? help|

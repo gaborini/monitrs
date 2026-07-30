@@ -1,0 +1,24 @@
+---
+source: crates/monitrs-tui/tests/overlay_snapshots.rs
+expression: text_of(&buffer)
+---
+|                                                                                                        |
+|                                                                                                        |
+|                                                                                                        |
+|                                                                                                        |
+|                      + PROCESS ---------------------------------- pid 31842 ---+                       |
+|                      |NAME rustc   STATE sleeping   USER   gabor               |                       |
+|                      |IDENTITY      pid 31842 start key 900100                 |                       |
+|                      |EXECUTABLE    /usr/bin/rustc                             |                       |
+|                      |COMMAND       cargo build --release                      |                       |
+|                      |AGE   01:20   STARTED   1970-01-01 00:00:00 UTC          |                       |
+|                      |CPU   287%   RSS   2.6G   MEM%   8.1%   THREADS   4      |                       |
+|                      |READ   21M/s   WRITE   42M/s   VIRTUAL   16G             |                       |
+|                      |---------------------------------------------------------|                       |
+|                      |the on-demand detail for this process has not arrived yet|                       |
+|                      +---------------------------------------------------------+                       |
+|                                                                                                        |
+|                                                                                                        |
+|                                                                                                        |
+|                                                                                                        |
+|                                                                                                        |

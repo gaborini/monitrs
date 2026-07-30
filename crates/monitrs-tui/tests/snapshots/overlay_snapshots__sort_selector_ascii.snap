@@ -1,0 +1,24 @@
+---
+source: crates/monitrs-tui/tests/overlay_snapshots.rs
+expression: text_of(&buffer)
+---
+|                                                                                                        |
+|                                                                                                        |
+|                                                                                                        |
+|                    + SORT ---------------------------------- CPU%, descending ---+                     |
+|                    |> CPU%              active, descending                       |                     |
+|                    |  memory (RSS)                                               |                     |
+|                    |  name                                                       |                     |
+|                    |  PID                                                        |                     |
+|                    |  user                                                       |                     |
+|                    |  state                                                      |                     |
+|                    |  read rate                                                  |                     |
+|                    |  write rate                                                 |                     |
+|                    |  age                                                        |                     |
+|                    |  threads                                                    |                     |
+|                    |  virtual memory                                             |                     |
+|                    |Enter sort by the highlighted column   S reverse   Esc cancel|                     |
+|                    +-------------------------------------------------------------+                     |
+|                                                                                                        |
+|                                                                                                        |
+|                                                                                                        |

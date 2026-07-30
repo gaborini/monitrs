@@ -1,0 +1,24 @@
+---
+source: crates/monitrs-tui/tests/overlay_snapshots.rs
+expression: text_of(&buffer)
+---
+|                                                                                                        |
+|               + SPIKE ATTRIBUTION -------------------- sample 22:13:35 UTC  -00:02 ---+                |
+|               |top contributors, correlated with this sample                          |                |
+|               |METRIC PROCESS             PID      VALUE   DELTA/RATE   SHARE         |                |
+|               |-----------------------------------------------------------------------|                |
+|               |CPU    rustc             31842       120%          +0%     58%         |                |
+|               |CPU    postgres           1221        54%          +0%     26%         |                |
+|               |CPU    WindowServer        507        21%          +0%     10%         |                |
+|               |CPU    node               9182        12%          +0%    5.8%         |                |
+|               |CPU    launchd               1       0.1%          +0%    0.0%         |                |
+|               |MEM    rustc             31842    2.6 GiB         +0 B     49%         |                |
+|               |MEM    WindowServer        507    1.3 GiB         +0 B     25%         |                |
+|               |MEM    postgres           1221    982 MiB         +0 B     18%         |                |
+|               |MEM    node               9182    392 MiB         +0 B    7.3%         |                |
+|               |MEM    launchd               1     32 MiB         +0 B    0.6%         |                |
+|               |evidence coverage CPU   100%                 MEM   100%                |                |
+|               |                  READ ! permission denied   WRITE ! permission denied |                |
+|               |correlation within one retained sample, not a proof of cause           |                |
+|               +-----------------------------------------------------------------------+                |
+|                                                                                                        |
