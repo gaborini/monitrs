@@ -49,6 +49,7 @@ use crate::model::ProcessSnapshot;
 
 mod filter;
 mod sort;
+mod subtree;
 mod tree;
 
 #[cfg(test)]
@@ -56,6 +57,7 @@ mod fixtures;
 
 pub use filter::{FilterPattern, PlainPattern, ProcessFilter, ProcessPredicate};
 pub use sort::{ProcessSort, ProcessSortKey, SortDirection, UnknownSortKey};
+pub use subtree::{Coverage, SubtreeUsage, Summed};
 pub use tree::{ProcessTree, TreeRow};
 
 /// The visible rows of the flat process view, in display order.
