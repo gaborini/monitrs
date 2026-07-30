@@ -142,7 +142,7 @@ enum Effect {
     None, RequestRedraw,
     FetchProcessDetail(ProcessIdentity),
     SignalProcess { identity: ProcessIdentity, signal: SignalKind },
-    ReloadConfig, ExportSnapshot(PathBuf), Shutdown,
+    ReloadConfig, ExportSnapshot(PathBuf), RingBell, Shutdown,
 }
 ```
 

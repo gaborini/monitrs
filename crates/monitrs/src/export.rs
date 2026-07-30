@@ -43,7 +43,20 @@ use serde::Serialize;
 ///
 /// Bumped whenever a field is removed or its meaning changes, so a consumer can
 /// refuse an export it does not understand rather than misread it.
-pub(crate) const SCHEMA_VERSION: u32 = 1;
+///
+/// `2` since 0.2.0. Two fields were **removed** — `sensors.battery.health` and
+/// `sensors.temperatures[].high_celsius` — and the second's replacement,
+/// `peak_celsius`, deliberately means something different: the old name claimed a
+/// declared threshold and the value was a high-water mark. A script that read
+/// `high_celsius` as a limit would misread `peak_celsius` as one, which is exactly
+/// what this constant exists to prevent. Deriving the old `health` needs the two
+/// figures in `sensors.battery.capacity`: `full_microwatt_hours / design_microwatt_hours`.
+///
+/// Fields were also added, which alone would not have justified a bump: `cpu.cgroup_quota`,
+/// `cpu.core_classes`, `memory.cgroup_used_bytes`, `filesystems[].inodes`,
+/// `sensors.battery.{capacity, temperature_celsius, power_watts}`, and
+/// `host.environment.available.container` on Linux.
+pub(crate) const SCHEMA_VERSION: u32 = 2;
 
 /// What may appear in an export.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -515,7 +528,7 @@ mod tests {
         let json = SnapshotExport::new(&snapshot, RedactionPolicy::default())
             .to_json()
             .expect("serializes");
-        assert!(json.contains("\"schema_version\": 1"));
+        assert!(json.contains("\"schema_version\": 2"));
         assert!(json.contains(env!("CARGO_PKG_VERSION")));
         assert!(json.contains("monitrs"));
     }
@@ -532,7 +545,8 @@ mod tests {
             parsed
                 .get("schema_version")
                 .and_then(serde_json::Value::as_u64),
-            Some(1)
+            Some(u64::from(SCHEMA_VERSION)),
+            "the parsed version must be the declared one, so a bump cannot be half-applied"
         );
         assert!(
             parsed

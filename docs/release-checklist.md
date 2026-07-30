@@ -4,24 +4,35 @@ Everything needed to cut a monitrs release, in order, written for someone who ha
 never done it. Follow it top to bottom. Nothing here is optional except where it
 says so.
 
-## Read this first: `0.1.0` is not releasable yet
+## Read this first: what this project still owes
 
 **The interface launches**, and the §23 verbs — launch, monitor, filter, inspect,
 pause, seek, return live, quit — have each been exercised by hand in a real
 terminal. So has the renice flow, by `scripts/verify-renice.py`: it drives the real
 binary on a pty, presses `R` on a process it started itself, and then asks `ps` —
-not monitrs — whether the value changed. What is still missing before `0.1.0`:
+not monitrs — whether the value changed.
 
-* **No twelve-hour soak is on record.** A 30-minute run with the shipped collector
+`0.1.0` and `0.2.0` are both published, as pre-releases, with the items below still
+open. That was a deliberate call each time rather than an oversight, and the point of
+this section is that the open items travel with the release instead of being forgotten:
+they are repeated in each `CHANGELOG.md` release section under *Known limitations*, which
+is what a user actually reads. What is still owed:
+
+* **No twelve-hour soak is on record**, and it is not going to be produced from a
+  workstation: the gate is twelve uninterrupted hours, and a laptop that sleeps does not
+  yield one. It is being moved to a dedicated EC2 host under its own project. A 30-minute
+  run with the shipped collector
   is ([`soak-testing.md`](soak-testing.md#runs-on-record)): resident size fell over
   the run, descriptors stayed at 3, retained history stayed bounded with the ring
   full, and nothing was dropped even with the channel saturated. That is evidence,
   not the gate — §16.1 says twelve hours. (The 90 ms worst-case input latency that run
   reported turned out to be the harness measuring two thread wake-ups rather than
   monitrs; see [`soak-testing.md`](soak-testing.md).)
-* **The idle self-CPU budget of §16.1 is not met.** Measured on a 12-core Mac with
-  about a thousand processes: median 1.3–2.7%, p95 11–15%, against a budget of 1% and
-  2%. The median is close; the p95 is not.
+* **The idle self-CPU budget of §16.1 is half met.** Measured on a 12-core Mac with
+  about a thousand processes: median **0.5–1.1%** against a 1% budget, which passes, and
+  p95 **6–11%** against 2%, which does not. (This list previously quoted 1.3–2.7% and
+  11–15%, which were the figures from partway through the fix and were already superseded
+  in [`benchmarks.md`](benchmarks.md) when they were written here.)
   The other five measurable budgets pass — frame render, input latency, collection
   p95, resident memory, descriptor growth — and
   [`benchmarks.md`](benchmarks.md#the-161-end-to-end-budgets) has the numbers, the
@@ -31,8 +42,9 @@ not monitrs — whether the value changed. What is still missing before `0.1.0`:
 * **The release notes are written** — `CHANGELOG.md` has a `0.1.0` section and
   `changelog_excerpt.py` extracts it — but **the date in its heading is
   `2026-07-30`**. Keep a Changelog dates a section by its release date, so if the tag
-  is pushed on another day, change that line first. The workflow's `verify` job does
-  not check the date, only that the section exists.
+  is pushed on another day, change that line first. The workflow's `verify` job passes
+  `--check-date`, which *warns* on a heading that is not dated today rather than failing —
+  a hard check there would only teach people to backdate the heading.
 
   Done for `v0.1.0`: six archives and a `SHA256SUMS` are on the release page, every
   checksum verifies against the *downloaded* files, and every archive carries a build
@@ -77,9 +89,16 @@ gh --version             # for verifying the published artifacts
 You also need:
 
 * push access to the repository, including tags;
-* nothing else. **No publishing token belongs on your machine or in this
-  repository** (§18.4). The release workflow uses the run's own `GITHUB_TOKEN`, and
-  crates.io publication is not part of `0.1.0` (§19.3).
+* a crates.io token, for step 10 only, and **only for as long as that step takes**.
+  §18.4 still says no publishing token belongs in this repository or in a workflow: the
+  release workflow uses the run's own `GITHUB_TOKEN` and never publishes crates. Obtain
+  the token, `cargo login` with it, publish, then `cargo logout`. Do not paste it into a
+  terminal that keeps scrollback, a chat window, or a shell history file — a token that
+  has been seen anywhere else is a token to revoke.
+
+Since `0.1.0`, crates.io publication **is** part of a release: all four crates are
+published, and the README tells users to `cargo install monitrs --locked`. Step 10 is
+where that happens; it is deliberately the last step, after the tag is proven.
 
 Optional: `just`, a thin wrapper around the cargo commands below. Every recipe
 prints the command it runs, and this checklist gives the underlying commands so
@@ -92,11 +111,14 @@ prints the command it runs, and this checklist gives the underlying commands so
   `v0.1.0-rc.1` also triggers it.
 * Anything `0.x` is published as a **pre-release** automatically, so nobody mistakes
   it for a stability promise.
-* Do **not** publish to crates.io until the name and metadata are final (§19.1).
+* §19.1's rule was **do not publish to crates.io until the name and metadata are
+  final**. They are: the four crate names are taken and the metadata shipped with
+  `0.1.0`, so every release from now on publishes (step 10). Renaming a published crate
+  is not possible, which is what that rule was protecting.
 
 ## 2. Bump the version
 
-The version lives in **exactly four places**, and three of them are one file. Every
+The version lives in **exactly five places**, and three of them are one file. Every
 crate uses `version.workspace = true`, so no per-crate manifest is touched.
 
 1. `Cargo.toml`, `[workspace.package]`:
@@ -127,6 +149,14 @@ crate uses `version.workspace = true`, so no per-crate manifest is touched.
    than silently building something else.
 
 4. `CHANGELOG.md` — the next step.
+
+5. `README.md` — the status banner, the release link, and the three hard-coded archive
+   filenames in the install snippet. This one is easy to miss and expensive to miss:
+   `.github/workflows/release.yml` copies `README.md` into **every** archive, and
+   `crates/monitrs/Cargo.toml` sets `readme = "../../README.md"`, so a stale banner
+   becomes the crates.io landing page for the new version. Nothing in CI checks it.
+   Include it in the release commit at step 7 so the tagged commit the archives are
+   built from already carries it.
 
 Confirm what the tooling now sees. This is the exact command the release workflow
 compares against your tag:
@@ -159,11 +189,12 @@ release with empty notes is prevented:
 python3 .github/scripts/changelog_excerpt.py X.Y.Z
 ```
 
-Today, with only an `Unreleased` section, it correctly fails:
+It fails for a version with no section, which is how a release with empty notes is
+prevented. Try it with a version you have not written yet:
 
 ```text
-$ python3 .github/scripts/changelog_excerpt.py 0.1.0
-CHANGELOG.md has no section for 0.1.0
+$ python3 .github/scripts/changelog_excerpt.py 9.9.9
+CHANGELOG.md has no section for 9.9.9
 $ echo $?
 1
 ```
@@ -191,10 +222,29 @@ cargo test --workspace --all-features -- --ignored --test-threads=1
 That pass includes the platform smoke tests **and** the soak harness at its default
 ten seconds. Ten seconds is not the soak gate; step 5 is.
 
+**It also rewrites tracked files.** `crates/monitrs/tests/capture.rs` writes a fresh frame
+for every screen into `docs/screenshots/`, so a clean tree is dirty afterwards, with seven
+files changed. That is the point — §20.1 allows no screenshot that is not written from the
+renderer — but decide deliberately whether the new frames belong in the release:
+
+```sh
+git status --porcelain docs/screenshots/
+git diff docs/screenshots/          # a captured frame from your machine, not a diff to review line by line
+```
+
+Either commit them with the release or `git restore docs/screenshots/`. Do not leave them
+uncommitted: the next `git add -A` picks them up in whatever commit comes along.
+
 Also confirm the dependency graph has not drifted:
 
 ```sh
-cargo tree -p crossterm --workspace     # exactly one crossterm major version (§13)
+# The real check, and the one CI gates on: it must print exactly one version.
+cargo metadata --format-version 1 --all-features \
+  | python3 .github/scripts/crate_versions.py crossterm
+
+# For reading the graph by eye. `-p` cannot select crossterm — it is a dependency, not a
+# workspace member — so this exits non-zero and CI wraps it in `|| true`. Informational.
+cargo tree --workspace --all-features -i crossterm
 ```
 
 ### And the platform you are not on
@@ -291,7 +341,7 @@ Distribution:
 
 ```sh
 git switch -c release/vX.Y.Z
-git add Cargo.toml Cargo.lock CHANGELOG.md
+git add Cargo.toml Cargo.lock CHANGELOG.md README.md
 git commit -m "release: vX.Y.Z"
 ```
 
@@ -415,13 +465,62 @@ tar tzf monitrs-X.Y.Z-<target>.tar.gz
 * [ ] the release body contains the changelog section, not the whole file;
 * [ ] a `0.x` release is marked pre-release.
 
-## 10. After publishing
+## 10. Publish to crates.io
+
+Last, and only after the tag and its archives are verified: crates.io publication cannot be
+undone. A version can be **yanked**, which stops new dependents from selecting it, but the
+files stay downloadable forever and the version number can never be reused.
+
+The four crates publish in dependency order, because each is verified by building it
+against the registry copies of the others:
+
+```
+monitrs-core  ->  monitrs-collectors  ->  monitrs-tui  ->  monitrs
+```
+
+`cargo publish --workspace` does that ordering, and the index wait between crates, itself:
+
+```sh
+cargo login                     # paste the token at the prompt, not on the command line
+cargo publish --workspace --locked --dry-run
+cargo publish --workspace --locked
+cargo logout
+```
+
+Three rules:
+
+* **The token never appears in `argv`.** `cargo publish --token <value>` puts it in the
+  process table, where every other user on the machine can read it. `cargo login` prompts.
+* **`--dry-run` first.** It packages and verifies every crate without uploading, which
+  catches an excluded file, an oversized package, or a dependency that is not published.
+* **`cargo logout` afterwards.** The token lands in `~/.cargo/credentials.toml` in plain
+  text; there is no reason for it to outlive the release.
+
+Then verify what the registry actually serves, in an empty directory, from the registry
+rather than from your checkout:
+
+```sh
+cargo install monitrs --locked --version X.Y.Z --root /tmp/monitrs-verify
+/tmp/monitrs-verify/bin/monitrs --version
+```
+
+* [ ] all four crates show the new version on crates.io;
+* [ ] `docs.rs` built the documentation for each — a failed docs.rs build is invisible from
+      here and is the most common thing to go wrong after a successful publish;
+* [ ] `cargo install monitrs --locked` fetches and builds the new version.
+
+## 11. After publishing
 
 * [ ] `CHANGELOG.md` on `main` has an empty `Unreleased` section again.
 * [ ] Any documentation that names a version matches.
-* [ ] Installation methods documented in the README actually work for this release:
-      the archives, and `cargo install monitrs --locked` **only once crates.io
-      publication has happened** (§19.3 — not for `0.1.0`).
+* [ ] Installation methods documented in the README actually work for this release —
+      run them, from a downloaded archive, in an empty directory:
+      * the checksum command in the README must name `SHA256SUMS`. The workflow
+        concatenates the per-archive `.sha256` files into that one file and then `rm -f
+        ./*.sha256`, so a README telling the reader to check
+        `monitrs-X.Y.Z-<target>.tar.gz.sha256` sends them to a file the release does not
+        carry. That was true of `0.1.0`'s README for its whole life.
+      * `cargo install monitrs --locked`, which step 10 has just verified.
 * [ ] A Homebrew tap is a later step, deliberately: §19.3 says after the release
       process has stabilised. One release is not stability.
 * [ ] Deb, RPM, Nix and other packaging are later milestones and must not block a
@@ -440,7 +539,7 @@ A published release cannot be un-published safely. The remedy is always forward.
 4. Record the defect in `CHANGELOG.md` under the new version, and say which version
    was withdrawn.
 
-## The §23 gate for 0.1.0
+## The §23 gate
 
 §23's list, verbatim, as a checklist. `0.1.0` may not be tagged until every box is
 ticked with evidence — a test, a recorded measurement, or a named machine.
@@ -467,9 +566,10 @@ ticked with evidence — a test, a recorded measurement, or a named machine.
       and aarch64 in glibc and musl, macOS on both architectures. macOS x86_64 is a
       cross-compile because GitHub's Intel runners are being retired, so CI builds it
       and does not run it.
-- [x] **release archives and checksums are published.** The workflow does this; it
-      has not yet run for a real tag. The `aarch64-apple-darwin` archive has been
-      assembled and exercised by hand (step 8 below).
+- [x] **release archives and checksums are published.** The workflow has run for a real
+      tag: `v0.1.0` has six archives and a `SHA256SUMS` on its release page, every
+      checksum verified against the downloaded files, and every archive carrying a build
+      attestation that `gh attestation verify` accepts.
 - [ ] **default settings remain below the memory and CPU budgets on the reference
       workload.** Frame time, input latency, collection p95, resident memory,
       descriptor growth **and the idle-CPU median** are measured and pass. The
@@ -483,8 +583,8 @@ ticked with evidence — a test, a recorded measurement, or a named machine.
       measurement.** §20.1's required contents are all present: the demo frame is
       real and reproducible, every performance figure links to the file that produced
       it, and the row that fails its budget is in the same table as the ones that
-      pass. What remains unverifiable until a release exists is the install
-      instructions for the five archives nobody has run.
+      pass. What remains unverified is the install instructions for the four archives
+      nobody has run — the two macOS ones have been run from the published tarball.
       §20.1's list, all present and checked: value proposition, a real captured
       frame, honest differentiation, supported platforms, install methods,
       keybindings, configuration path, the metric-semantics warning, the privilege

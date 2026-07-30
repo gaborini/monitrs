@@ -30,7 +30,7 @@ use crate::theme::{ColorMode, ThemeId};
 /// A parsed palette command (§6.3's initial list).
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum Command {
-    /// `view overview|processes|storage|network|inspect`.
+    /// `view overview|processes|cpu|storage|network|inspect|battery`.
     ChangeView(ViewId),
     /// `sort cpu|memory|read|write|pid|name|age|…`.
     Sort(SortField),
@@ -127,7 +127,7 @@ pub struct CommandHint {
 /// not each need a key, so the list has to be complete and readable.
 pub const HINTS: &[CommandHint] = &[
     CommandHint {
-        usage: "view <overview|processes|storage|network|inspect>",
+        usage: "view <overview|processes|cpu|...>",
         completion: "view ",
         summary: "switch to a main view",
     },
@@ -231,7 +231,7 @@ pub fn parse(line: &str) -> Result<Command, CommandError> {
                 .ok_or_else(|| CommandError::BadArgument {
                     command: "view",
                     value: argument.to_owned(),
-                    expected: "one of overview, processes, storage, network, inspect",
+                    expected: "one of overview, processes, cpu, storage, network, inspect, battery",
                 })
         }
         "sort" => {
@@ -649,6 +649,39 @@ mod tests {
                 "{} does not complete towards {}",
                 hint.completion,
                 hint.usage
+            );
+        }
+    }
+
+    #[test]
+    fn every_screen_is_reachable_by_name_from_the_palette() {
+        // §6.3 exists for discoverability, so a screen the palette cannot name is a screen
+        // that only exists for whoever already knows the digit. Asserted over `ViewId::ALL`
+        // rather than a written-out list, so adding a screen fails here until its token
+        // parses — which is what the two 0.2.0 screens needed and did not have.
+        for view in ViewId::ALL {
+            let line = format!("view {}", view.palette_token());
+            assert_eq!(
+                parse(&line),
+                Ok(Command::ChangeView(view)),
+                "{line:?} must select {view:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn the_rejection_for_an_unknown_screen_names_every_screen_there_is() {
+        // The error is the only exhaustive list a user sees: the hint's usage string is
+        // abridged because spelling all seven out costs the panel its summary column.
+        let Err(error) = parse("view nosuchscreen") else {
+            panic!("an unknown screen must be refused");
+        };
+        let text = error.to_string();
+        for view in ViewId::ALL {
+            assert!(
+                text.contains(view.palette_token()),
+                "{:?} is missing from {text:?}",
+                view.palette_token()
             );
         }
     }

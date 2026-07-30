@@ -252,10 +252,13 @@ Be exact about this; §23 asks for claims to be supported by a test or a documen
 measurement, and these are neither yet.
 
 * **The interactive runtime is not soaked.** The renderer, the terminal guard, and
-  the input thread are absent — the input thread because `crossterm::event::poll`
-  needs a real tty, and the renderer because there is no assembled event loop to
-  drive yet. So §16.1's *idle CPU*, *frame time*, and *no redraw busy loop* budgets
-  are **not** measured here. They need a `monitrs` that launches.
+  the input thread are absent from *this harness* — the input thread because
+  `crossterm::event::poll` needs a real tty. So §16.1's *idle CPU*, *frame time*, and *no
+  redraw busy loop* budgets are **not** measured here. They are measured elsewhere now
+  that `monitrs` launches: idle CPU by `scripts/measure-overhead.py` against the real
+  binary on a pty, and frame time by `crates/monitrs/tests/capture.rs` — see
+  [`benchmarks.md`](benchmarks.md#the-161-end-to-end-budgets). What no instrument covers
+  is the two of them *over twelve hours*, which is what the soak is for.
 * **Descriptors are flat on macOS by construction**, in both modes. The macOS
   collector reads through `sysctl`, `libproc`, mach routines and `getifaddrs`, and
   opens no file at all (see [`platform-support.md`](platform-support.md)). A flat
