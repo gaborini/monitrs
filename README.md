@@ -29,32 +29,32 @@ state is exactly as rendered, and the substitutes are the same width so no colum
 moves.
 
 ```text
-+ monitrs  host:dev-mbp  [>LIVE]  250ms  up 9d 00:11 -----------------------------------------------------------------
-| CPU   19% [#################=----------------------------------------------------------------------------]  load  6.
-| MEM   62% [##########################################################=-----------------------------------]  30G/48G
++ monitrs  host:dev-mbp  [>LIVE]  250ms  up 9d 03:41 -----------------------------------------------------------------
+| CPU   49% [##############################################=-----------------------------------------------]  load  7.
+| MEM   67% [###############################################################=------------------------------]  32G/48G
 + PRESSURE -----------------------+ HISTORY 5m -----------------------------------------------------------------------
-| . CPU     normal        19%     | CPU
-| . MEM     normal        38%     | MEM
-| . NET     normal      35K/s     | I/O
-| . LOAD    normal       6.08     | CORE  +++=....::::
+| . CPU     normal        49%     | CPU
+| . MEM     normal        33%     | MEM
+| . NET     normal     3.4K/s     | I/O
+| . LOAD    normal       7.03     | CORE  +=--+*******
 |                                 |
 + PROCESSES  sort CPU% desc  no kthreads -----------------------------------------------------------------------------
 |      PID USER     S   CPU%  MEM%   RSS  VIRT  READ/s WRITE/s  THR      AGE NAME                             COMMAND
-|>   45241 me       R    35%  1.8%  875M  1.8T    0B/s    0B/s   26    30:24 Cursor Helper (Renderer)         /Applica
-|    45234 me       R    30%  0.3%  128M  464G    0B/s    0B/s   17    30:25 Cursor Helper                    /Applica
-|    62728 me       R    16%  1.6%  803M  421G    0B/s    0B/s   34 10:52:18 claude                           claude
-|    69211 me       R    16%  0.0%   24M  415G    0B/s    0B/s    5    00:07 capture-35a93566c2c11cd4         /Users/y
-|     1398 me       R    10%  0.4%  173M  416G    0B/s    0B/s   10       9d Terminal                         /System/
-|    63011 me       R   8.3%  1.4%  675M  1.8T    0B/s    0B/s   27 10:50:22 Google Chrome Helper (Renderer)  /Applica
-|    84339 me       R   6.7%  0.5%  247M  465G    0B/s    0B/s   25       3d Google Chrome Helper             /Applica
-|    84322 me       R   6.3%  1.7%  835M  513G    0B/s    0B/s   53       3d Google Chrome                    /Applica
-|    12800 me       R   3.0%  0.1%   25M  415G    0B/s    0B/s    4       3d python                           /Users/y
-|     4571 me       R   2.9%  0.1%   25M  415G    0B/s    0B/s    4       2d python                           /Users/y
-|    64501 me       R   1.7%  0.1%   25M  415G    0B/s    0B/s    4    02:41 mdworker_shared                  /System/
-|    66589 me       R   1.7%  0.1%   27M  415G    0B/s    0B/s    4    01:18 mdworker_shared                  /System/
-|    31474 me       R   1.0%  1.8%  896M  439G    0B/s    0B/s   24       1d com.apple.Virtualization.Virt... /System/
-|    55338 me       R   0.9%  0.6%  303M  1.8T    0B/s    0B/s   23    08:25 Cursor Helper (Plugin)           Cursor H
-|    55330 me       R   0.9%  0.5%  245M  1.8T    0B/s    0B/s   21    08:25 Cursor Helper (Plugin)           Cursor H
+|>   55629 me       R   263%  1.0%  473M  416G    0B/s  8.3M/s    7    00:09 rustc                            /Users/y
+|    45241 me       R    14%  1.5%  738M  1.8T    0B/s    0B/s   26 03:59:44 Cursor Helper (Renderer)         /Applica
+|    45234 me       R    12%  0.2%  103M  464G    0B/s    0B/s   19 03:59:45 Cursor Helper                    /Applica
+|     1398 me       R    10%  0.3%  129M  416G    0B/s    0B/s   10       9d Terminal                         /System/
+|    55806 me       R   8.9%  0.1%   26M  415G    0B/s    0B/s    5    00:07 capture-35a93566c2c11cd4         /Users/y
+|    37194 me       R   7.6%  0.5%  245M  1.8T    0B/s    0B/s   22    08:47 Google Chrome Helper (Renderer)  /Applica
+|    30365 me       R   7.4%  0.1%   32M  415G    0B/s    0B/s    9    12:39 probe_input_latency-fbafe9f20... /Users/y
+|    12764 me       R   5.8%  0.9%  453M  1.8T    0B/s    0B/s   44    26:24 Google Chrome Helper (Renderer)  /Applica
+|    62728 me       R   5.8%  1.6%  788M  421G    0B/s    0B/s   34 14:21:38 claude                           claude
+|    11623 me       R   3.8%  0.8%  370M  1.8T    0B/s    0B/s   25    27:38 Google Chrome Helper (Renderer)  /Applica
+|    84339 me       R   2.0%  0.7%  328M  465G    0B/s    0B/s   21       3d Google Chrome Helper             /Applica
+|     4571 me       R   1.7%  0.1%   25M  415G    0B/s    0B/s    4       2d python                           /Users/y
+|    12800 me       R   1.6%  0.0%   24M  415G    0B/s    0B/s    4       3d python                           /Users/y
+|    55337 me       R   1.5%  0.4%  199M  1.8T    0B/s    0B/s   22 03:37:45 Cursor Helper (Plugin)           Cursor H
+|    10421 me       R   1.4%  0.8%  415M  421G   38K/s    0B/s   29 18:55:36 claude                           claude
 ```
 
 Things worth noticing, all of which are the design rather than the accident of one
