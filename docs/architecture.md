@@ -253,26 +253,30 @@ tree, and never runs a configured command before or after a signal.
 
 ## Performance budgets
 
-These are **engineering budgets, not measurements**. They are what the
-implementation is held to; published numbers require a reproducible measurement
-with the machine and command recorded.
-
-Component-level measurements that exist today are in
-[`benchmarks.md`](benchmarks.md). The end-to-end budgets below still need the
-interactive runtime and a soak test.
+These are the targets the implementation is held to. Six of the seven have been
+measured; the measurements, the machine, the commands that produce them and the
+per-read breakdown are in
+[`benchmarks.md`](benchmarks.md#the-161-end-to-end-budgets), which is the file to
+trust — the last column here is a summary and will go stale first.
 
 Reference workload: 8 logical CPUs, 200 processes, 80×24 and 160×48 terminals, 1 s
-interval, 5 min history.
+interval, 5 min history. **Nothing has been measured on that workload.** Every figure
+below comes from a 12-core Mac running about a thousand processes, which is five times
+the process count the budgets assume, and per-process OS reads are where the cost is.
 
-| Budget | Target |
-|---|---|
-| Idle self CPU | median < 1%, p95 < 2% |
-| Resident memory | < 50 MiB in the default configuration |
-| Input to visible response | < 50 ms when no collector result is needed |
-| Frame render at 160×48 | < 16 ms |
-| Sample collection at 200 processes | < 200 ms p95 |
-| 12-hour run | no unbounded memory or file-descriptor growth |
-| Redraw | no busy loop |
+| Budget | Target | Measured (1000 processes, not the reference workload) |
+|---|---|---|
+| Idle self CPU | median < 1%, p95 < 2% | **median 4.3%, p95 17.8% — fails** |
+| Resident memory | < 50 MiB in the default configuration | median 29 MiB, peak 31 MiB |
+| Input to visible response | < 50 ms when no collector result is needed | median 417 µs, p95 486 µs |
+| Frame render at 160×48 | < 16 ms | median 200 µs, p95 353 µs |
+| Sample collection at 200 processes | < 200 ms p95 | p95 172 ms, at 1000 processes |
+| 12-hour run | no unbounded memory or file-descriptor growth | 30 minutes: no growth. The 12-hour run is still owed |
+| Redraw | no busy loop | not measured as such |
+
+The idle-CPU failure is not in monitrs' own computation, which is about 35 µs per
+tick — three orders of magnitude below the OS reads that surround it. `benchmarks.md`
+locates it read by read and states what would close it.
 
 Under high load — 10,000 processes, or a stalled `/proc` — the required behaviour
 is: input stays responsive, snapshots coalesce, collector lag is *displayed*,

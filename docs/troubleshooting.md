@@ -266,8 +266,17 @@ different proposition from a laptop at one second. `--history` costs memory in
 proportion to its span; both are clamped to supported ranges and any clamp is
 reported rather than applied silently.
 
-Idle CPU and frame time are **not measured yet** — both need the interactive
-runtime. Do not take the budget for a measurement.
+Both are measured now, and one of them **misses its budget**: on a 12-core Mac with
+about a thousand processes, monitrs costs a median 4.3% of one core at rest against a
+1% target, while resident memory sits at 29 MiB against 50 MiB and a frame renders in
+200 µs against 16 ms. If your machine runs many processes, expect the CPU figure
+rather than the budget:
+[`benchmarks.md`](benchmarks.md#where-the-idle-cpu-goes) breaks the cost down read by
+read — most of it is the OS handing over the process table and the disk counters, not
+anything monitrs computes.
+
+`scripts/measure-overhead.py` takes the same measurement on your machine, from
+outside the process, if you want to compare.
 
 ## A number looks wrong
 
