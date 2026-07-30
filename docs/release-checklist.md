@@ -34,8 +34,15 @@ not monitrs — whether the value changed. What is still missing before `0.1.0`:
   is pushed on another day, change that line first. The workflow's `verify` job does
   not check the date, only that the section exists.
 
-  **Both macOS archives** have been assembled and exercised by hand, following the
-  workflow's own steps: each tarball holds the binary, both licences, the README, the
+  Done for `v0.1.0`: six archives and a `SHA256SUMS` are on the release page, every
+  checksum verifies against the *downloaded* files, and every archive carries a build
+  attestation that `gh attestation verify` accepts. The `aarch64-apple-darwin` archive
+  was extracted and run from the published tarball — eleven files, `monitrs 0.1.0`, a
+  996-process snapshot. All four crates are on crates.io and `cargo install
+  monitrs --locked` works from the registry.
+
+  Before the tag, **both macOS archives** were also assembled and exercised by hand,
+  following the workflow's own steps: each tarball holds the binary, both licences, the README, the
   changelog excerpt, five shell completions and the manpage — eleven files; both
   checksums verify; both extracted binaries report `monitrs 0.1.0` and produce a
   snapshot of 1027 processes; both manpages render under `man`; both sets of bash and
@@ -429,11 +436,12 @@ ticked with evidence — a test, a recorded measurement, or a named machine.
       `runtime::spawn_signal_thread` now fixes by routing them into the ordinary
       shutdown. A panic could not be provoked through the interface; the hook is
       covered by unit tests.
-- [ ] **Linux and macOS Tier 1 builds pass.** CI covers Linux x86_64 and aarch64
-      (glibc and musl) and macOS on both architectures, and is green on `main`; macOS
-      x86_64 is a cross-compile because GitHub's Intel runners are being retired.
-      Ticking this needs the *release* workflow to have built all six for a real tag.
-- [ ] **release archives and checksums are published.** The workflow does this; it
+- [x] **Linux and macOS Tier 1 builds pass.** All seven jobs of the release workflow
+      succeeded for `v0.1.0`: the tag verification and six target builds — Linux x86_64
+      and aarch64 in glibc and musl, macOS on both architectures. macOS x86_64 is a
+      cross-compile because GitHub's Intel runners are being retired, so CI builds it
+      and does not run it.
+- [x] **release archives and checksums are published.** The workflow does this; it
       has not yet run for a real tag. The `aarch64-apple-darwin` archive has been
       assembled and exercised by hand (step 8 below).
 - [ ] **default settings remain below the memory and CPU budgets on the reference

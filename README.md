@@ -7,10 +7,12 @@ terminal monitors, what it was doing thirty seconds ago. Pause the timeline,
 scrub back to a spike, and see which processes were most strongly correlated
 with it.
 
-> **Status: pre-release.** `0.1.0` is written and its release notes are in
-> [`CHANGELOG.md`](CHANGELOG.md), but it has not been tagged, so there is nothing to
-> download yet. Everything this README describes works from a checkout; where a
-> claim has a caveat, the caveat is stated next to it rather than left out.
+> **Status: `0.1.0`, and marked a pre-release.** It is on
+> [crates.io](https://crates.io/crates/monitrs) and
+> [GitHub](https://github.com/gaborini/monitrs/releases/tag/v0.1.0). The pre-release
+> flag is not modesty: two of §16.1's budgets are not met and the twelve-hour soak has
+> not been run, both of which are stated in [`CHANGELOG.md`](CHANGELOG.md) and in the
+> table below. Where a claim has a caveat, the caveat is next to it rather than left out.
 
 ## Demo
 
@@ -136,9 +138,15 @@ provides right now.
 
 ## Install
 
+### From crates.io
+
+```sh
+cargo install monitrs --locked
+```
+
 ### From a checkout
 
-Works today, and is what every measurement in this README was taken from:
+Also what every measurement in this README was taken from:
 
 ```sh
 cargo build --release
@@ -150,12 +158,11 @@ surprises you.
 
 ### From a release archive
 
-_No release is published yet_ — `0.1.0` has not been tagged. When it is, the
-workflow builds one archive per target (`x86_64` and `aarch64` for Linux glibc,
-Linux musl, and macOS), each carrying the binary, both licences, this README, an
-excerpt of the changelog for that version, shell completions for bash, zsh, fish,
-PowerShell and elvish, and a manpage. Installing one means verifying it and putting
-the binary somewhere on your `PATH`:
+[The `v0.1.0` release](https://github.com/gaborini/monitrs/releases/tag/v0.1.0) has one
+archive per target — `x86_64` and `aarch64` for Linux glibc, Linux musl, and macOS —
+each carrying the binary, both licences, this README, the changelog excerpt for that
+version, shell completions for bash, zsh, fish, PowerShell and elvish, and a manpage.
+Installing one means verifying it and putting the binary somewhere on your `PATH`:
 
 ```sh
 # Replace the version and target with the archive you downloaded.
@@ -168,10 +175,11 @@ Releases also carry a build attestation, so `gh attestation verify
 monitrs-*.tar.gz --repo gaborini/monitrs` confirms the archive came from this
 repository's workflow rather than from someone else.
 
-Honest caveat: the assembly and these steps have been carried out by hand for
-`aarch64-apple-darwin` only — checksum verified, binary run, manpage rendered,
-completions parsed. The other five archives are built by CI and nobody has run them
-on their own hardware yet.
+Honest caveat: all six published archives have had their checksums and build
+attestations verified, but only the two macOS ones have been *run* — and the x86_64 one
+only under Rosetta on Apple Silicon, where it reports temperatures as unsupported (see
+[`docs/platform-support.md`](docs/platform-support.md)). Nobody has run the four Linux
+archives or an Intel Mac build on its own hardware.
 
 ## Keys
 

@@ -149,9 +149,10 @@ Named because §16.1's own last line asks for measurement rather than claims:
 * PSI is Linux-only, and says `n/a` on macOS rather than promising a value that will
   never arrive.
 * Timestamps are UTC and labelled `Z`: no time-zone database is bundled.
-* Only the `aarch64-apple-darwin` release archive has been assembled and run by
-  hand. The other five targets are built by CI and have not been run on their
-  hardware.
+* Of the six published archives, only the two macOS ones have been run — and the
+  x86_64 one only under Rosetta on Apple Silicon, where it reports temperatures as
+  unsupported. Every archive's checksum and build attestation verifies; nobody has run
+  the four Linux archives or an Intel Mac build on its own hardware.
 
 ### Changed
 
