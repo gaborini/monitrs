@@ -36,6 +36,83 @@ impl EnvironmentKind {
     }
 }
 
+/// A container runtime recognised from a cgroup path.
+///
+/// Recognition is by naming convention, so this is evidence rather than proof.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize))]
+#[cfg_attr(feature = "serde", serde(rename_all = "snake_case"))]
+pub enum ContainerRuntime {
+    /// `docker-<id>.scope` or `/docker/<id>`.
+    Docker,
+    /// `cri-containerd-<id>.scope` or `containerd-<id>.scope`.
+    Containerd,
+    /// `crio-<id>.scope`.
+    CriO,
+    /// `libpod-<id>.scope`.
+    Podman,
+    /// `lxc.payload.<name>` or `/lxc/<name>`.
+    Lxc,
+    /// `machine-<name>.scope`, which is `systemd-nspawn` or a `machinectl` VM.
+    SystemdMachine,
+    /// A path that looks like a container but matches no known convention.
+    Unknown,
+}
+
+impl ContainerRuntime {
+    /// The runtime name for the Inspect screen.
+    #[must_use]
+    pub const fn label(self) -> &'static str {
+        match self {
+            Self::Docker => "docker",
+            Self::Containerd => "containerd",
+            Self::CriO => "cri-o",
+            Self::Podman => "podman",
+            Self::Lxc => "lxc",
+            Self::SystemdMachine => "systemd-machine",
+            Self::Unknown => "container",
+        }
+    }
+}
+
+/// A container identified from a cgroup path.
+#[derive(Clone, Debug, Eq, PartialEq)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize))]
+pub struct ContainerIdentity {
+    /// Which convention matched.
+    pub runtime: ContainerRuntime,
+    /// The identifier the path carried, usually a 64-character hex digest.
+    pub id: Box<str>,
+    /// Whether the path also names a Kubernetes pod.
+    pub kubernetes: bool,
+}
+
+impl ContainerIdentity {
+    /// The abbreviated identifier people actually recognise.
+    ///
+    /// Twelve characters, matching `docker ps` output, so a user can compare what
+    /// this screen shows with what their own tooling shows.
+    #[must_use]
+    pub fn short_id(&self) -> &str {
+        let cut = self
+            .id
+            .char_indices()
+            .nth(12)
+            .map_or(self.id.len(), |(index, _)| index);
+        self.id.get(..cut).unwrap_or(&self.id)
+    }
+
+    /// A one-line label such as `docker 3f4a1b2c9d8e`.
+    #[must_use]
+    pub fn label(&self) -> String {
+        if self.kubernetes {
+            format!("kubernetes/{} {}", self.runtime.label(), self.short_id())
+        } else {
+            format!("{} {}", self.runtime.label(), self.short_id())
+        }
+    }
+}
+
 /// A heuristic environment classification together with its evidence.
 #[derive(Clone, Debug, PartialEq)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize))]
@@ -48,6 +125,14 @@ pub struct HostEnvironment {
     pub evidence: Box<str>,
     /// How much the evidence supports the conclusion.
     pub confidence: Confidence,
+    /// Which container this is, where the evidence named one.
+    ///
+    /// [`EnvironmentKind::Container`] answers *whether*; this answers *which*, and the
+    /// two are separate because the evidence often supports the first without the
+    /// second — a `/.dockerenv` file, or a `container=` environment variable, says a
+    /// container without naming it. `None` alongside `Container` is therefore an
+    /// ordinary outcome and not a gap to be filled with a placeholder id.
+    pub container: Option<ContainerIdentity>,
 }
 
 /// System identity, mostly from the slow sampling tier (§8.6).
@@ -157,6 +242,7 @@ mod tests {
             kind: EnvironmentKind::Container,
             evidence: "/proc/1/cgroup names docker".into(),
             confidence: Confidence::High,
+            container: None,
         };
         assert!(!env.evidence.is_empty());
         assert_eq!(env.confidence, Confidence::High);

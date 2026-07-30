@@ -338,6 +338,11 @@ impl CommonCollector {
             // Frequency lives on the CPU refresh group we do not request every
             // tick; reading it here would report a stale value as current.
             frequency_mhz: MetricState::Unsupported,
+            // Cgroups are a Linux concept and invisible to `sysinfo`; the Linux
+            // enrichment fills this in where a quota is configured. Unsupported rather
+            // than "no limit" so a platform that cannot look is distinguishable from a
+            // group that is genuinely unrestricted (§9.2).
+            cgroup_quota: MetricState::Unsupported,
             // The baseline cannot see core classes: `sysinfo` reports a flat list of
             // CPUs. The native layers fill this in where the platform names them.
             core_classes: Vec::new(),
@@ -386,6 +391,7 @@ impl CommonCollector {
             },
             semantics: MemorySemantics::SysinfoBaseline,
             cgroup_limit_bytes: MetricState::Unsupported,
+            cgroup_used_bytes: MetricState::Unsupported,
         }
     }
 

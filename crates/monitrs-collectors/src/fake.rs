@@ -21,13 +21,13 @@ use std::time::SystemTime;
 use monitrs_core::SystemSnapshot;
 use monitrs_core::model::{
     AncestorEntry, BatterySnapshot, CapabilitySnapshot, CapabilityState, ChargeState,
-    CollectorHealth, Confidence, CpuSnapshot, CpuUsage, DiskSnapshot, DiskTotals, EnvironmentKind,
-    FilesystemKind, FilesystemSnapshot, HostEnvironment, HostSnapshot, InterfaceAddress,
-    InterfaceErrors, InterfaceKind, LinkState, LoadSnapshot, MemoryDetail, MemorySemantics,
-    MemorySnapshot, MetricState, NetworkSnapshot, PressureSnapshot, ProcessDetail,
-    ProcessDetailResult, ProcessIdentity, ProcessIo, ProcessMemory, ProcessSnapshot, ProcessState,
-    SensorSnapshot, SwapSnapshot, TemperatureReading, TrafficTotals, UnavailableReason,
-    UserIdentity,
+    CollectorHealth, Confidence, ContainerIdentity, ContainerRuntime, CpuQuota, CpuSnapshot,
+    CpuUsage, DiskSnapshot, DiskTotals, EnvironmentKind, FilesystemKind, FilesystemSnapshot,
+    HostEnvironment, HostSnapshot, InterfaceAddress, InterfaceErrors, InterfaceKind, LinkState,
+    LoadSnapshot, MemoryDetail, MemorySemantics, MemorySnapshot, MetricState, NetworkSnapshot,
+    PressureSnapshot, ProcessDetail, ProcessDetailResult, ProcessIdentity, ProcessIo,
+    ProcessMemory, ProcessSnapshot, ProcessState, SensorSnapshot, SwapSnapshot, TemperatureReading,
+    TrafficTotals, UnavailableReason, UserIdentity,
 };
 use monitrs_core::units::{Percent, Rate};
 
@@ -286,6 +286,11 @@ pub struct Scenario {
     /// Whether a battery exists.
     pub battery: bool,
     /// A cgroup memory limit, to exercise the container-vs-host display (§9.2).
+    ///
+    /// Also what makes the scenario a container: it drives the CPU quota, the group's
+    /// own memory charge, and the environment classification, because those four facts
+    /// arrive together on a real containerised host and four independent knobs could
+    /// produce a machine that has a memory limit but no container.
     pub cgroup_limit_bytes: Option<u64>,
     /// Artificial delay per `sample()` call.
     ///
@@ -389,13 +394,43 @@ impl Scenario {
         }
     }
 
-    /// A container: a cgroup memory limit far below the host total.
+    /// A container: cgroup limits far below the host's, and an identity to name it.
     #[must_use]
     pub fn containerised() -> Self {
         Self {
             cgroup_limit_bytes: Some(2 * GIB),
             ..Self::default()
         }
+    }
+
+    /// The CPU quota this scenario implies: 1.5 CPUs, a fraction that exercises the
+    /// non-integer case a whole number would hide.
+    fn cgroup_quota(&self) -> MetricState<CpuQuota> {
+        if self.cgroup_limit_bytes.is_none() {
+            return MetricState::Unsupported;
+        }
+        CpuQuota::new(150_000, 100_000).map_or(MetricState::Unsupported, MetricState::Available)
+    }
+
+    /// The group's own memory charge: well below the limit, and far below the host's
+    /// `used`, so a view that pairs the host figure with the group's limit is visibly
+    /// wrong rather than merely different.
+    fn cgroup_used(&self) -> MetricState<u64> {
+        self.cgroup_limit_bytes
+            .map_or(MetricState::Unsupported, |limit| {
+                MetricState::Available(limit / 4)
+            })
+    }
+
+    /// The container this scenario is, if it is one.
+    fn container(&self) -> Option<ContainerIdentity> {
+        self.cgroup_limit_bytes.map(|_| ContainerIdentity {
+            runtime: ContainerRuntime::Docker,
+            // A full-length digest, so `short_id`'s truncation is exercised rather
+            // than passed through.
+            id: "3f4a1b2c9d8e7f60a1b2c3d4e5f60718293a4b5c6d7e8f9012345678909abcdef".into(),
+            kubernetes: false,
+        })
     }
 
     /// A busy machine, for the high-load behaviour of §16.2.
@@ -503,6 +538,7 @@ impl FakeCollector {
                 },
                 evidence: "synthetic scenario".into(),
                 confidence: Confidence::High,
+                container: self.scenario.container(),
             }),
         }
     }
@@ -530,6 +566,7 @@ impl FakeCollector {
             total: self.age(total.map(CpuUsage::plain), sequence),
             per_core: self.age(per_core, sequence),
             frequency_mhz: MetricState::Available(3_200),
+            cgroup_quota: self.scenario.cgroup_quota(),
             // Two classes, so every snapshot test and the CPU screen exercise the
             // heterogeneous path rather than only the flat one. The split mirrors the
             // shape of a real asymmetric machine: the faster cores come first.
@@ -608,6 +645,7 @@ impl FakeCollector {
                 .scenario
                 .cgroup_limit_bytes
                 .map_or(MetricState::Unsupported, MetricState::Available),
+            cgroup_used_bytes: self.scenario.cgroup_used(),
         }
     }
 

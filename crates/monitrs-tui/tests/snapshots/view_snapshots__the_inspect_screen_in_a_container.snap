@@ -3,20 +3,20 @@ source: crates/monitrs-tui/tests/view_snapshots.rs
 expression: text
 ---
 |+ monitrs  host:dev-mbp  [>LIVE]  1s  up 3d 04:12 ---------------------------------------------------------------------------- 00:00:23Z --+|
-|| CPU   79% [############################################################=---------------]  load  4.12 3.84 3.21  8 cpu  8 core  temp 62.5C||
-|| MEM   71% [#####################################################=----------------------]  23G/32G  swap 205M/2.0G  cgroup 2.0G  bat 82%- ||
+|| CPU   79% [###############################################=------------]  load  4.12 3.84 3.21  8 cpu  8 core  cgroup 1.5 cpu  temp 62.5C||
+|| MEM   71% [##########################################=-----------------]  23G/32G  swap 205M/2.0G  cgroup 2.0G  bat 82%-                 ||
 |+ SYSTEM -------------------------------------------------------------+ DIAGNOSTICS -------------------------------------------------------+|
 ||  host         dev-mbp                                               |PRESSURE                                                            ||
 ||  os           fake-os 1.0                                           |? NET     link speed unknown       18M/s                            ||
 ||  kernel       fake-kernel 1.0                                       |? PSI-CPU warming up             warming                            ||
 ||  arch         aarch64                                               |? PSI-MEM warming up             warming                            ||
 ||  uptime       3d 04:12 (booted 00:00:00Z)                           |? PSI-IO  warming up             warming                            ||
-||  cpu          8 logical, 8 physical                                 |UNAVAILABLE METRICS                                                 ||
+||  cpu          8 logical, 8 physical, cgroup 1.5 CPUs                |UNAVAILABLE METRICS                                                 ||
 ||  cpu model    Fake CPU at 3200 MHz                                  |  - CPU time breakdown      unsupported                             ||
 ||  memory       32 GiB total, swap 2.0 GiB                            |  - swap activity           unsupported                             ||
 ||  semantics    cross-platform baseline; c...r-byte comparable with it|  - disk busy               unsupported                             ||
-||  cgroup limit 2.0G                                                  |  - network link speed      unsupported                             ||
-||  environment  container (heuristic, high confidence: synthetic sc...|  - Linux PSI               unsupported                             ||
+||  cgroup limit 2.0G, 512M used (25%)                                 |  - network link speed      unsupported                             ||
+||  environment  container docker 3f4a1b2c9d8e (heuristic, high conf...|  - Linux PSI               unsupported                             ||
 ||COLLECTOR                                                            |  - process signals         unsupported                             ||
 ||  fast         not sampled yet                                       |  - renice                  unsupported                             ||
 ||  medium       not sampled yet                                       |STALE DATA                                                          ||

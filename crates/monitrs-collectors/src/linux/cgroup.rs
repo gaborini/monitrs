@@ -20,7 +20,9 @@
 //! requirement that limits be shown *alongside* host totals only means something if
 //! an absent limit stays absent.
 
-use monitrs_core::model::{Confidence, EnvironmentKind, HostEnvironment, MetricState};
+use monitrs_core::model::{
+    Confidence, CpuQuota, EnvironmentKind, HostEnvironment, MetricState, UnavailableReason,
+};
 
 use crate::linux::parse::{
     ParseFailure, ParseResult, fields, lines, parse_u64, to_text, trim_ascii,
@@ -45,79 +47,12 @@ pub enum CgroupVersion {
     Hybrid,
 }
 
-/// A container runtime recognised from a cgroup path.
-///
-/// Recognition is by naming convention, so this is evidence rather than proof.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub enum ContainerRuntime {
-    /// `docker-<id>.scope` or `/docker/<id>`.
-    Docker,
-    /// `cri-containerd-<id>.scope` or `containerd-<id>.scope`.
-    Containerd,
-    /// `crio-<id>.scope`.
-    CriO,
-    /// `libpod-<id>.scope`.
-    Podman,
-    /// `lxc.payload.<name>` or `/lxc/<name>`.
-    Lxc,
-    /// `machine-<name>.scope`, which is `systemd-nspawn` or a `machinectl` VM.
-    SystemdMachine,
-    /// A path that looks like a container but matches no known convention.
-    Unknown,
-}
-
-impl ContainerRuntime {
-    /// The runtime name for the Inspect screen.
-    #[must_use]
-    pub const fn label(self) -> &'static str {
-        match self {
-            Self::Docker => "docker",
-            Self::Containerd => "containerd",
-            Self::CriO => "cri-o",
-            Self::Podman => "podman",
-            Self::Lxc => "lxc",
-            Self::SystemdMachine => "systemd-machine",
-            Self::Unknown => "container",
-        }
-    }
-}
-
-/// A container identified from a cgroup path.
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub struct ContainerIdentity {
-    /// Which convention matched.
-    pub runtime: ContainerRuntime,
-    /// The identifier the path carried, usually a 64-character hex digest.
-    pub id: Box<str>,
-    /// Whether the path also names a Kubernetes pod.
-    pub kubernetes: bool,
-}
-
-impl ContainerIdentity {
-    /// The abbreviated identifier people actually recognise.
-    ///
-    /// Twelve characters, matching `docker ps` output, so a user can compare what
-    /// this screen shows with what their own tooling shows.
-    #[must_use]
-    pub fn short_id(&self) -> &str {
-        let cut = self
-            .id
-            .char_indices()
-            .nth(12)
-            .map_or(self.id.len(), |(index, _)| index);
-        self.id.get(..cut).unwrap_or(&self.id)
-    }
-
-    /// A one-line label such as `docker 3f4a1b2c9d8e`.
-    #[must_use]
-    pub fn label(&self) -> String {
-        if self.kubernetes {
-            format!("kubernetes/{} {}", self.runtime.label(), self.short_id())
-        } else {
-            format!("{} {}", self.runtime.label(), self.short_id())
-        }
-    }
-}
+// `ContainerRuntime` and `ContainerIdentity` live in `monitrs-core::model` so that
+// `HostEnvironment` can carry an identity: a view has to render the container's name
+// without depending on the Linux collector. Re-exported here because recognising one
+// from a cgroup path is this module's job and `cgroup::ContainerIdentity` is where a
+// reader of this file expects to find it.
+pub use monitrs_core::model::{ContainerIdentity, ContainerRuntime};
 
 /// One line of `/proc/<pid>/cgroup`.
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -397,6 +332,30 @@ impl CpuMax {
         let cpus = (quota as f64 / self.period_us as f64) as f32;
         cpus.is_finite().then_some(cpus)
     }
+
+    /// The quota as a metric state, for [`CpuSnapshot::cgroup_quota`].
+    ///
+    /// A `max` quota becomes [`MetricState::Unsupported`] — there is no ceiling to
+    /// report and [`CpuSnapshot::effective_cores`] must fall back to the host's CPU
+    /// count — exactly as [`CgroupLimit::state`] does for `memory.max`.
+    ///
+    /// A period of zero is *not* folded into "unlimited", because that reads as "no
+    /// limit is configured" when a limit plainly is: the file said so, in a form this
+    /// kernel should never write. It becomes [`UnavailableReason::ParseFailed`], so the
+    /// user is told the limit could not be read rather than told there isn't one.
+    ///
+    /// [`CpuSnapshot::cgroup_quota`]: monitrs_core::model::CpuSnapshot::cgroup_quota
+    /// [`CpuSnapshot::effective_cores`]: monitrs_core::model::CpuSnapshot::effective_cores
+    #[must_use]
+    pub fn state(&self) -> MetricState<CpuQuota> {
+        let Some(quota_us) = self.quota_us else {
+            return MetricState::Unsupported;
+        };
+        CpuQuota::new(quota_us, self.period_us).map_or(
+            MetricState::TemporarilyUnavailable(UnavailableReason::ParseFailed),
+            MetricState::Available,
+        )
+    }
 }
 
 /// Parses a cgroup v2 `cpu.max`, which is `"<quota|max> <period>"`.
@@ -486,6 +445,7 @@ pub fn classify_environment(
             // inference gets, but it is still an inference from a naming
             // convention, so `High` rather than certainty.
             confidence: Confidence::High,
+            container: Some(container),
         };
     }
 
@@ -496,6 +456,9 @@ pub fn classify_environment(
             // The marker is a convention of one runtime and can be left behind in
             // an image, so this is weaker than a live cgroup path.
             confidence: Confidence::Medium,
+            // A marker file says "a container" without saying which one. Naming an
+            // unknown runtime here would invent an identity out of its absence.
+            container: None,
         };
     }
 
@@ -506,6 +469,7 @@ pub fn classify_environment(
             // DMI strings are set by the hypervisor and are usually right, but a
             // hardware vendor can also ship a matching string.
             confidence: Confidence::Medium,
+            container: None,
         };
     }
 
@@ -516,6 +480,7 @@ pub fn classify_environment(
             None => "no cgroup membership and no hypervisor DMI string".into(),
         },
         confidence: Confidence::Low,
+        container: None,
     }
 }
 

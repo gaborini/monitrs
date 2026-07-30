@@ -314,6 +314,8 @@ pub(super) fn memory_snapshot(
         // There are no cgroups on macOS, so there is no second limit to show
         // alongside the host total (§9.2).
         cgroup_limit_bytes: MetricState::Unsupported,
+        // No cgroups on macOS, so `used` above is already the effective figure.
+        cgroup_used_bytes: MetricState::Unsupported,
     })
 }
 

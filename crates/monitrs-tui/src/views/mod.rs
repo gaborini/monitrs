@@ -540,6 +540,12 @@ fn cpu_note_segments(snapshot: &SystemSnapshot) -> Vec<String> {
     if let Some(&physical) = snapshot.cpu.physical_count.fresh() {
         segments.push(format!("{physical} core"));
     }
+    // Directly after the counts it qualifies, and ahead of the temperature: when the
+    // header runs out of room the segment a reader can least afford to lose is the one
+    // saying those counts are not the ones that apply here (§9.2).
+    if let Some(text) = cgroup_cpu_text(snapshot) {
+        segments.push(text);
+    }
     if let Some(reading) = snapshot.sensors.hottest() {
         segments.push(temperature_text(reading));
     }
@@ -579,6 +585,18 @@ fn cgroup_limit_text(snapshot: &SystemSnapshot, units: ByteUnits) -> Option<Stri
     let memory = &snapshot.memory;
     let limit = memory.effective_limit_bytes();
     (limit != memory.total_bytes).then(|| format!("cgroup {}", format_bytes_compact(limit, units)))
+}
+
+/// `cgroup 1.5 cpu`, or `None` when this process tree has every CPU the machine has.
+///
+/// The CPU counterpart of [`cgroup_limit_text`], and here for the same §9.2 reason: the
+/// header states what the machine has, and inside a container that is not what the
+/// processes in it may use.
+fn cgroup_cpu_text(snapshot: &SystemSnapshot) -> Option<String> {
+    snapshot
+        .cpu
+        .is_cpu_limited()
+        .then(|| format!("cgroup {:.1} cpu", snapshot.cpu.effective_cores()))
 }
 
 /// `swap 205M/2.0G`, or `swap off` when swap is not configured.

@@ -160,11 +160,19 @@ fn draw_summary(
 }
 
 /// `12 logical, 12 physical  no frequency` — what kind of machine this is.
+///
+/// A cgroup ceiling, where one applies, goes here rather than being left to the Inspect
+/// screen: this is the header of the screen about CPUs, and the number of CPUs a process
+/// may actually use is part of what kind of machine this is. Without it the panels below
+/// show twelve cores to a process that can occupy one and a half of them.
 fn topology_label(snapshot: &SystemSnapshot) -> String {
     let mut parts = vec![format!("{} logical", snapshot.cpu.logical_count)];
     match snapshot.cpu.physical_count.fresh() {
         Some(count) => parts.push(format!("{count} physical")),
         None => parts.push("physical n/a".to_owned()),
+    }
+    if snapshot.cpu.is_cpu_limited() {
+        parts.push(format!("cgroup {:.1} CPUs", snapshot.cpu.effective_cores()));
     }
     match snapshot.cpu.frequency_mhz.fresh() {
         Some(mhz) => parts.push(format!("{mhz} MHz")),
@@ -209,6 +217,20 @@ fn breakdown_note(total: &MetricState<CpuUsage>) -> String {
 ///
 /// The per-core figure is the one that answers "is 4.26 a lot", which a bare load
 /// average never does — it means something different on 4 cores and on 128.
+///
+/// # Why a cgroup quota does *not* become the divisor
+///
+/// It would be the obvious thing to do and it would be wrong. `/proc/loadavg` is not
+/// namespaced: inside a container it reports the **host's** run queue, including every
+/// process in every other container on the machine. Dividing that by this group's 1.5-CPU
+/// quota pairs a host numerator with a container denominator and produces a figure that
+/// describes nothing — the same category error §9.2 forbids for memory, where
+/// `/proc/meminfo`'s host `used` must never be divided by a cgroup limit.
+///
+/// So the divisor stays the host's CPU count, and where a quota exists the label says
+/// `host cores` to make clear that this figure is about the machine rather than about the
+/// container. The group's own saturation is a different measurement — cgroup PSI — and
+/// inventing it by division here would be worse than not having it.
 fn load_line(
     snapshot: &SystemSnapshot,
     presentation: Presentation<'_>,
@@ -233,9 +255,17 @@ fn load_line(
             }
             row.pad(4);
             let cores = f32::from(snapshot.cpu.logical_count.max(1));
+            // `host cores` only inside a cgroup: on a bare machine there is no other
+            // kind of core for the reader to confuse these with, and the word would be
+            // noise on every screen to clarify one.
+            let scope = if snapshot.cpu.is_cpu_limited() {
+                "host cores"
+            } else {
+                "cores"
+            };
             row.push(
                 &format!(
-                    "over {} cores: {:.2} per core",
+                    "over {} {scope}: {:.2} per core",
                     snapshot.cpu.logical_count,
                     load.one / cores
                 ),

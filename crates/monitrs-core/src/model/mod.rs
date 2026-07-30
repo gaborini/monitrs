@@ -20,11 +20,15 @@ mod snapshot;
 mod storage;
 
 pub use capability::{CapabilitySnapshot, CapabilityState};
-pub use cpu::{CoreClass, CpuBreakdown, CpuNormalization, CpuSnapshot, CpuUsage, LoadSnapshot};
+pub use cpu::{
+    CoreClass, CpuBreakdown, CpuNormalization, CpuQuota, CpuSnapshot, CpuUsage, LoadSnapshot,
+};
 pub use health::{
     CollectorHealth, CollectorIssue, MAX_RETAINED_ISSUES, SelfOverhead, Tier, TierHealth,
 };
-pub use host::{EnvironmentKind, HostEnvironment, HostSnapshot};
+pub use host::{
+    ContainerIdentity, ContainerRuntime, EnvironmentKind, HostEnvironment, HostSnapshot,
+};
 pub use identity::{ProcessIdentity, UserIdentity};
 pub use measurement::{Confidence, MeasuredValue, Measurement, Severity};
 pub use memory::{MemoryDetail, MemorySemantics, MemorySnapshot, SwapSnapshot};

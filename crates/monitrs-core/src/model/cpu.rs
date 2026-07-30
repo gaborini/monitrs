@@ -28,6 +28,69 @@ impl CpuUsage {
     }
 }
 
+/// A cgroup CPU quota: how much CPU time the group may use per period.
+///
+/// Constructed only from a period that can produce a meaningful ratio, so there is no
+/// representable quota that divides by zero or yields a non-finite core count. An
+/// *unlimited* group is not a `CpuQuota` at all — it is
+/// [`MetricState::Unsupported`] on [`CpuSnapshot::cgroup_quota`], mirroring how
+/// `memory.max` reading `max` becomes unsupported rather than `u64::MAX`.
+///
+/// Both raw figures are kept, not just the derived core count: someone debugging why
+/// their container is being throttled wants to see the `100000 200000` they configured,
+/// and deriving it back from `2.0` would lose the period.
+#[derive(Clone, Copy, Debug, PartialEq)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+pub struct CpuQuota {
+    /// Microseconds of CPU time allowed per period.
+    quota_us: u64,
+    /// The accounting period in microseconds.
+    period_us: u64,
+}
+
+impl CpuQuota {
+    /// Builds a quota, or `None` when it could not describe a real ceiling.
+    ///
+    /// Rejects a zero period — division by zero — and a ratio that is not finite. A zero
+    /// *quota* is accepted: a group allowed no CPU time at all is a real, if hostile,
+    /// configuration, and reporting it as absent would hide it.
+    #[must_use]
+    pub fn new(quota_us: u64, period_us: u64) -> Option<Self> {
+        if period_us == 0 {
+            return None;
+        }
+        let quota = Self {
+            quota_us,
+            period_us,
+        };
+        quota.cores().is_finite().then_some(quota)
+    }
+
+    /// The ceiling as a number of CPUs, e.g. `1.5`.
+    #[must_use]
+    pub fn cores(&self) -> f32 {
+        // Narrowing to f32 for a figure displayed with one decimal; the ratio of two
+        // microsecond counts cannot exceed f32's range in any real configuration.
+        #[allow(clippy::cast_precision_loss)]
+        let cores = self.quota_us as f64 / self.period_us as f64;
+        #[allow(clippy::cast_possible_truncation)]
+        let cores = cores as f32;
+        cores
+    }
+
+    /// Microseconds of CPU time allowed per period, as configured.
+    #[must_use]
+    pub const fn quota_us(&self) -> u64 {
+        self.quota_us
+    }
+
+    /// The accounting period in microseconds, as configured.
+    #[must_use]
+    pub const fn period_us(&self) -> u64 {
+        self.period_us
+    }
+}
+
 /// A class of logical CPUs that differ in kind, not just in load.
 ///
 /// Apple Silicon has performance and efficiency cores; big.LITTLE ARM machines have
@@ -150,6 +213,19 @@ pub struct CpuSnapshot {
     pub per_core: MetricState<Vec<CpuUsage>>,
     /// Current clock, where reported.
     pub frequency_mhz: MetricState<u64>,
+    /// The CPU ceiling a cgroup imposes, **beside** the host's CPU count.
+    ///
+    /// §9.2 requires a container limit to be reported separately from the host total, so
+    /// `logical_count` stays the machine's real CPU count and this is the ceiling that
+    /// actually applies to the processes in it. A container limited to 1.5 CPUs on a
+    /// 64-CPU host is not "2% of the machine"; it is a hard wall a process will be
+    /// throttled against, and a monitor that showed only the 64 would be describing a
+    /// machine the user does not have.
+    ///
+    /// [`MetricState::Unsupported`] where no quota is configured — `cpu.max` reading
+    /// `max` is *not* a very large number, it is the absence of a limit — and on every
+    /// platform without cgroups.
+    pub cgroup_quota: MetricState<CpuQuota>,
     /// The machine's core classes, where the platform names them.
     ///
     /// Empty where there is one class or none is reported, which is the honest
@@ -161,6 +237,45 @@ pub struct CpuSnapshot {
 }
 
 impl CpuSnapshot {
+    /// The number of CPUs that actually applies to processes here.
+    ///
+    /// The cgroup quota where one is configured and below the host's CPU count, the host
+    /// count otherwise. This is the divisor a load average should be read against and the
+    /// ceiling a per-core view is bounded by — the exact counterpart of
+    /// [`MemorySnapshot::effective_limit_bytes`](crate::model::MemorySnapshot::effective_limit_bytes),
+    /// and required by §9.2 for the same reason.
+    ///
+    /// A quota *above* the host count is ignored rather than reported: a group allowed
+    /// more CPU than the machine has is a configuration artefact, not a ceiling, and
+    /// dividing a load average by it would understate the pressure.
+    ///
+    /// A *stale* reading counts here, which is the one place this crate deliberately
+    /// breaks [`MetricState::fresh`]'s "use fresh values for calculations" rule. A limit
+    /// is configuration, not a measurement: if the last successful read said 1.5 CPUs and
+    /// this tick's read failed, the group is still limited to 1.5 CPUs, and falling back
+    /// to the host's 64 would present a machine 42 times larger than the one the process
+    /// is actually being throttled against. Keeping the retained value is wrong only if
+    /// the limit changed in the last few seconds, and the row is marked stale either way.
+    #[must_use]
+    pub fn effective_cores(&self) -> f32 {
+        let host = f32::from(self.logical_count);
+        match self.cgroup_quota.displayable() {
+            Some((quota, _)) if quota.cores() > 0.0 && quota.cores() < host => quota.cores(),
+            _ => host,
+        }
+    }
+
+    /// Whether a cgroup quota, rather than the hardware, is the ceiling here.
+    ///
+    /// What a renderer checks before showing the host CPU count unqualified. Stale
+    /// counts, for the reason [`Self::effective_cores`] gives.
+    #[must_use]
+    pub fn is_cpu_limited(&self) -> bool {
+        self.cgroup_quota.displayable().is_some_and(|(quota, _)| {
+            quota.cores() > 0.0 && quota.cores() < f32::from(self.logical_count)
+        })
+    }
+
     /// A snapshot with no measurements yet, for the first frame.
     #[must_use]
     pub const fn warming_up(logical_count: u16) -> Self {
@@ -170,6 +285,7 @@ impl CpuSnapshot {
             total: MetricState::WarmingUp,
             per_core: MetricState::WarmingUp,
             frequency_mhz: MetricState::WarmingUp,
+            cgroup_quota: MetricState::WarmingUp,
             // Empty rather than warming up: topology is not measured, it is read
             // once, and a collector that knows of no classes is reporting a fact.
             core_classes: Vec::new(),
@@ -207,7 +323,97 @@ impl LoadSnapshot {
 
 #[cfg(test)]
 mod tests {
+    use core::time::Duration;
+
     use super::*;
+    use crate::model::UnavailableReason;
+
+    /// Whether two core counts are the same figure.
+    ///
+    /// `assert_eq!` on an `f32` is a clippy error and rightly so, but these are exact
+    /// integers-as-floats: the host count comes from a `u16` and the quotas below divide
+    /// exactly. An epsilon comparison states that plainly.
+    fn same(left: f32, right: f32) -> bool {
+        (left - right).abs() < f32::EPSILON
+    }
+
+    #[test]
+    fn a_cgroup_quota_below_the_host_count_becomes_the_effective_ceiling() {
+        // §9.2: the host's CPUs and the group's ceiling are both observable, and the
+        // ceiling is the one a load average should be read against.
+        let mut cpu = CpuSnapshot::warming_up(64);
+        assert!(same(cpu.effective_cores(), 64.0));
+        assert!(!cpu.is_cpu_limited());
+
+        cpu.cgroup_quota = MetricState::Available(CpuQuota::new(150_000, 100_000).expect("1.5"));
+        assert!(same(cpu.effective_cores(), 1.5));
+        assert!(cpu.is_cpu_limited());
+        assert_eq!(cpu.logical_count, 64, "the host count is untouched");
+    }
+
+    #[test]
+    fn a_quota_above_the_host_count_is_not_a_ceiling() {
+        // A group allowed 128 CPUs on a 64-CPU machine is a configuration artefact.
+        // Reporting it as the ceiling would halve every load figure read against it.
+        let mut cpu = CpuSnapshot::warming_up(64);
+        cpu.cgroup_quota = MetricState::Available(CpuQuota::new(12_800_000, 100_000).expect("128"));
+        assert!(same(cpu.effective_cores(), 64.0));
+        assert!(!cpu.is_cpu_limited());
+    }
+
+    #[test]
+    fn an_unavailable_quota_leaves_the_host_count_as_the_ceiling() {
+        // Every kind of nothing, because §4's states must not each need their own
+        // caller-side special case. Unsupported is the ordinary case off Linux.
+        let mut cpu = CpuSnapshot::warming_up(8);
+        for state in [
+            MetricState::Unsupported,
+            MetricState::WarmingUp,
+            MetricState::PermissionDenied,
+            MetricState::TemporarilyUnavailable(UnavailableReason::ParseFailed),
+        ] {
+            cpu.cgroup_quota = state;
+            assert!(same(cpu.effective_cores(), 8.0), "{state:?}");
+            assert!(!cpu.is_cpu_limited(), "{state:?}");
+        }
+    }
+
+    #[test]
+    fn a_stale_quota_still_bounds_the_machine() {
+        // A limit is configuration, not a measurement: a reading a minute old is still
+        // the wall processes are hitting, and falling back to the host count would
+        // silently widen the machine.
+        let mut cpu = CpuSnapshot::warming_up(16);
+        cpu.cgroup_quota = MetricState::Stale {
+            value: CpuQuota::new(200_000, 100_000).expect("2.0"),
+            age: Duration::from_secs(45),
+        };
+        assert!(same(cpu.effective_cores(), 2.0));
+        assert!(cpu.is_cpu_limited());
+    }
+
+    #[test]
+    fn a_quota_cannot_be_built_from_a_period_it_cannot_divide_by() {
+        // Unrepresentable rather than checked at every use site.
+        assert!(CpuQuota::new(100_000, 0).is_none());
+        // A group allowed no CPU time at all is hostile but real, and hiding it would
+        // report an unrestricted machine.
+        let starved = CpuQuota::new(0, 100_000).expect("zero quota is a real limit");
+        assert!(same(starved.cores(), 0.0));
+        // …but it is not a *ceiling* below the host count in any useful sense, so the
+        // effective figure stays the machine's rather than becoming zero cores.
+        let mut cpu = CpuSnapshot::warming_up(4);
+        cpu.cgroup_quota = MetricState::Available(starved);
+        assert!(same(cpu.effective_cores(), 4.0));
+    }
+
+    #[test]
+    fn a_quota_keeps_the_figures_it_was_configured_with() {
+        // The ratio is what a view shows; the pair is what someone comparing this with
+        // `cpu.max` needs, and deriving it back from 1.5 would lose the period.
+        let quota = CpuQuota::new(150_000, 100_000).expect("1.5");
+        assert_eq!((quota.quota_us(), quota.period_us()), (150_000, 100_000));
+    }
 
     #[test]
     fn core_normalization_is_the_identity() {

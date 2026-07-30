@@ -94,16 +94,23 @@ impl MemInfo {
 
     /// Builds the platform-neutral memory snapshot.
     ///
-    /// `cgroup_limit` is passed in rather than derived here because §9.2 requires
-    /// the container limit to be *separate* from the host total: this function's
-    /// `total_bytes` is always the host figure, and the limit travels alongside it
-    /// so both stay observable.
+    /// `cgroup_limit` and `cgroup_used` are passed in rather than derived here because
+    /// §9.2 requires the container's figures to be *separate* from the host's: this
+    /// function's `total_bytes` and `used` are always the host's, read from
+    /// `/proc/meminfo`, which is not namespaced and so reports the machine even inside
+    /// a container. The group's own limit and charge travel alongside them so that both
+    /// pairs stay observable and a renderer can avoid the specific error of dividing one
+    /// by the other.
     ///
     /// Returns `None` when `MemAvailable` is absent, which is the signal to the
     /// caller that native enrichment cannot improve on the baseline for this
     /// kernel (§8.4).
     #[must_use]
-    pub fn to_snapshot(&self, cgroup_limit: MetricState<u64>) -> Option<MemorySnapshot> {
+    pub fn to_snapshot(
+        &self,
+        cgroup_limit: MetricState<u64>,
+        cgroup_used: MetricState<u64>,
+    ) -> Option<MemorySnapshot> {
         let available = self.available_bytes?;
         let used = self.used_bytes()?;
         let swap_total = self.swap_total_bytes.unwrap_or(0);
@@ -150,6 +157,7 @@ impl MemInfo {
             },
             semantics: MemorySemantics::LinuxMemAvailable,
             cgroup_limit_bytes: cgroup_limit,
+            cgroup_used_bytes: cgroup_used,
         })
     }
 }
@@ -276,7 +284,10 @@ mod tests {
         // in place of it.
         let info = typical();
         let snapshot = info
-            .to_snapshot(MetricState::Available(2 * 1024 * 1024 * 1024))
+            .to_snapshot(
+                MetricState::Available(2 * 1024 * 1024 * 1024),
+                MetricState::Available(512 * 1024 * 1024),
+            )
             .expect("MemAvailable is present");
         assert_eq!(snapshot.semantics, MemorySemantics::LinuxMemAvailable);
         assert_eq!(snapshot.total_bytes, 32_784_156 * 1024);
@@ -292,7 +303,7 @@ mod tests {
     #[test]
     fn macos_only_fields_stay_unsupported_on_linux() {
         let snapshot = typical()
-            .to_snapshot(MetricState::Unsupported)
+            .to_snapshot(MetricState::Unsupported, MetricState::Unsupported)
             .expect("valid");
         assert!(snapshot.detail.wired.is_unsupported());
         assert!(snapshot.detail.compressed.is_unsupported());
@@ -310,7 +321,10 @@ mod tests {
         let info = parse_meminfo(fixtures::MEMINFO_NO_MEMAVAILABLE).expect("valid");
         assert_eq!(info.available_bytes, None);
         assert_eq!(info.used_bytes(), None);
-        assert!(info.to_snapshot(MetricState::Unsupported).is_none());
+        assert!(
+            info.to_snapshot(MetricState::Unsupported, MetricState::Unsupported)
+                .is_none()
+        );
         // The rest of the file is still usable as detail.
         assert_eq!(info.total_bytes, 2_048_000 * 1024);
         assert_eq!(info.cached_bytes, Some(512_000 * 1024));
@@ -332,7 +346,10 @@ mod tests {
             info.available_bytes, None,
             "the half-written MemAvailable line must not be guessed at"
         );
-        assert!(info.to_snapshot(MetricState::Unsupported).is_none());
+        assert!(
+            info.to_snapshot(MetricState::Unsupported, MetricState::Unsupported)
+                .is_none()
+        );
     }
 
     #[test]

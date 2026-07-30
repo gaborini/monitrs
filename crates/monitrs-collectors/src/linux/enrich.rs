@@ -35,9 +35,9 @@ use std::time::{Instant, SystemTime};
 
 use monitrs_core::SystemSnapshot;
 use monitrs_core::model::{
-    CapabilityState, CpuUsage, DiskSnapshot, DiskTotals, HostEnvironment, InterfaceKind, LinkState,
-    MetricState, NetworkSnapshot, ProcessIdentity, ProcessIo, ProcessMemory, PsiResource,
-    PsiSnapshot, Tier, TrafficTotals, UnavailableReason, UserIdentity,
+    CapabilityState, CpuQuota, CpuUsage, DiskSnapshot, DiskTotals, HostEnvironment, InterfaceKind,
+    LinkState, MetricState, NetworkSnapshot, ProcessIdentity, ProcessIo, ProcessMemory,
+    PsiResource, PsiSnapshot, Tier, TrafficTotals, UnavailableReason, UserIdentity,
 };
 use monitrs_core::rates::{
     CounterTracker, CounterWidth, KeyedProcessCpuTrackers, KeyedRateTrackers, KeyedTrackers,
@@ -46,8 +46,8 @@ use monitrs_core::rates::{
 use monitrs_core::units::Percent;
 
 use crate::linux::cgroup::{
-    CgroupVersion, CpuMax, classify_environment, parse_cpu_max, parse_dmi_hypervisor,
-    parse_memory_current, parse_memory_max, parse_pid_cgroup,
+    CgroupVersion, classify_environment, parse_cpu_max, parse_dmi_hypervisor, parse_memory_current,
+    parse_memory_max, parse_pid_cgroup,
 };
 use crate::linux::diskstats::{DiskStats, parse_diskstats};
 use crate::linux::loadavg::{parse_loadavg, parse_uptime};
@@ -114,7 +114,7 @@ pub struct LinuxEnrichment {
     cached_links: HashMap<DeviceKey, LinkFacts>,
     cached_environment: MetricState<HostEnvironment>,
     cached_memory_limit: MetricState<u64>,
-    cached_cpu_max: Option<CpuMax>,
+    cached_cpu_quota: MetricState<CpuQuota>,
     cached_cgroup_version: Option<CgroupVersion>,
     cgroup_memory_current: MetricState<u64>,
 
@@ -174,7 +174,7 @@ impl LinuxEnrichment {
             cached_links: HashMap::new(),
             cached_environment: MetricState::WarmingUp,
             cached_memory_limit: MetricState::WarmingUp,
-            cached_cpu_max: None,
+            cached_cpu_quota: MetricState::WarmingUp,
             cached_cgroup_version: None,
             cgroup_memory_current: MetricState::WarmingUp,
             diagnostics: ReadDiagnostics::default(),
@@ -193,15 +193,16 @@ impl LinuxEnrichment {
         &self.diagnostics
     }
 
-    /// The cgroup CPU bandwidth limit, where one is configured.
+    /// The cgroup CPU bandwidth limit as last read, for tests and diagnostics.
     ///
-    /// Exposed here rather than folded into [`monitrs_core::model::CpuSnapshot`]
-    /// because §9.2 requires container limits to be *separate* from host totals: the
-    /// snapshot's `logical_count` stays the host's CPU count, and this is the ceiling
-    /// that actually applies. The Inspect screen shows both.
+    /// The snapshot carries this too, in
+    /// [`CpuSnapshot::cgroup_quota`](monitrs_core::model::CpuSnapshot::cgroup_quota),
+    /// beside — never instead of — the host's `logical_count`, which is what §9.2
+    /// requires: the machine has its CPUs and the group has its ceiling, and a view
+    /// needs both to say which of the two is the wall a process is hitting.
     #[must_use]
-    pub const fn cgroup_cpu_limit(&self) -> Option<CpuMax> {
-        self.cached_cpu_max
+    pub const fn cgroup_cpu_limit(&self) -> MetricState<CpuQuota> {
+        self.cached_cpu_quota
     }
 
     /// The cgroup memory limit as last read, alongside — never instead of — the
@@ -252,6 +253,11 @@ impl LinuxEnrichment {
                 .record("/proc process enumeration", ReadFailure::Oversized);
         }
         snapshot.host.environment = self.cached_environment.clone();
+        // Published from the cache rather than at the point of reading, because the
+        // ceiling belongs on every snapshot and `cpu.max` is only read on the slow tier
+        // (§8.6): a limit is a configuration fact, not a measurement, so republishing
+        // the cached value is honest where republishing a cached *reading* would not be.
+        snapshot.cpu.cgroup_quota = self.cached_cpu_quota;
         self.diagnostics
             .apply_to(&mut snapshot.health, tick.elapsed);
     }
@@ -294,7 +300,19 @@ impl LinuxEnrichment {
         }
 
         if let Some(bytes) = self.take("/sys/fs/cgroup/cpu.max", sources.cgroup.cpu_max.as_ref()) {
-            self.cached_cpu_max = parse_cpu_max(bytes).ok();
+            self.cached_cpu_quota = match parse_cpu_max(bytes) {
+                // `CpuMax::state` holds §9.2's sentinel rule: a `max` quota becomes
+                // Unsupported rather than a very large number of CPUs.
+                Ok(limit) => limit.state(),
+                // Previously this was `.ok()`, which kept the last good value and so
+                // presented a ceiling read minutes ago as the current one. A quota that
+                // cannot be parsed is unknown, and saying so is the whole point of §4.
+                Err(failure) => MetricState::TemporarilyUnavailable(failure.reason()),
+            };
+        } else if sources.cgroup.cpu_max.is_some() {
+            // Read and failed — `take` has already recorded it. Unsupported rather than
+            // a retained quota, matching `memory.max` directly above.
+            self.cached_cpu_quota = MetricState::Unsupported;
         }
         if let Some(bytes) = self.take(
             "/sys/fs/cgroup/cgroup.controllers",
@@ -515,7 +533,8 @@ impl LinuxEnrichment {
         // `None` means this kernel has no `MemAvailable`, in which case §8.4 forbids
         // silently substituting a different definition of "used": the baseline's
         // numbers, with their own declared semantics, stay.
-        if let Some(memory) = info.to_snapshot(self.cached_memory_limit) {
+        if let Some(memory) = info.to_snapshot(self.cached_memory_limit, self.cgroup_memory_current)
+        {
             snapshot.memory = memory;
         }
     }
@@ -1284,16 +1303,34 @@ mod tests {
             snapshot.capabilities.cgroup_limits,
             CapabilityState::Available
         );
-        // The CPU limit is exposed separately, because no snapshot field can hold it
-        // without conflating it with the host CPU count (§9.2).
-        let cpus = enrichment
+        // The CPU quota travels on the snapshot beside the host count, not instead of
+        // it: §9.2 wants both observable, and a view has to be able to say which of the
+        // two is the ceiling that applies.
+        let quota = enrichment
             .cgroup_cpu_limit()
-            .and_then(|limit| limit.effective_cpus())
+            .fresh()
+            .copied()
             .expect("cpu.max is configured");
-        assert!((cpus - 1.5).abs() < f32::EPSILON);
+        assert!((quota.cores() - 1.5).abs() < f32::EPSILON);
+        assert_eq!(snapshot.cpu.cgroup_quota.fresh(), Some(&quota));
         assert_eq!(snapshot.cpu.logical_count, 4, "the host count is untouched");
+        assert!((snapshot.cpu.effective_cores() - 1.5).abs() < f32::EPSILON);
+        assert!(snapshot.cpu.is_cpu_limited());
+        // The raw pair survives, because someone debugging a throttled container wants
+        // to see the figures they configured rather than only the ratio.
+        assert_eq!((quota.quota_us(), quota.period_us()), (150_000, 100_000));
         assert_eq!(
             enrichment.cgroup_memory_current().fresh(),
+            Some(&1_503_238_553)
+        );
+        // And the group's own charge, which is the number `memory.max` is enforced
+        // against — `used` above is the host's and would divide by the wrong total.
+        assert_eq!(
+            snapshot.memory.cgroup_used_bytes.fresh(),
+            Some(&1_503_238_553)
+        );
+        assert_eq!(
+            snapshot.memory.effective_used_bytes().fresh(),
             Some(&1_503_238_553)
         );
         assert_eq!(enrichment.cgroup_version(), Some(CgroupVersion::V2));

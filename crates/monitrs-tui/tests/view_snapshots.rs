@@ -817,6 +817,50 @@ fn the_inspect_screen_in_a_container() {
     insta::assert_snapshot!(text);
 }
 
+#[test]
+fn the_inspect_screen_names_the_container_it_found() {
+    // §7.5 answers *whether* with the classification; the identity answers *which*, and
+    // it goes ahead of the evidence so a narrow panel truncates "how we guessed" rather
+    // than "what this is".
+    let state = Fixture::new((140, 38), ViewId::Inspect)
+        .with_scenario(Scenario::containerised())
+        .build();
+    let text = text_of(&frame(&state, ascii()));
+    assert!(text.contains("container docker 3f4a1b2c9d8e"), "{text}");
+    // The group's own charge sits with its own limit. The host's `used` appearing here
+    // instead would report 23G of 2.0G.
+    assert!(text.contains("2.0G, 512M used (25%)"), "{text}");
+    assert!(
+        !text.contains("23G of 2.0G"),
+        "a host figure must never be divided by a container limit:\n{text}"
+    );
+}
+
+#[test]
+fn the_cpu_screen_states_the_ceiling_a_container_actually_has() {
+    // Twelve cores drawn for a process that may occupy one and a half of them is the
+    // §9.2 failure in its most misleading form: every panel below is about CPUs.
+    let state = Fixture::new((140, 38), ViewId::Cpu)
+        .with_scenario(Scenario::containerised())
+        .build();
+    let text = text_of(&frame(&state, ascii()));
+    assert!(text.contains("cgroup 1.5 CPUs"), "{text}");
+    // The load average is the *host's* — `/proc/loadavg` is not namespaced — so the
+    // per-core figure is labelled as the machine's rather than the group's, and the
+    // quota deliberately does not become the divisor.
+    assert!(text.contains("host cores"), "{text}");
+    insta::assert_snapshot!(text);
+}
+
+#[test]
+fn an_unlimited_machine_says_nothing_about_cgroups_on_the_cpu_screen() {
+    // The counterpart: the words earned by a container must not appear on a laptop.
+    let state = Fixture::new((140, 38), ViewId::Cpu).build();
+    let text = text_of(&frame(&state, ascii()));
+    assert!(!text.contains("cgroup"), "{text}");
+    assert!(!text.contains("host cores"), "{text}");
+}
+
 // ---------------------------------------------------------------------------
 // §17.3: the Time Lens (§2.1, §26)
 // ---------------------------------------------------------------------------

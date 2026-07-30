@@ -155,6 +155,21 @@ pub struct MemorySnapshot {
     /// §9.2 requires container limits to be exposed *separately* from host
     /// totals and both to be shown and labelled where observable.
     pub cgroup_limit_bytes: MetricState<u64>,
+    /// The cgroup's *own* memory usage, when running under one.
+    ///
+    /// Inside a container, `used` is the host's figure: `/proc/meminfo` is not
+    /// namespaced, so a process in a 2 GiB group on a 64 GiB host sees the host's
+    /// 40 GiB and concludes it is nearly out of memory when it has used 300 MiB of its
+    /// own allowance. This is the group's figure, read from `memory.current` — the same
+    /// counter the kernel compares against `memory.max` when it decides to OOM-kill,
+    /// which is what makes it the number worth showing rather than a second opinion.
+    ///
+    /// It counts reclaimable page cache, so it sits above what the group would need
+    /// under pressure. That is a property of how the limit is *enforced*, not an
+    /// inaccuracy: the kernel reclaims that cache before killing anything.
+    ///
+    /// [`MetricState::Unsupported`] off Linux and outside a cgroup.
+    pub cgroup_used_bytes: MetricState<u64>,
 }
 
 impl MemorySnapshot {
@@ -177,6 +192,7 @@ impl MemorySnapshot {
             },
             semantics,
             cgroup_limit_bytes: MetricState::WarmingUp,
+            cgroup_used_bytes: MetricState::WarmingUp,
         }
     }
 
@@ -185,18 +201,125 @@ impl MemorySnapshot {
     /// Inside a container this is the cgroup limit, not the host total; §9.2
     /// requires the distinction to be observable rather than silently folded
     /// into one number.
+    ///
+    /// A *stale* reading counts here, which is the one place this crate deliberately
+    /// breaks [`MetricState::fresh`]'s "use fresh values for calculations" rule. A limit
+    /// is configuration, not a measurement: if the last successful read said 2 GiB and
+    /// this tick's read failed, the group is still limited to 2 GiB, and falling back to
+    /// the host's 64 would report 62 GiB of headroom that does not exist — wrong in the
+    /// direction that gets a process OOM-killed by surprise. Keeping the retained value
+    /// is wrong only if the limit changed in the last few seconds, and the row is marked
+    /// stale either way.
     #[must_use]
     pub fn effective_limit_bytes(&self) -> u64 {
-        match self.cgroup_limit_bytes.fresh() {
-            Some(&limit) if limit > 0 && limit < self.total_bytes => limit,
+        match self.cgroup_limit_bytes.displayable() {
+            Some((&limit, _)) if limit > 0 && limit < self.total_bytes => limit,
             _ => self.total_bytes,
+        }
+    }
+
+    /// Whether a cgroup limit, rather than the installed RAM, is the ceiling here.
+    ///
+    /// Stale counts, for the reason [`Self::effective_limit_bytes`] gives.
+    #[must_use]
+    pub fn is_memory_limited(&self) -> bool {
+        self.cgroup_limit_bytes
+            .displayable()
+            .is_some_and(|(&limit, _)| limit > 0 && limit < self.total_bytes)
+    }
+
+    /// Bytes in use against [`Self::effective_limit_bytes`].
+    ///
+    /// The cgroup's own usage where the platform reports it, the host's `used`
+    /// otherwise — so that the two halves of the ratio always come from the same
+    /// place. Pairing a host `used` with a container limit is the specific mistake this
+    /// exists to prevent: it reports 40 GiB of 2 GiB, or 2000%.
+    ///
+    /// The unavailability is passed through rather than replaced, so a caller can say
+    /// *why* there is no figure.
+    #[must_use]
+    pub fn effective_used_bytes(&self) -> MetricState<u64> {
+        match self.cgroup_used_bytes {
+            MetricState::Unsupported => self.used,
+            group => group,
         }
     }
 }
 
 #[cfg(test)]
 mod tests {
+    use core::time::Duration;
+
     use super::*;
+
+    const GIB: u64 = 1024 * 1024 * 1024;
+    const MIB: u64 = 1024 * 1024;
+
+    /// A 64 GiB host with 40 GiB in use, inside a 2 GiB group using 300 MiB of it.
+    fn containerised() -> MemorySnapshot {
+        let mut memory = MemorySnapshot::warming_up(64 * GIB, MemorySemantics::LinuxMemAvailable);
+        memory.used = MetricState::Available(40 * GIB);
+        memory.cgroup_limit_bytes = MetricState::Available(2 * GIB);
+        memory.cgroup_used_bytes = MetricState::Available(300 * MIB);
+        memory
+    }
+
+    #[test]
+    fn inside_a_container_the_groups_own_charge_is_the_used_figure() {
+        // `/proc/meminfo` is not namespaced, so `used` is the host's 40 GiB. Pairing it
+        // with the group's 2 GiB limit reports 2000% — the arithmetic §9.2 exists to
+        // prevent — so both halves of the ratio come from the group.
+        let memory = containerised();
+        assert_eq!(memory.effective_used_bytes().fresh(), Some(&(300 * MIB)));
+        assert_eq!(memory.effective_limit_bytes(), 2 * GIB);
+        assert!(memory.is_memory_limited());
+        assert_eq!(
+            memory.used.fresh(),
+            Some(&(40 * GIB)),
+            "the host figure stays observable"
+        );
+    }
+
+    #[test]
+    fn without_a_cgroup_the_host_figures_are_the_effective_ones() {
+        let mut memory = containerised();
+        memory.cgroup_limit_bytes = MetricState::Unsupported;
+        memory.cgroup_used_bytes = MetricState::Unsupported;
+        assert_eq!(memory.effective_used_bytes().fresh(), Some(&(40 * GIB)));
+        assert_eq!(memory.effective_limit_bytes(), 64 * GIB);
+        assert!(!memory.is_memory_limited());
+    }
+
+    #[test]
+    fn a_stale_limit_still_bounds_the_machine() {
+        // The counterpart of `CpuSnapshot`'s rule, and the reason both use
+        // `displayable` rather than `fresh`: falling back to the host's 64 GiB here
+        // would advertise 62 GiB of headroom that the group does not have.
+        let mut memory = containerised();
+        memory.cgroup_limit_bytes = MetricState::Stale {
+            value: 2 * GIB,
+            age: Duration::from_secs(45),
+        };
+        assert_eq!(memory.effective_limit_bytes(), 2 * GIB);
+        assert!(memory.is_memory_limited());
+    }
+
+    #[test]
+    fn an_unreadable_group_charge_is_passed_through_rather_than_replaced() {
+        // Falling back to the host's `used` here would put a 40 GiB figure under a
+        // 2 GiB ceiling. The caller is told why there is no number instead (§4).
+        let mut memory = containerised();
+        memory.cgroup_used_bytes = MetricState::PermissionDenied;
+        assert!(matches!(
+            memory.effective_used_bytes(),
+            MetricState::PermissionDenied
+        ));
+        assert_eq!(
+            memory.effective_limit_bytes(),
+            2 * GIB,
+            "the limit is unaffected by the charge being unreadable"
+        );
+    }
 
     #[test]
     fn each_platform_semantics_explains_itself() {

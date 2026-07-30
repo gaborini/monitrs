@@ -41,7 +41,7 @@ use monitrs_core::model::{
     ProcessDetail, ProcessIdentity, ProcessSnapshot, SystemSnapshot, Tier,
 };
 use monitrs_core::units::{
-    ByteUnits, format_age, format_bytes, format_bytes_compact, format_duration,
+    ByteUnits, Percent, format_age, format_bytes, format_bytes_compact, format_duration,
 };
 use ratatui::Frame;
 use ratatui::buffer::Buffer;
@@ -241,13 +241,22 @@ fn system_lines(
         "semantics",
         snapshot.memory.semantics.description(),
     ));
-    // §9.2: a cgroup limit is shown beside the host total, never folded into it.
-    lines.push(fact(
-        presentation,
-        width,
-        "cgroup limit",
-        &states::describe_bytes(&snapshot.memory.cgroup_limit_bytes, units),
-    ));
+    // §9.2: a cgroup limit is shown beside the host total, never folded into it — and
+    // the group's own charge beside the limit, because `memory` above is the *host's*
+    // (`/proc/meminfo` is not namespaced) and the two must not be read as a pair.
+    match cgroup_memory_text(snapshot, units) {
+        // A limit with the group's own charge beside it: composed text, so plain.
+        Some(text) => lines.push(plain_fact(presentation, width, "cgroup limit", &text)),
+        // Just the limit, in its own right — including its unavailability, which
+        // `fact` styles and marks. Composing this one by hand is how `n/a` became
+        // `-n/a`: `flagged` prefixes the marker that the styled path draws itself.
+        None => lines.push(fact(
+            presentation,
+            width,
+            "cgroup limit",
+            &states::describe_bytes(&snapshot.memory.cgroup_limit_bytes, units),
+        )),
+    }
     // §7.5 requires the container/VM hint to be clearly labelled heuristic, which
     // means its evidence and its confidence travel with it.
     lines.push(fact(
@@ -259,14 +268,53 @@ fn system_lines(
     lines
 }
 
-/// `8 logical, 8 physical` — the CPU counts §7.5 asks for.
+/// `8 logical, 8 physical` — the CPU counts §7.5 asks for, plus the cgroup ceiling.
+///
+/// The quota goes on this row rather than one of its own because it qualifies these two
+/// numbers: inside a container the host's eight CPUs are still eight CPUs and still the
+/// wrong figure to reason about, and a reader who sees them without the ceiling beside
+/// them has been told a true thing that will mislead them. Keeping it here also costs no
+/// row — as three separate rows, this information pushed `OWN OVERHEAD` off a 140x38
+/// screen, and losing monitrs's own cost in order to describe the container is a poor
+/// trade.
 fn cpu_text(snapshot: &SystemSnapshot) -> String {
     let physical = states::describe_display(&snapshot.cpu.physical_count);
-    format!(
+    let counts = format!(
         "{} logical, {} physical",
         snapshot.cpu.logical_count,
         physical.flagged().trim_start()
-    )
+    );
+    match cgroup_cpu_text(snapshot) {
+        Some(quota) => format!("{counts}, {quota}"),
+        None => counts,
+    }
+}
+
+/// `cgroup 1.5 CPUs` — the ceiling a quota imposes, if it does.
+///
+/// `None` where there is no cgroup to report: `unsupported` would repeat what the
+/// `cgroup limit` row below already says, and on the first frame `warming up` would
+/// appear and then vanish, which reads as a glitch rather than as information. A
+/// *denied* read keeps its text — a quota that exists and could not be read is exactly
+/// what this screen is for (§4).
+///
+/// The raw `quota/period` pair is deliberately *not* here, though
+/// [`CpuQuota`](monitrs_core::model::CpuQuota) carries it. It was, and the value column
+/// truncated it — `8 logical, 8 physical, cgroup 1.5 CPUs (150000/1000...` — which loses
+/// the period, the only thing the pair adds over the ratio, while making the row look
+/// broken. The ceiling is the figure a user acts on; the pair is for whoever is reading
+/// `cpu.max` itself, and they have the file.
+fn cgroup_cpu_text(snapshot: &SystemSnapshot) -> Option<String> {
+    if matches!(
+        snapshot.cpu.cgroup_quota,
+        MetricState::Unsupported | MetricState::WarmingUp
+    ) {
+        return None;
+    }
+    let display = states::describe(&snapshot.cpu.cgroup_quota, |quota| {
+        format!("{:.1} CPUs", quota.cores())
+    });
+    Some(format!("cgroup {}", display.flagged().trim_start()))
 }
 
 /// The configured swap size, or `off` when swap is disabled.
@@ -279,11 +327,48 @@ fn swap_total_text(snapshot: &SystemSnapshot, units: ByteUnits) -> String {
     }
 }
 
+/// `2.0G, 512M used (25%)` — the cgroup memory limit and the charge against it.
+///
+/// Both halves come from the group or neither does. Pairing the host's `used` with a
+/// container's limit is the specific arithmetic §9.2 exists to prevent: it reports 40 GiB
+/// of 2 GiB, and the resulting 2000% looks like a bug in the monitor rather than a
+/// category error in the comparison.
+fn cgroup_memory_text(snapshot: &SystemSnapshot, units: ByteUnits) -> Option<String> {
+    let memory = &snapshot.memory;
+    // `None` hands the row back to the styled path: with no charge to show there is
+    // nothing to compose, and the limit's own state says everything there is to say.
+    let &used = memory.cgroup_used_bytes.fresh()?;
+    let charge = format_bytes_compact(used, units);
+    let Some(&ceiling) = memory.cgroup_limit_bytes.fresh() else {
+        // A charge with no limit above it: a cgroup that accounts but does not
+        // restrict, which is the default for most units on a systemd host. The figure
+        // is real and worth showing; there is simply nothing to be a percentage of.
+        return Some(format!(
+            "{}, {charge} used",
+            states::describe_bytes(&memory.cgroup_limit_bytes, units)
+                .flagged()
+                .trim_start()
+        ));
+    };
+    let limit = format_bytes_compact(ceiling, units);
+    Some(match Percent::ratio(used, ceiling) {
+        Some(share) => format!("{limit}, {charge} used ({share})"),
+        None => format!("{limit}, {charge} used"),
+    })
+}
+
 /// The heuristic environment classification with its evidence and confidence.
 fn environment_text(environment: &HostEnvironment) -> String {
+    // The identity, where the evidence named one, goes immediately after the
+    // classification rather than on a row of its own — and ahead of the evidence, which
+    // is the part a narrow panel truncates. "Which container" survives; "how we guessed"
+    // is what gets cut, and that is the right order to lose them in.
+    let kind = match &environment.container {
+        Some(container) => format!("{} {}", environment.kind.label(), container.label()),
+        None => environment.kind.label().to_owned(),
+    };
     format!(
-        "{} (heuristic, {} confidence: {})",
-        environment.kind.label(),
+        "{kind} (heuristic, {} confidence: {})",
         environment.confidence.label(),
         environment.evidence
     )
@@ -1197,7 +1282,7 @@ mod tests {
         Confidence, EnvironmentKind, MeasuredValue, Measurement, PressureId, PressureSignal,
         SelfOverhead, TierHealth,
     };
-    use monitrs_core::units::{Percent, display_width};
+    use monitrs_core::units::display_width;
 
     use super::*;
     use crate::app::{AppSettings, AppState};
@@ -1318,6 +1403,7 @@ mod tests {
             kind: EnvironmentKind::Container,
             evidence: "/proc/1/cgroup names docker".into(),
             confidence: Confidence::Medium,
+            container: None,
         });
         assert!(text.contains("heuristic"), "{text}");
         assert!(text.contains("medium confidence"), "{text}");

@@ -416,6 +416,7 @@ impl ObservedCpu {
             total: baseline_total,
             per_core: baseline_per_core,
             frequency_mhz,
+            cgroup_quota,
             core_classes,
         } = baseline;
 
@@ -449,6 +450,9 @@ impl ObservedCpu {
             },
             per_core,
             frequency_mhz,
+            // Carried through: macOS has no cgroups, so the baseline's `Unsupported` is
+            // the whole truth and this layer has nothing to add.
+            cgroup_quota,
             core_classes,
         }
     }
