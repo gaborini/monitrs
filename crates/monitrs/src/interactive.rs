@@ -431,9 +431,45 @@ fn draw(frame: &mut Frame<'_>, state: &AppState) {
     let presentation = presentation_for(state);
     views::render(frame, area, state, presentation);
 
-    if let Some(overlay) = state.top_overlay() {
-        draw_overlay(frame, area, state, presentation, overlay);
+    match state.top_overlay() {
+        Some(overlay) => draw_overlay(frame, area, state, presentation, overlay),
+        // §2.2's spike attribution has no entry in the overlay stack: it is not
+        // something the user opens, it is what selecting a historical sample *means*.
+        // §5.6 shows it as the body of the Time Lens screen, so it is drawn whenever a
+        // sample is selected and no other overlay is in the way.
+        None => draw_attribution(frame, area, state, presentation),
     }
+}
+
+/// Draws the spike attribution panel for the selected historical sample (§2.2, §5.6).
+///
+/// Nothing is drawn while the timeline is live: there is no sample to attribute, and a
+/// panel that appeared with empty contents would suggest the feature was broken rather
+/// than idle.
+fn draw_attribution(
+    frame: &mut Frame<'_>,
+    area: Rect,
+    state: &AppState,
+    presentation: Presentation<'_>,
+) {
+    use monitrs_tui::views::overlays::SpikeAttributionOverlay;
+
+    let timeline = state.timeline();
+    if timeline.is_live() {
+        return;
+    }
+    let ring = state.history();
+    let view = timeline.view();
+    let Some(sample) = view.selected(ring) else {
+        return;
+    };
+
+    frame.render_widget(
+        SpikeAttributionOverlay::for_sample(presentation, sample)
+            .with_label("SPIKE ATTRIBUTION")
+            .with_offset(view.format_offset(ring)),
+        area,
+    );
 }
 
 /// Builds the presentation from state, so rendering stays a pure function of it.
