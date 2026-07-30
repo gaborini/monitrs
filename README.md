@@ -191,6 +191,21 @@ provides right now.
 
 ## Install
 
+### From Homebrew
+
+```sh
+brew tap gaborini/monitrs
+brew trust --formula gaborini/monitrs/monitrs
+brew install monitrs
+```
+
+All three lines are needed: Homebrew 6 ignores a third-party tap until it is trusted, and
+`brew install` without the middle line fails. The formula is a binary one, so this needs no
+Rust toolchain — it installs the same archive as the section below, plus the manpage and the
+bash, zsh and fish completions. It lives in
+[gaborini/homebrew-monitrs](https://github.com/gaborini/homebrew-monitrs) rather than
+homebrew-core, whose notability bar for a self-submission is 225 stars.
+
 ### From crates.io
 
 ```sh

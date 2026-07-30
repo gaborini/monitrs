@@ -521,8 +521,20 @@ cargo install monitrs --locked --version X.Y.Z --root /tmp/monitrs-verify
         `monitrs-X.Y.Z-<target>.tar.gz.sha256` sends them to a file the release does not
         carry. That was true of `0.1.0`'s README for its whole life.
       * `cargo install monitrs --locked`, which step 10 has just verified.
-* [ ] A Homebrew tap is a later step, deliberately: §19.3 says after the release
-      process has stabilised. One release is not stability.
+* [ ] **The Homebrew tap carries this version.**
+      [`gaborini/homebrew-monitrs`](https://github.com/gaborini/homebrew-monitrs) is a
+      separate repository, so nothing here updates it automatically. Each release needs
+      the version and four `sha256` values in `Formula/monitrs.rb` changed, from this
+      release's own `SHA256SUMS`, and then:
+
+      ```sh
+      brew update && brew upgrade monitrs && brew test monitrs
+      ```
+
+      Automating it would mean a cross-repository write token in *this* repository's
+      secrets, which §18.4 forbids, so the trade has not been made. Until it is, a
+      release that skips this step leaves `brew install monitrs` on the previous version
+      with no sign that it is behind.
 * [ ] Deb, RPM, Nix and other packaging are later milestones and must not block a
       release.
 
