@@ -22,7 +22,7 @@
 //!
 //! Medium (§8.6), beside the byte capacity, because `statfs` on a stalled network
 //! mount can block for seconds; the baseline's own capacity read already pays that
-//! cost on the same tier. The mount list is capped by [`MAX_MOUNTS`] so a machine
+//! cost on the same tier. The mount list is capped at `MAX_MOUNTS` so a machine
 //! with a pathological mount table cannot turn one tick into thousands of syscalls
 //! (§16.1).
 
@@ -41,7 +41,7 @@ const MAX_MOUNTS: usize = 512;
 
 /// Reads the inode occupancy of each mount point in `mount_points`.
 ///
-/// One `statfs` per mount, in the order given, stopping at [`MAX_MOUNTS`]. A mount
+/// One `statfs` per mount, in the order given, stopping at `MAX_MOUNTS`. A mount
 /// that cannot be read contributes the *reason* rather than being dropped: a mount
 /// the kernel refuses is something the Storage screen should say out loud, and a
 /// dropped reading would leave the baseline's `Unsupported` in its place — which

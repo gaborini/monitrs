@@ -380,42 +380,62 @@ fn following_a_real_process_tree_scopes_the_real_table() {
     live.warm(2);
     live.press(KeyPress::char('2'));
 
-    let root = busiest_parent(&live.state).expect("this machine has a process with children");
+    // Skipped rather than failed on a machine with no family to follow. A runner whose
+    // process tree is flat says nothing about this feature, and a test that panics there
+    // would be reporting the shape of the runner as a defect in monitrs.
+    let Some(root) = busiest_parent(&live.state) else {
+        println!("no process on this machine has a non-kernel child; nothing to follow");
+        return;
+    };
     let expected = subtree_pids(&live.state, root);
+    if expected.len() <= 1 {
+        println!(
+            "{}'s family shrank to itself between samples; skipping",
+            root.pid
+        );
+        return;
+    }
+
+    // The precondition, stated against the machine rather than against the frame: the
+    // family has to be a *part* of this host for scoping to it to be observable. Comparing
+    // it to the number of rendered rows instead is how the first version of this test
+    // became flaky — the panel is 40 rows tall, so on a run where the busiest family had
+    // 40 members the "unscoped table is larger" check failed while the feature worked.
+    let population = live.state.snapshot().expect("a snapshot").processes.len();
     assert!(
-        expected.len() > 1,
-        "the chosen root has descendants: {expected:?}"
+        expected.len() < population,
+        "{} members out of {population} processes leaves nothing to scope away",
+        expected.len()
     );
 
     let (before, _) = live.render(WIDE);
-    let visible_before = table_pids(&before);
-    assert!(
-        visible_before.len() > expected.len(),
-        "the unscoped table shows more than the family: {} rows vs {} members",
-        visible_before.len(),
-        expected.len()
-    );
+    let shown_before = shown_count(&before).expect("the panel states its row count");
 
     // The palette rather than `F`, because selecting a specific row out of a thousand
     // would be a test of the arrow keys. `follow <pid>` goes through the same reducer.
     live.command(&format!("follow {}", root.pid));
     let (after, _) = live.render(WIDE);
 
+    // Asserted against the panel's *own* line, not against the frame. Two of these read
+    // the whole frame at first and passed for the wrong reason: `cpu ` and `rss ` also
+    // appear in the header's `8 cpu  8 core`, and `following` appeared in this very test
+    // binary's command line as rendered in the process table — `-- --ignored following`.
+    // A frame-wide substring search is not an assertion about a panel.
+    let title = panel_title(&after).expect("the process panel is on screen");
     assert!(
-        after.contains(&format!("following {}", root.pid)),
-        "the title must say why the table is short:\n{}",
-        first_lines(&after, 6)
+        title.contains(&format!("following {}", root.pid)),
+        "the title must say why the table is short:\n{title}"
     );
     assert!(
-        after.contains("cpu ") && after.contains("rss "),
-        "the label must carry the family's summed cost, which is on no row:\n{}",
-        first_lines(&after, 6)
+        title.contains("cpu ") && title.contains("rss "),
+        "the label must carry the family's summed cost, which is on no row:\n{title}"
     );
 
     let visible_after = table_pids(&after);
     assert!(
         !visible_after.is_empty(),
-        "a followed subtree must not empty the table:\n{}",
+        "a followed subtree must not empty the table — if every member is filtered out, \
+         the root was the wrong choice rather than the scope being wrong:\n{}",
         first_lines(&after, 12)
     );
     for pid in &visible_after {
@@ -425,32 +445,34 @@ fn following_a_real_process_tree_scopes_the_real_table() {
             root.pid
         );
     }
+    // Asked of the scoped row list rather than of the drawn rows: following a process must
+    // not drop the process itself, which is a claim about the scope and not about what fits.
+    // The panel is 40 rows tall and this family has 40 members, so on a run where the root
+    // sorts last by CPU it is legitimately below the fold — which is how the frame-based
+    // version of this assertion failed one run in six while the feature was correct.
     assert!(
-        visible_after.contains(&root.pid),
-        "the root itself must stay visible"
+        live.state.rows().row_of(root).is_some(),
+        "the followed root must be in the scoped table"
     );
-    // A subtree of a live machine loses and gains members between samples, so the table
-    // is asserted to be a *subset* of the membership rather than equal to it — and to be
-    // strictly smaller than the unscoped table, which is the whole observable effect.
+    // A subtree of a live machine loses and gains members between samples, so the rows are
+    // asserted to be a *subset* of the membership rather than equal to it. The count comes
+    // from the panel's own label rather than from the rendered rows, because the rows stop
+    // at the bottom of the panel and the label does not.
+    let shown_after = shown_count(&after).expect("the panel states its row count");
     assert!(
-        visible_after.len() < visible_before.len(),
-        "the scope must actually remove rows"
+        shown_after < shown_before,
+        "the scope must actually remove rows: {shown_before} -> {shown_after}"
     );
 
     // Printed, because a live-system test whose only output is `ok` cannot show that it
     // looked at something real — and because the label is the deliverable here.
-    for line in after
-        .lines()
-        .filter(|line| line.contains("PROCESSES  sort"))
-    {
-        println!("{}", line.trim_matches('|'));
-    }
+    println!("{}", panel_title(&after).unwrap_or("no panel").trim());
     println!(
-        "followed {} with {} members; {} of {} rows on screen",
+        "followed {} with {} members; the panel went from {shown_before} rows to \
+         {shown_after}, of which {} were drawn",
         root.pid,
         expected.len(),
-        visible_after.len(),
-        visible_before.len()
+        visible_after.len()
     );
 
     // The sums cover the whole family, not the rows on screen, so narrowing the view has
@@ -458,49 +480,84 @@ fn following_a_real_process_tree_scopes_the_real_table() {
     // handful of rows a filter left behind.
     live.command("filter zzzzzz-no-such-process");
     let (narrowed, _) = live.render(WIDE);
+    let narrowed_title = panel_title(&narrowed).expect("the process panel is on screen");
     assert!(
-        narrowed.contains(&format!("subtree of {}", expected.len())),
-        "a filtered view must state what the sums are over:\n{}",
-        first_lines(&narrowed, 6)
+        narrowed_title.contains(&format!("subtree of {}", expected.len())),
+        "a filtered view must state what the sums are over:\n{narrowed_title}"
     );
-    for line in narrowed
-        .lines()
-        .filter(|line| line.contains("PROCESSES  sort"))
-    {
-        println!("{}", line.trim_matches('|'));
-    }
+    println!("{}", panel_title(&narrowed).unwrap_or("no panel").trim());
     live.command("filter");
 
     live.command("unfollow");
     let (lifted, _) = live.render(WIDE);
+    let lifted_title = panel_title(&lifted).expect("the process panel is on screen");
     assert!(
-        !lifted.contains("following "),
-        "the scope must be gone from the title:\n{}",
-        first_lines(&lifted, 6)
+        !lifted_title.contains("following"),
+        "the scope must be gone from the title:\n{lifted_title}"
     );
     assert!(
-        table_pids(&lifted).len() > visible_after.len(),
+        shown_count(&lifted).expect("the panel states its row count") > shown_after,
         "and the rest of the machine must come back"
     );
 }
 
-/// The process with the most children in the current snapshot, if any.
+/// The process panel's own line: its title, its state, and its trailing label.
+///
+/// Everything this test claims about the panel is claimed about this one line. Searching
+/// the whole frame instead is how three of its assertions first went wrong — the header
+/// says `8 cpu  8 core`, and the process table renders this test binary's own command
+/// line, so `cpu `, `rss ` and `following` all appear on a frame that proves none of them.
+fn panel_title(frame: &str) -> Option<&str> {
+    frame
+        .lines()
+        .find(|line| line.contains("PROCESSES  sort"))
+        .map(|line| line.trim_matches('|'))
+}
+
+/// The number of rows the process panel says it is showing, from its trailing label.
+///
+/// `12 of 218 total` gives 12, `218 total` gives 218. Read from the label rather than
+/// counted off the screen because the rows stop where the panel ends: a family with more
+/// members than the panel is tall would otherwise look like no reduction at all.
+fn shown_count(frame: &str) -> Option<usize> {
+    let title = panel_title(frame)?;
+    // Everything before ` total`, so a trailing `, cpu 5.9%, rss 9.9G` cannot be read as
+    // a count.
+    let label = title.rsplit_once(" total")?.0;
+    // `12 of 218` means twelve are shown; a bare `218` means all of them are.
+    let shown = match label.rsplit_once(" of ") {
+        Some((head, _)) => head,
+        None => label,
+    };
+    shown.split_whitespace().last()?.parse().ok()
+}
+
+/// The process with the most children the table would actually draw, if any.
 ///
 /// Chosen by child count rather than by PID so the test picks a real family — on macOS
 /// PID 1 parents nearly everything, which would make the "scope removes rows" assertion
 /// pass for the wrong reason.
+///
+/// **Kernel threads are excluded, as candidates and as children**, and that is not a
+/// detail. On a Linux runner the process with by far the most children is `kthreadd`, and
+/// this harness hides kernel threads the way the shipped default does — so following
+/// `kthreadd` would scope the table to two hundred rows that are all filtered out, and the
+/// test would fail on an empty table while the feature worked perfectly. The root has to be
+/// a family the table can show.
 fn busiest_parent(state: &AppState) -> Option<ProcessIdentity> {
     let snapshot = state.snapshot()?;
     let mut best: Option<(usize, ProcessIdentity)> = None;
     for process in &snapshot.processes {
         // Skip PID 1 and anything parented by nothing: a subtree of init is the machine.
-        if process.identity.pid <= 1 {
+        if process.identity.pid <= 1 || process.is_kernel_thread {
             continue;
         }
         let children = snapshot
             .processes
             .iter()
-            .filter(|other| other.parent_pid == Some(process.identity.pid))
+            .filter(|other| {
+                other.parent_pid == Some(process.identity.pid) && !other.is_kernel_thread
+            })
             .count();
         if children == 0 {
             continue;
