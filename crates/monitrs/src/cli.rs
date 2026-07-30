@@ -313,19 +313,6 @@ fn format_duration_error(error: DurationParseError) -> String {
     error.to_string()
 }
 
-// The resolvers below are fully tested but not yet called: they are consumed by
-// the configuration merge, which lands with the interactive runtime. `expect`
-// rather than `allow` so that the attribute becomes a warning — and gets
-// removed — the moment they are wired up.
-// Scoped to non-test builds because the tests below do exercise them, which
-// would make the expectation unfulfilled and therefore itself a warning.
-#[cfg_attr(
-    not(test),
-    expect(
-        dead_code,
-        reason = "consumed by the configuration merge in the runtime slice"
-    )
-)]
 impl Cli {
     /// Resolves `--ascii` into the equivalent `--glyphs` value.
     ///

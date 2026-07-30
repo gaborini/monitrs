@@ -53,6 +53,25 @@ work yet, regardless of what the source contains.
 * CLI, JSON snapshot export with argument redaction, versioned TOML configuration
   with `config path`/`init`/`check`, the bounded event channel and worker threads,
   and benchmarks with measured results in `docs/benchmarks.md`.
+* **The interactive interface launches.** `monitrs` with no subcommand opens the
+  five screens, the overlays, and the Pressure Radar over a live collector, and
+  restores the terminal on quit, on error, and on panic. Verified by hand in a real
+  terminal: switching views, the help overlay, pausing and seeking the timeline,
+  returning to live, and quitting.
+* The five screens (Overview, Processes, Storage, Network, Inspect) and the
+  overlays (help, signal confirmation, spike attribution, process detail, filter
+  edit, sort selector, command palette, notices), with 33 further snapshot tests.
+* A soak-test harness that drives the real worker threads, and `docs/` gains
+  troubleshooting, soak-testing, and release-checklist guides.
+
+### Known limitations
+
+* No twelve-hour soak run is on record, so §16.1's no-unbounded-growth claim is
+  unproven. The harness exists and scales.
+* The end-to-end performance budgets are unmeasured; only component benchmarks are.
+* `renice` is not implemented on either platform. The key reports that rather than
+  appearing to work.
+* Timestamps are UTC and say so: no time-zone database is bundled.
 
 
 ### Changed

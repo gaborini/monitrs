@@ -17,7 +17,11 @@ use monitrs_collectors::{CommonCollector, DueTiers, SampleTick, SnapshotSource a
 mod cli;
 mod config;
 mod export;
+mod interactive;
+mod logging;
+mod overhead;
 mod runtime;
+mod signals;
 
 use cli::{Cli, Command, ConfigCommand, SnapshotFormat};
 use export::{RedactionPolicy, SnapshotExport};
@@ -89,11 +93,7 @@ fn run(cli: &Cli) -> color_eyre::Result<ExitCode> {
             *samples,
         ),
 
-        None => Err(color_eyre::eyre::eyre!(
-            "the interactive interface is not available in this build. \
-             `monitrs --help`, `monitrs completions <SHELL>`, and `monitrs manpage` work today; \
-             CHANGELOG.md lists the rest."
-        )),
+        None => interactive::run(cli),
     }
 }
 

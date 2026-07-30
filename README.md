@@ -13,9 +13,9 @@ with it.
 
 ## Demo
 
-_Pending._ A real recorded demo and real screenshots land with `0.1.0`. This
-project does not ship mocked-up screenshots: everything shown here will be
-captured from the running binary.
+_Pending._ The interface runs, but no screenshot has been captured from it yet, and
+§20.1 of the design forbids shipping a mocked-up one — so this section stays empty
+rather than showing something that was drawn by hand.
 
 The layout it is built towards, in strict ASCII mode:
 
@@ -104,12 +104,15 @@ _Pending for `0.1.0`._ Release archives and SHA-256 checksums are produced by th
 release workflow; install instructions will be added once they have been verified
 on the target systems rather than merely written down.
 
-Building from a checkout works today:
+Building from a checkout works today, and the interface launches:
 
 ```sh
 cargo build --release
 ./target/release/monitrs
 ```
+
+`q` quits. See [`docs/troubleshooting.md`](docs/troubleshooting.md) if a number
+surprises you.
 
 ## Keys
 
