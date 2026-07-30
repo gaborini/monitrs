@@ -87,6 +87,37 @@ impl DueTiers {
         slow: true,
     };
 
+    /// Only the fast tier, which is what four ticks in five actually are.
+    ///
+    /// Exists for measurement. §16.1 budgets "sample collection below 200 ms p95",
+    /// and the tick that budget is about is this one — at the default intervals the
+    /// medium tier joins every fifth tick and the slow tier every thirtieth. With
+    /// only [`Self::NONE`] and [`Self::ALL`] constructible from outside the crate, a
+    /// benchmark or an out-of-crate measurement had to use `ALL` and so measured the
+    /// most expensive tick there is, which understates the collector by a wide margin
+    /// and makes the budget look tighter than it is.
+    ///
+    /// [`TierScheduler::due_at`] remains the only thing that decides what is *really*
+    /// due; this constructs a set, it does not schedule one.
+    #[must_use]
+    pub const fn fast_only() -> Self {
+        Self {
+            fast: true,
+            medium: false,
+            slow: false,
+        }
+    }
+
+    /// The fast and medium tiers, which is every fifth tick at the defaults.
+    #[must_use]
+    pub const fn fast_and_medium() -> Self {
+        Self {
+            fast: true,
+            medium: true,
+            slow: false,
+        }
+    }
+
     /// Whether a specific tier is due. The on-demand tier is never "due".
     #[must_use]
     pub const fn contains(&self, tier: Tier) -> bool {
@@ -213,6 +244,40 @@ impl TierScheduler {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The two constructors agree with what the scheduler actually produces.
+    ///
+    /// They exist for measurement, and a measurement of the wrong tick shape would be
+    /// worse than no measurement — so they are pinned against the scheduler rather
+    /// than against their own definitions.
+    #[test]
+    fn the_named_tier_sets_match_what_the_scheduler_produces() {
+        let intervals = TierIntervals::derived_from(Duration::from_millis(250));
+        let mut scheduler = TierScheduler::new(intervals);
+        let start = Instant::now();
+
+        // The first tick is every tier, which `ALL` already names.
+        assert_eq!(scheduler.due_at(start), DueTiers::ALL);
+        scheduler.mark_completed(DueTiers::ALL, start);
+
+        // One fast interval later, only the fast tier is due.
+        let fast_at = start + intervals.for_tier(Tier::Fast).expect("a fast interval");
+        assert_eq!(
+            scheduler.due_at(fast_at),
+            DueTiers::fast_only(),
+            "the ordinary tick, and the one §16.1's collection budget is about"
+        );
+
+        // And at the medium interval, fast and medium together.
+        let medium_at = start + intervals.for_tier(Tier::Medium).expect("a medium interval");
+        let due = scheduler.due_at(medium_at);
+        assert!(due.contains(Tier::Fast) && due.contains(Tier::Medium));
+        assert_eq!(
+            due.contains(Tier::Slow),
+            DueTiers::fast_and_medium().contains(Tier::Slow),
+            "the slow tier is not due at the medium interval"
+        );
+    }
 
     fn scheduler() -> TierScheduler {
         TierScheduler::new(TierIntervals::default())

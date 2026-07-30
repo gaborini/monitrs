@@ -270,7 +270,7 @@ the process count the budgets assume, and per-process OS reads are where the cos
 | Resident memory | < 50 MiB in the default configuration | median 29 MiB, peak 31 MiB |
 | Input to visible response | < 50 ms when no collector result is needed | median 417 µs, p95 486 µs |
 | Frame render at 160×48 | < 16 ms | median 200 µs, p95 353 µs |
-| Sample collection at 200 processes | < 200 ms p95 | p95 172 ms, at 1000 processes |
+| Sample collection at 200 processes | < 200 ms p95 | p95 59–71 ms for a fast-only tick at 1000 processes; 136–149 ms when the medium tier joins |
 | 12-hour run | no unbounded memory or file-descriptor growth | 30 minutes: no growth. The 12-hour run is still owed |
 | Redraw | no busy loop | not measured as such |
 

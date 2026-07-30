@@ -154,7 +154,7 @@ collector would be measuring the thing with itself.
 |---|---|---|
 | ordinary frame render below 16 ms at 160×48 | median 200 µs, p95 353 µs, max 410 µs | pass, by a factor of 45 |
 | input-to-visible-response below 50 ms | median 417 µs, p95 486 µs | pass, by a factor of 100 |
-| sample collection below 200 ms p95 | median 156 ms, p95 172 ms | pass, with little room |
+| sample collection below 200 ms p95 | fast-only tick (4 in 5): median 36–50 ms, p95 59–71 ms. Fast+medium (every 5th): median 113–130 ms, p95 136–149 ms | pass, and with more room than an earlier measurement suggested |
 | resident memory below 50 MiB | median 29 MiB, max 31 MiB | pass |
 | no unbounded file-descriptor growth | flat at 3 over a 30-minute soak with the real collector | pass over half an hour; the 12-hour run is still owed |
 | idle self CPU median below 1%, p95 below 2% | **median 4.3%, p95 17.8%** | **fails** |
@@ -162,10 +162,18 @@ collector would be measuring the thing with itself.
 | no redraw busy loop | not measured as such | — |
 
 The workload matters and is not the reference one: §16.1 specifies 8 logical CPUs
-and 200 processes, and this machine has 12 CPUs and about a thousand processes. The
-collection figure is therefore against a workload five times larger than the budget
-assumes, which is why it is quoted as passing "with little room" rather than
-comfortably.
+and 200 processes, and this machine has 12 CPUs and about a thousand processes — so
+the collection figures are against a workload five times larger than the budget
+assumes and should be read as a hard case.
+
+The collection row is quoted per *tick shape*, which an earlier measurement got wrong
+in a way worth recording. `DueTiers` could only be constructed as `NONE` or `ALL` from
+outside its crate, so the measurement used `ALL` for every sample and reported a p95 of
+172 ms — the cost of the most expensive tick there is, as though it were the ordinary
+one. At the default intervals four ticks in five are fast-only and cost 36–50 ms;
+`DueTiers::fast_only()` and `fast_and_medium()` now exist so that the tick a budget is
+about can actually be measured, and they are pinned against what `TierScheduler`
+really produces rather than against their own definitions.
 
 ### Where the idle CPU goes
 
@@ -184,9 +192,10 @@ components and 21 interfaces:
 | `Networks::refresh` | 0.85 ms | fast |
 | global CPU + memory | 0.09 ms | fast |
 
-A fast tick is therefore about 64 ms, which at the default one-second interval is
-6% of one core — the measured median. The 5-second medium tick adds temperatures and
-a second disk walk, which is the p95.
+A fast tick is therefore about 64 ms of OS reads, and the assembled collector measures
+36–50 ms for one — at the default one-second interval, 4–5% of one core, which is the
+measured idle median. The 5-second medium tick adds temperatures and a second disk
+walk, reaching 113–130 ms, which is the p95.
 
 Three things follow, and none of them is a micro-optimisation:
 

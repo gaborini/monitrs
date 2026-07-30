@@ -281,7 +281,7 @@ workload, so read them as a hard case rather than a flattering one:
 |---|---|
 | frame render below 16 ms at 160×48 | median 200 µs, p95 353 µs |
 | input-to-visible-response below 50 ms | median 417 µs, p95 486 µs |
-| sample collection below 200 ms p95 | median 156 ms, p95 172 ms |
+| sample collection below 200 ms p95 | p95 59–71 ms for the ordinary tick; 136–149 ms for the every-fifth one |
 | resident memory below 50 MiB | median 29 MiB, peak 31 MiB |
 | no unbounded growth | 30-minute soak: resident size fell, descriptors flat, nothing dropped |
 | **idle self CPU below 1% median, 2% p95** | **median 4.3%, p95 17.8% — fails** |

@@ -1,24 +1,24 @@
-+ monitrs  host:dev-mbp  [>LIVE]  250ms --------- 07:35:09Z --+
- CPU 19%  MEM 62%  load  6.08 5.42 5.43  30G/48G  swap off  dsk r0B/s w0B/s
-+ PROCESSES  sort CPU% desc  no kthreads ------------------------ 996 total ---+
++ monitrs  host:dev-mbp  [>LIVE]  250ms --------- 11:04:29Z --+
+ CPU 49%  MEM 67%  load  7.03 8.59 7.43  32G/48G  swap off  dsk r1.9M/s w52M/s
++ PROCESSES  sort CPU% desc  no kthreads ----------------------- 1020 total ---+
 |      PID USER     S   CPU%  MEM%   RSS  READ/s WRITE/s NAME                  |
-|>   45241 me       R    35%  1.8%  875M    0B/s    0B/s Cursor Helper (Rend...|
-|    45234 me       R    30%  0.3%  128M    0B/s    0B/s Cursor Helper         |
-|    62728 me       R    16%  1.6%  803M    0B/s    0B/s claude                |
-|    69211 me       R    16%  0.0%   24M    0B/s    0B/s capture-35a93566c2c...|
-|     1398 me       R    10%  0.4%  173M    0B/s    0B/s Terminal              |
-|    63011 me       R   8.3%  1.4%  675M    0B/s    0B/s Google Chrome Helpe...|
-|    84339 me       R   6.7%  0.5%  247M    0B/s    0B/s Google Chrome Helper  |
-|    84322 me       R   6.3%  1.7%  835M    0B/s    0B/s Google Chrome         |
-|    12800 me       R   3.0%  0.1%   25M    0B/s    0B/s python                |
-|     4571 me       R   2.9%  0.1%   25M    0B/s    0B/s python                |
-|    64501 me       R   1.7%  0.1%   25M    0B/s    0B/s mdworker_shared       |
-|    66589 me       R   1.7%  0.1%   27M    0B/s    0B/s mdworker_shared       |
-|    31474 me       R   1.0%  1.8%  896M    0B/s    0B/s com.apple.Virtualiz...|
-|    55338 me       R   0.9%  0.6%  303M    0B/s    0B/s Cursor Helper (Plugin)|
-|    55330 me       R   0.9%  0.5%  245M    0B/s    0B/s Cursor Helper (Plugin)|
-|    55337 me       R   0.8%  0.6%  310M    0B/s    0B/s Cursor Helper (Plugin)|
-|    55336 me       R   0.8%  0.5%  232M    0B/s    0B/s Cursor Helper (Plugin)|
-|     4640 me       R   0.7%  3.0%  1.4G    0B/s    0B/s com.apple.Virtualiz...|
+|>   55629 me       R   263%  1.0%  473M    0B/s  8.3M/s rustc                 |
+|    45241 me       R    14%  1.5%  738M    0B/s    0B/s Cursor Helper (Rend...|
+|    45234 me       R    12%  0.2%  103M    0B/s    0B/s Cursor Helper         |
+|     1398 me       R    10%  0.3%  129M    0B/s    0B/s Terminal              |
+|    55806 me       R   8.9%  0.1%   26M    0B/s    0B/s capture-35a93566c2c...|
+|    37194 me       R   7.6%  0.5%  245M    0B/s    0B/s Google Chrome Helpe...|
+|    30365 me       R   7.4%  0.1%   32M    0B/s    0B/s probe_input_latency...|
+|    12764 me       R   5.8%  0.9%  453M    0B/s    0B/s Google Chrome Helpe...|
+|    62728 me       R   5.8%  1.6%  788M    0B/s    0B/s claude                |
+|    11623 me       R   3.8%  0.8%  370M    0B/s    0B/s Google Chrome Helpe...|
+|    84339 me       R   2.0%  0.7%  328M    0B/s    0B/s Google Chrome Helper  |
+|     4571 me       R   1.7%  0.1%   25M    0B/s    0B/s python                |
+|    12800 me       R   1.6%  0.0%   24M    0B/s    0B/s python                |
+|    55337 me       R   1.5%  0.4%  199M    0B/s    0B/s Cursor Helper (Plugin)|
+|    10421 me       R   1.4%  0.8%  415M   38K/s    0B/s claude                |
+|     1531 me       R   1.3%  2.1%  1.0G    0B/s    0B/s Slack Helper (Rende...|
+|     1453 me       R   1.1%  0.2%   98M    0B/s    0B/s Slack Helper          |
+|    56721 me       R   0.6%  1.0%  500M    0B/s    0B/s 2.1.220               |
 +------------------------------------------------------------------------------+
  1 Overview [2 Processes] 3 Storage  4 Network  5 Inspect   f.../ filter  ? help

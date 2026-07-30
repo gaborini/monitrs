@@ -388,39 +388,46 @@ fn measure_the_input_to_visible_response_budget() {
 
 #[test]
 #[ignore = "measurement run: reads the live system"]
-fn measure_the_sample_collection_budget() {
-    // §16.1: sample collection below 200 ms p95. Measured against the live
-    // collector, because the OS reads are the cost — the fake collector's number
-    // would be meaningless here.
+fn measure_the_sample_collection_budget_per_tick_shape() {
+    // §16.1 budgets "sample collection below 200 ms p95". Which tick that is about
+    // matters more than the number: at the default intervals four ticks in five are
+    // fast-only, the fifth adds the medium tier, and one in thirty adds the slow tier.
+    // Measuring only `DueTiers::ALL` — which is all an out-of-crate test could
+    // construct before `fast_only` existed — reports the most expensive tick there is
+    // and makes the collector look four times worse than it usually is.
     let mut collector = platform_collector().expect("constructs");
     let started = Instant::now();
     let mut tick = SampleTick::first(started, SystemTime::now());
-    let mut samples = Vec::new();
-    let mut processes = 0usize;
-
-    for index in 0..30 {
-        if index > 0 {
-            std::thread::sleep(Duration::from_millis(250));
-            tick = tick.advance(Instant::now(), SystemTime::now(), DueTiers::ALL);
-        }
-        let at = Instant::now();
-        let snapshot = collector.sample(&tick).expect("a live sample");
-        samples.push(at.elapsed());
-        processes = snapshot.process_count();
+    // Two full samples first, so nothing below pays a first-read cost.
+    for _ in 0..2 {
+        let _ = collector.sample(&tick).expect("a live sample");
+        std::thread::sleep(Duration::from_millis(250));
+        tick = tick.advance(Instant::now(), SystemTime::now(), DueTiers::ALL);
     }
-    samples.sort_unstable();
-    let median = samples[samples.len() / 2];
-    let p95 = samples[samples.len() * 95 / 100];
 
-    println!(
-        "live sample collection over {} samples, {} processes: median {:?}, p95 {:?}",
-        samples.len(),
-        processes,
-        median,
-        p95
-    );
-    assert!(
-        p95 < Duration::from_millis(200),
-        "§16.1 budgets collection below 200ms p95; p95 was {p95:?}"
-    );
+    let mut processes = 0usize;
+    for (label, due) in [
+        ("fast only (4 ticks in 5)", DueTiers::fast_only()),
+        ("fast + medium (every 5th)", DueTiers::fast_and_medium()),
+        ("every tier (every 30th, and the first)", DueTiers::ALL),
+    ] {
+        let mut samples = Vec::new();
+        for _ in 0..15 {
+            std::thread::sleep(Duration::from_millis(250));
+            tick = tick.advance(Instant::now(), SystemTime::now(), due);
+            let at = Instant::now();
+            let snapshot = collector.sample(&tick).expect("a live sample");
+            samples.push(at.elapsed());
+            processes = snapshot.process_count();
+        }
+        samples.sort_unstable();
+        let median = samples[samples.len() / 2];
+        let p95 = samples[samples.len() * 95 / 100];
+        println!("collection, {label}: median {median:?}, p95 {p95:?}");
+        assert!(
+            p95 < Duration::from_millis(200),
+            "§16.1 budgets collection below 200ms p95; {label} was {p95:?}"
+        );
+    }
+    println!("  measured against {processes} processes");
 }

@@ -112,7 +112,7 @@ binary from outside. Full numbers and the per-read breakdown are in
 |---|---|
 | frame render below 16 ms at 160×48 | median 200 µs, p95 353 µs |
 | input-to-visible-response below 50 ms | median 417 µs, p95 486 µs |
-| sample collection below 200 ms p95 | median 156 ms, p95 172 ms |
+| sample collection below 200 ms p95 | ordinary tick p95 59–71 ms; every fifth tick 136–149 ms |
 | resident memory below 50 MiB | median 29 MiB, peak 31 MiB |
 | no unbounded growth | 30-minute soak: resident size *fell*, descriptors flat, nothing dropped |
 
