@@ -8,6 +8,8 @@ monitrs-opus5-development-spec.md
 # transcript file into one should not be able to offer it for commit. They stay on
 # disk — this only keeps them out of git and out of `git status`.
 .claude/
+.agents/
+.codex/
 .cursor/
 .aider*
 .codeium/
