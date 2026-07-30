@@ -38,6 +38,14 @@ doc:
 deny:
     cargo deny check
 
+# Type-check the Linux code paths from any host.
+#
+# Not optional: the `cfg(target_os = "linux")` branches — the /proc readers and the
+# kill(2) sink — are invisible to a macOS build, and CI is a slow place to discover
+# that. Requires `rustup target add x86_64-unknown-linux-gnu`.
+check-linux:
+    cargo check --workspace --all-features --target x86_64-unknown-linux-gnu
+
 # Parse every GitHub workflow file. Requires PyYAML.
 #
 # Worth running before every push: an unparseable workflow fails with no line
@@ -46,7 +54,7 @@ check-workflows:
     python3 .github/scripts/check_workflows.py
 
 # Everything CI runs, in CI order.
-ci: check-workflows fmt-check check clippy test doc deny
+ci: check-workflows fmt-check check check-linux clippy test doc deny
     @echo "all quality gates passed"
 
 # cargo run -p monitrs

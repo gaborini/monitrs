@@ -177,8 +177,11 @@ pub(crate) fn deliver(identity: ProcessIdentity, signal: SignalKind) -> SignalRe
 /// Delivers `signal` to `identity`, revalidating the identity first.
 #[cfg(target_os = "linux")]
 pub(crate) fn deliver(identity: ProcessIdentity, signal: SignalKind) -> SignalReport {
+    // `KillSink` lives in the `signal` submodule rather than the crate's flat
+    // re-export list; the module is public, so the longer path is the right one.
+    use monitrs_collectors::linux::signal::KillSink;
     use monitrs_collectors::linux::{
-        KillSink, LinuxSignal, ProcRoot, ReadFailure, SignalDecision, SignalError, signal_process,
+        LinuxSignal, ProcRoot, ReadFailure, SignalDecision, SignalError, signal_process,
     };
 
     let native = match signal {
@@ -192,7 +195,9 @@ pub(crate) fn deliver(identity: ProcessIdentity, signal: SignalKind) -> SignalRe
     // rather than whatever the last snapshot happened to see (§9.2).
     let root = ProcRoot::live();
     let bytes = root.read_pid(identity.pid, "stat");
-    let fresh: Result<&[u8], ReadFailure> = bytes.as_result();
+    // `SourceBytes` is `Result<Vec<u8>, ReadFailure>`; `revalidate` wants a borrowed
+    // slice and an owned failure, and `ReadFailure` is `Copy`.
+    let fresh: Result<&[u8], ReadFailure> = bytes.as_deref().map_err(|failure| *failure);
 
     let mut sink = KillSink;
     match signal_process(&mut sink, identity, native, fresh) {
@@ -213,7 +218,7 @@ pub(crate) fn deliver(identity: ProcessIdentity, signal: SignalKind) -> SignalRe
         Err(SignalError::Unsupported) => SignalReport::Unsupported(identity),
         Err(error) => SignalReport::Failed {
             identity,
-            reason: error.to_string(),
+            reason: error.message(),
         },
     }
 }
