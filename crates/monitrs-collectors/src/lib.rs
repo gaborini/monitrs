@@ -16,6 +16,9 @@
 //!   pure, so tier timing is tested by advancing a fake clock.
 //! * [`fake::FakeCollector`] produces deterministic snapshots for tests,
 //!   benchmarks, and UI snapshots.
+//! * [`renice`] is the one platform-neutral *write*: `setpriority(2)` is POSIX and
+//!   identical on both targets, so only the identity revalidation it depends on is
+//!   platform-specific (§6.2, §15.1).
 //!
 //! # Rules that shaped the API
 //!
@@ -52,6 +55,7 @@ pub mod error;
 pub mod fake;
 pub mod linux;
 pub mod macos;
+pub mod renice;
 pub mod selfstat;
 pub mod source;
 pub mod tier;
@@ -61,3 +65,52 @@ pub use error::CollectorError;
 pub use fake::{FakeCollector, Scenario};
 pub use source::{SampleTick, SnapshotSource};
 pub use tier::{DueTiers, TierIntervals, TierScheduler};
+
+/// The most capable collector this build can offer on this machine.
+///
+/// **Every program that samples the real system must go through here.** Naming a
+/// collector type directly is how a binary silently ends up on the bare
+/// `sysinfo` baseline: it compiles, it runs, and it reports plausible numbers,
+/// while `PermissionDenied` degrades into a fabricated `0` and the capability
+/// flags understate what the machine can do. §9.2 asks for native enrichment
+/// *by default*, so the choice belongs to one function rather than to each call
+/// site.
+///
+/// The return type is boxed rather than an enum because the runtime is generic
+/// over [`SnapshotSource`] and a `Box<dyn SnapshotSource>` is one itself (see the
+/// blanket implementation in [`source`]), so no call site changes shape when a
+/// platform gains a native layer.
+///
+/// # Errors
+///
+/// Whatever the chosen collector's constructor reports — a machine whose
+/// baseline cannot be established at all.
+#[cfg(all(target_os = "linux", feature = "linux-native"))]
+pub fn platform_collector() -> Result<Box<dyn SnapshotSource>, CollectorError> {
+    Ok(Box::new(linux::collector::LinuxCollector::new()?))
+}
+
+/// The most capable collector this build can offer on this machine.
+///
+/// See the Linux definition for why this indirection exists.
+///
+/// # Errors
+///
+/// Whatever the chosen collector's constructor reports.
+#[cfg(all(target_os = "macos", feature = "macos-native"))]
+pub fn platform_collector() -> Result<Box<dyn SnapshotSource>, CollectorError> {
+    Ok(Box::new(macos::MacosCollector::new()?))
+}
+
+/// The cross-platform baseline, on a platform or a build with no native layer.
+///
+/// # Errors
+///
+/// Whatever [`CommonCollector::new`] reports.
+#[cfg(not(any(
+    all(target_os = "linux", feature = "linux-native"),
+    all(target_os = "macos", feature = "macos-native")
+)))]
+pub fn platform_collector() -> Result<Box<dyn SnapshotSource>, CollectorError> {
+    Ok(Box::new(CommonCollector::new()?))
+}

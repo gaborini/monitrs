@@ -165,8 +165,12 @@ impl MacosCollector {
         capabilities.cgroup_limits = CapabilityState::Unsupported;
         // macOS has no per-process kernel threads to hide (§7.2).
         capabilities.kernel_threads = CapabilityState::Unsupported;
-        // Renice needs `setpriority`, which is a write and outside this milestone.
-        capabilities.renice = CapabilityState::Unsupported;
+        // `setpriority(2)` plus the identity revalidation §15.1 requires, both of
+        // which this build has: see `crate::renice`. Available does not promise that
+        // every value will be accepted — lowering a nice value needs privileges
+        // monitrs never acquires — because that is a per-attempt question, answered
+        // by `renice::dry_run` and by an `EPERM` outcome, not by the capability.
+        capabilities.renice = crate::renice::capability_state();
 
         Ok(Self {
             baseline,
@@ -372,6 +376,12 @@ impl SnapshotSource for MacosCollector {
         self.enrich_processes(&mut snapshot, tick);
         network::merge_into(&mut snapshot.networks, &self.cached_links);
         snapshot.sensors.battery = self.cached_battery;
+        // macOS has no PSI, and the baseline leaves the field `WarmingUp` because on
+        // Linux it is filled in by the enrichment. Left alone, the radar's three PSI
+        // rows would read `warming` for the entire session — a promise that the value
+        // is coming, for a value this kernel has no concept of. §4 has a state for
+        // exactly this, and it is the one the capability flag already declares.
+        snapshot.pressure.psi = MetricState::Unsupported;
         snapshot.capabilities = self.capabilities;
         Ok(snapshot)
     }
@@ -668,6 +678,14 @@ mod tests {
         // §9.3: no private APIs, so no device busy time and no per-GPU metrics.
         assert_eq!(capabilities.disk_busy, CapabilityState::Unsupported);
         assert_eq!(capabilities.linux_psi, CapabilityState::Unsupported);
+        // And the field agrees with the flag. It used to stay `WarmingUp`, which the
+        // Pressure Radar rendered as three rows promising a value macOS has no
+        // concept of, for as long as the session lasted (§4).
+        assert_eq!(
+            second.pressure.psi,
+            MetricState::Unsupported,
+            "a metric this platform cannot produce is unsupported, not warming up"
+        );
         assert_eq!(capabilities.cgroup_limits, CapabilityState::Unsupported);
         assert_eq!(capabilities.kernel_threads, CapabilityState::Unsupported);
     }

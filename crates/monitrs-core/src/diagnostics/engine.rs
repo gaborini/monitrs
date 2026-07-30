@@ -39,6 +39,13 @@ use super::{Hysteresis, SignalReading, Thresholds, signals};
 /// The rule text used for every signal while diagnostics are switched off.
 const DISABLED_RULE: &str = "diagnostics are disabled in configuration";
 
+/// How many recent intervals the discontinuity reference is taken over.
+///
+/// Small enough to follow a reconfigured sampling interval within a few seconds,
+/// large enough that a forced refresh, one slow collection, or one scheduler
+/// hiccup cannot move the median.
+const RECENT_INTERVALS: usize = 9;
+
 /// Derives the Pressure Radar from a stream of snapshots (§2.3).
 ///
 /// Stateful on purpose: hysteresis is memory, and §11.3 requires it. The state is
@@ -49,12 +56,25 @@ pub struct PressureEngine {
     thresholds: Thresholds,
     /// One tracker per [`PressureId::DISPLAY_ORDER`] entry, in that order.
     trackers: Vec<Hysteresis>,
-    /// The smallest non-zero interval seen so far, used as the reference for
-    /// detecting a sleep/wake gap.
+    /// The most recent measured intervals, newest overwriting oldest.
     ///
-    /// The *smallest* rather than the latest, because a stall must not be able to
-    /// inflate the reference and thereby hide the next stall (§8.1).
-    reference_interval: Option<Duration>,
+    /// Their median is the reference for detecting a sleep/wake gap. A median
+    /// rather than the smallest, which is what this used to be: the *reasoning* for
+    /// the smallest was that a stall must not inflate the reference and hide the
+    /// next stall, but one short interval then deflated it permanently, and every
+    /// ordinary sample after that looked like a discontinuity — which resets every
+    /// tracker, so the radar never committed a state again for the rest of the
+    /// session. §6.2's `r` (force refresh) produces exactly such an interval, since
+    /// it collects out of turn milliseconds after a scheduled sample.
+    ///
+    /// A median is robust in both directions: neither one short interval nor one
+    /// stall moves it, and it still follows a genuinely changed cadence within a
+    /// window.
+    recent_intervals: [Duration; RECENT_INTERVALS],
+    /// How many entries of `recent_intervals` are filled, saturating at its length.
+    recent_len: usize,
+    /// Where the next interval goes.
+    recent_next: usize,
     observations: u64,
     discontinuities: u64,
 }
@@ -70,7 +90,9 @@ impl PressureEngine {
                 .map(|_| Hysteresis::new(&thresholds))
                 .collect(),
             thresholds,
-            reference_interval: None,
+            recent_intervals: [Duration::ZERO; RECENT_INTERVALS],
+            recent_len: 0,
+            recent_next: 0,
             observations: 0,
             discontinuities: 0,
         }
@@ -152,10 +174,7 @@ impl PressureEngine {
             self.discontinuities = self.discontinuities.saturating_add(1);
             self.reset();
         }
-        self.reference_interval = Some(match self.reference_interval {
-            Some(reference) => reference.min(snapshot.elapsed),
-            None => snapshot.elapsed,
-        });
+        self.record_interval(snapshot.elapsed);
         self.observations = self.observations.saturating_add(1);
 
         let signals = PressureId::DISPLAY_ORDER
@@ -171,12 +190,36 @@ impl PressureEngine {
     /// Whether `elapsed` is so much larger than the reference interval that it
     /// must be a sleep/wake gap rather than a measurement (§11.3).
     fn is_discontinuity(&self, elapsed: Duration) -> bool {
-        let Some(reference) = self.reference_interval else {
+        let Some(reference) = self.reference_interval() else {
             return false;
         };
         let limit =
             Thresholds::intervals_as_seconds(reference, self.thresholds.discontinuity_intervals);
         elapsed.as_secs_f64() > limit
+    }
+
+    /// The typical recent interval: the median of what has been measured.
+    ///
+    /// `None` until two intervals are known. Judging the second sample against the
+    /// first would make a single forced refresh — or one slow first collection —
+    /// the standard the rest of the session is held to.
+    fn reference_interval(&self) -> Option<Duration> {
+        if self.recent_len < 2 {
+            return None;
+        }
+        let mut window = self.recent_intervals;
+        let filled = window.get_mut(..self.recent_len)?;
+        filled.sort_unstable();
+        filled.get(self.recent_len / 2).copied()
+    }
+
+    /// Records one measured interval, overwriting the oldest.
+    fn record_interval(&mut self, elapsed: Duration) {
+        if let Some(slot) = self.recent_intervals.get_mut(self.recent_next) {
+            *slot = elapsed;
+        }
+        self.recent_next = self.recent_next.saturating_add(1) % RECENT_INTERVALS;
+        self.recent_len = self.recent_len.saturating_add(1).min(RECENT_INTERVALS);
     }
 
     /// Derives one signal, feeding or resetting its tracker as appropriate.
@@ -305,6 +348,79 @@ mod tests {
             radar = engine.observe(&snapshot);
         }
         radar
+    }
+
+    /// One short interval must not become the standard for the whole session.
+    ///
+    /// The bug: `reference_interval` was the *smallest* interval ever seen, so a
+    /// single out-of-turn sample — which is precisely what §6.2's `r` produces,
+    /// collecting milliseconds after a scheduled sample — set the reference to
+    /// milliseconds. Every ordinary sample afterwards then exceeded
+    /// `discontinuity_intervals × reference`, counted as a sleep/wake gap, and reset
+    /// every tracker. The Pressure Radar showed `warming` for the rest of the
+    /// session, and pressing a documented key was all it took.
+    #[test]
+    fn a_forced_refresh_does_not_make_every_later_sample_a_discontinuity() {
+        let mut engine = engine();
+        let mut timeline = Timeline::new(Duration::from_secs(1));
+
+        // A normal stream, then one sample 3 ms after its predecessor.
+        for _ in 0..4 {
+            let snapshot = timeline.push(|snapshot| set_cpu(snapshot, 99.0));
+            let _ = engine.observe(&snapshot);
+        }
+        let mut forced = timeline.build(|snapshot| set_cpu(snapshot, 99.0));
+        forced.elapsed = Duration::from_millis(3);
+        assert!(timeline.record(&forced));
+        let _ = engine.observe(&forced);
+        let after_forced = engine.discontinuities();
+
+        // And then the ordinary cadence resumes.
+        for _ in 0..20 {
+            let snapshot = timeline.push(|snapshot| set_cpu(snapshot, 99.0));
+            let _ = engine.observe(&snapshot);
+        }
+
+        assert_eq!(
+            engine.discontinuities(),
+            after_forced,
+            "a 1s sample after a 3ms one is not a sleep/wake gap"
+        );
+        let radar = engine.observe(&timeline.push(|snapshot| set_cpu(snapshot, 99.0)));
+        let signal = radar.signal(PressureId::Cpu).expect("cpu signal exists");
+        assert_eq!(
+            signal.state,
+            MetricState::Available(PressureState::Critical),
+            "the radar must still be able to commit a state, got {:?}",
+            signal.state
+        );
+    }
+
+    /// A genuine sleep/wake gap is still caught, which is the point of the check.
+    #[test]
+    fn a_gap_far_larger_than_the_recent_cadence_is_still_a_discontinuity() {
+        let mut engine = engine();
+        let mut timeline = Timeline::new(Duration::from_secs(1));
+        for _ in 0..12 {
+            let snapshot = timeline.push(|snapshot| set_cpu(snapshot, 99.0));
+            let _ = engine.observe(&snapshot);
+        }
+        let before = engine.discontinuities();
+
+        // The laptop lid was closed for a minute; `discontinuity_intervals` is 10.
+        let mut resumed = timeline.build(|snapshot| set_cpu(snapshot, 99.0));
+        resumed.elapsed = Duration::from_secs(60);
+        assert!(timeline.record(&resumed));
+        let radar = engine.observe(&resumed);
+
+        assert_eq!(engine.discontinuities(), before + 1);
+        let signal = radar.signal(PressureId::Cpu).expect("cpu signal exists");
+        assert!(
+            signal.state.is_warming_up(),
+            "§11.3: the window either side of a gap must not be counted together, \
+             got {:?}",
+            signal.state
+        );
     }
 
     #[test]

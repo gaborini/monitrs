@@ -98,6 +98,7 @@ impl SnapshotSource for LinuxCollector {
         let mut capabilities = self.common.capabilities();
         capabilities.kernel_threads = CapabilityState::Available;
         capabilities.process_signals = CapabilityState::Available;
+        capabilities.renice = crate::renice::capability_state();
         capabilities
     }
 
@@ -125,6 +126,11 @@ impl SnapshotSource for LinuxCollector {
             },
         );
         self.enrichment.apply(&mut snapshot, &sources, tick);
+        // The baseline declares renice unsupported because the `sysinfo` layer has no
+        // write path; this layer does (`crate::renice`). It has to be set on the
+        // snapshot as well as in `capabilities`, because the snapshot's copy is what
+        // the UI gates the `R` key on (§4, §6.2).
+        snapshot.capabilities.renice = crate::renice::capability_state();
         Ok(snapshot)
     }
 

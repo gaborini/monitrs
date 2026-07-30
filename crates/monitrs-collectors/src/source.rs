@@ -108,6 +108,30 @@ pub trait SnapshotSource: Send {
     fn process_detail(&mut self, identity: ProcessIdentity) -> ProcessDetailResult;
 }
 
+/// A boxed source is a source.
+///
+/// This is what lets [`crate::platform_collector`] hand back a
+/// `Box<dyn SnapshotSource>` while the runtime stays generic over the source
+/// type: the worker threads are written once against `S: SnapshotSource` and do
+/// not need to know whether the platform has a native layer.
+impl<T: SnapshotSource + ?Sized> SnapshotSource for Box<T> {
+    fn name(&self) -> &'static str {
+        (**self).name()
+    }
+
+    fn capabilities(&self) -> CapabilitySnapshot {
+        (**self).capabilities()
+    }
+
+    fn sample(&mut self, tick: &SampleTick) -> Result<SystemSnapshot, CollectorError> {
+        (**self).sample(tick)
+    }
+
+    fn process_detail(&mut self, identity: ProcessIdentity) -> ProcessDetailResult {
+        (**self).process_detail(identity)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
