@@ -68,7 +68,7 @@ a ten-second run.
 | `MONITRS_SOAK_SECONDS` | `10` | Run length. `43200` is §16.1's twelve hours. |
 | `MONITRS_SOAK_INTERVAL_MS` | `20` | Fast-tier sample interval. Lower is more load. |
 | `MONITRS_SOAK_PROCESSES` | `4000` | Processes in the fake system. Ignored by the real collector. |
-| `MONITRS_SOAK_REAL_COLLECTOR` | unset | `1` drives `CommonCollector` instead of `FakeCollector`. |
+| `MONITRS_SOAK_REAL_COLLECTOR` | unset | `1` drives the shipped `platform_collector()` — native enrichment and all — instead of `FakeCollector`. Soaking the bare baseline would soak code the program does not run. |
 
 An unparsable value falls back to the default rather than failing, because a typo
 in a twelve-hour invocation should not be discovered twelve hours later. The

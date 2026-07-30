@@ -22,8 +22,20 @@ terminal. What is still missing before `0.1.0`:
   per-read breakdown showing where the time goes, and what it would take to fix.
   This is the one item on this list that is a *product* problem rather than a
   procedural one.
-* **No release archive has been built or run on a target machine**, so the install
-  instructions in `README.md` remain unwritten rather than untested.
+* **No release *notes* exist.** `CHANGELOG.md` has only an `Unreleased` section, so
+  `changelog_excerpt.py` cannot produce the excerpt §19.2 requires — and the release
+  workflow's `verify` job runs exactly that script, so a `v0.1.0` tag would be
+  refused before a single binary was built. That is the gate working, and writing the
+  section is the remaining work.
+
+  The archive itself has been assembled and exercised by hand for
+  `aarch64-apple-darwin`, following the workflow's own steps: the tarball contains
+  the binary, both licences, the README, the five shell completions and the manpage;
+  its checksum verifies; the extracted binary reports `monitrs 0.1.0`, prints its
+  help, and produces a snapshot of 970 processes with 17 of 22 capabilities
+  available; the manpage renders under `man`; and the bash and zsh completions parse
+  under `bash -n` and `zsh -n`. What remains untested is the other five targets,
+  which only CI can build.
 
 So this file is currently a **procedure, not a plan**. It is complete and it is
 followed as written, but the [§23 gate](#the-23-gate-for-010) at the bottom is what
