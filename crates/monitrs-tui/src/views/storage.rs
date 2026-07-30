@@ -90,9 +90,7 @@ use monitrs_core::model::{
     CapabilityState, DiskSnapshot, FilesystemKind, FilesystemSnapshot, ProcessSnapshot,
     SystemSnapshot,
 };
-use monitrs_core::units::{
-    MAX_BYTE_RATE_WIDTH, MAX_COMPACT_BYTES_WIDTH, display_width, format_bytes_compact,
-};
+use monitrs_core::units::{MAX_BYTE_RATE_WIDTH, MAX_COMPACT_BYTES_WIDTH, format_bytes_compact};
 use ratatui::Frame;
 use ratatui::buffer::Buffer;
 use ratatui::layout::Rect;
@@ -107,9 +105,9 @@ use crate::widgets::states;
 use crate::widgets::{Sparkline, SparklineCaret};
 
 use super::{
-    Chrome, SHARED_BOTTOM, caret_note, draw_bordered_panel, history_span_label, inner_of, inset,
-    muted_line, plot_peak, plot_series, row_builder, selected_sample_offset, split_rows,
-    truncation_label, write_lines,
+    Chrome, SHARED_BOTTOM, caret_note, draw_bordered_panel, fit_label, history_span_label,
+    inner_of, inset, muted_line, plot_peak, plot_series, row_builder, selected_sample_offset,
+    split_rows, truncation_label, write_lines,
 };
 
 /// Cells reserved for a mount point before it is middle-truncated.
@@ -349,36 +347,6 @@ fn draw_capacity(
         ));
     }
     write_lines(buffer, inner, &lines);
-}
-
-/// Joins the capacity panel's disclosures, dropping the ones that do not fit.
-///
-/// [`crate::widgets::Panel`] drops its trailing label *whole* rather than truncating
-/// it, which is right for a count and wrong for a sentence: at 80 columns the full
-/// text does not fit, and without this the mount count and the hidden-mount
-/// disclosure would vanish along with the part that overflowed. So the parts are
-/// fitted here in priority order — what is on screen, what the filter removed, what
-/// the marks mean, then why a column is missing — and a part that does not fit ends
-/// the label rather than letting a shorter one behind it jump the queue (§5.4).
-fn fit_label(parts: &[String], title: &str, panel_width: u16) -> String {
-    // The corners, the rule either side of the title, and the three cells the panel
-    // keeps before its right corner. Deliberately pessimistic: a label dropped one
-    // cell early is a shorter sentence, while one kept a cell too late is dropped
-    // whole by the panel, which is the outcome this function exists to avoid.
-    let chrome = display_width(title) + 10;
-    let room = usize::from(panel_width).saturating_sub(chrome);
-    let mut out = String::new();
-    for part in parts {
-        let separator = if out.is_empty() { 0 } else { 2 };
-        if display_width(&out) + separator + display_width(part) > room {
-            break;
-        }
-        if separator > 0 {
-            out.push_str(", ");
-        }
-        out.push_str(part);
-    }
-    out
 }
 
 /// The mounts to show, and how many were hidden by the §7.3 filter.
@@ -1077,7 +1045,7 @@ mod tests {
     use std::time::{Instant, SystemTime};
 
     use monitrs_core::model::{InodeUsage, MetricState, ProcessIdentity, ProcessIo, ProcessState};
-    use monitrs_core::units::{Percent, Rate};
+    use monitrs_core::units::{Percent, Rate, display_width};
 
     use crate::widgets::MetricDisplay;
 

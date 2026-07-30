@@ -52,6 +52,16 @@ pub enum Command {
     ConfigPath,
     /// `reload config`.
     ReloadConfig,
+    /// `follow [pid]`. No argument follows the selected row.
+    ///
+    /// The PID is enough: a subtree root is picked out of the process table the user is
+    /// looking at, and the reducer refuses a PID that is not in the current sample rather
+    /// than scoping the table to nothing. That is also why this carries a bare `u32`
+    /// rather than a [`ProcessIdentity`](monitrs_core::model::ProcessIdentity) — nobody
+    /// types a start key.
+    Follow(Option<u32>),
+    /// `unfollow`. Lifts the subtree scope.
+    Unfollow,
 }
 
 /// Why a typed line is not a command.
@@ -170,6 +180,16 @@ pub const HINTS: &[CommandHint] = &[
         usage: "reload config",
         completion: "reload config",
         summary: "re-read the configuration file",
+    },
+    CommandHint {
+        usage: "follow [pid]",
+        completion: "follow",
+        summary: "scope the table to one process and its descendants",
+    },
+    CommandHint {
+        usage: "unfollow",
+        completion: "unfollow",
+        summary: "show every process again",
     },
 ];
 
@@ -308,6 +328,24 @@ pub fn parse(line: &str) -> Result<Command, CommandError> {
                 })
             }
         }
+        "follow" => {
+            let argument = rest.trim();
+            if argument.is_empty() {
+                // No argument follows what is selected, which is what the `F` key does.
+                // Requiring a PID here would make the palette the harder way to do the
+                // same thing (§6.3 exists to make features reachable, not ceremonial).
+                return Ok(Command::Follow(None));
+            }
+            argument
+                .parse::<u32>()
+                .map(|pid| Command::Follow(Some(pid)))
+                .map_err(|_| CommandError::BadArgument {
+                    command: "follow",
+                    value: argument.to_owned(),
+                    expected: "a PID, or nothing to follow the selected row",
+                })
+        }
+        "unfollow" => Ok(Command::Unfollow),
         "reload" => {
             let argument = require(rest, "reload", "the subcommand `config`")?;
             if argument.eq_ignore_ascii_case("config") {
@@ -597,7 +635,12 @@ mod tests {
 
     #[test]
     fn the_hint_list_covers_every_command_and_completes_to_something_parseable() {
-        assert_eq!(HINTS.len(), 11, "§6.3 lists eleven commands");
+        // §6.3's eleven, plus `follow` and `unfollow`, which have no section of their
+        // own there: the specification asks for a way to watch a process tree without
+        // saying how it is reached, and the palette is where a feature goes when it does
+        // not warrant its own key. The count is asserted so a new command cannot be
+        // added without a hint, which is the discoverability surface §6.3 exists for.
+        assert_eq!(HINTS.len(), 13, "§6.3's eleven, plus follow and unfollow");
         for hint in HINTS {
             assert!(hint.usage.is_ascii(), "§5.1: hints must be ASCII-safe");
             assert!(!hint.summary.is_empty());

@@ -30,7 +30,8 @@ use std::time::{Duration, Instant, SystemTime};
 
 use monitrs_collectors::{DueTiers, SampleTick, SnapshotSource, platform_collector};
 use monitrs_core::diagnostics::{PressureEngine, Thresholds};
-use monitrs_core::process::{ProcessSort, ProcessSortKey};
+use monitrs_core::model::ProcessIdentity;
+use monitrs_core::process::{ProcessSort, ProcessSortKey, SubtreeUsage};
 use monitrs_core::units::ByteUnits;
 use monitrs_tui::action::ViewId;
 use monitrs_tui::app::{AppSettings, AppState, DisplaySettings, apply};
@@ -130,6 +131,19 @@ impl Live {
             }
             self.sample();
         }
+    }
+
+    /// Types `line` into the command palette and submits it (§6.3).
+    ///
+    /// Through the overlay rather than around it, because that is the only way a user can
+    /// reach a palette command — and because it means the parser and the submit path are
+    /// under test here too, not just the action they produce.
+    fn command(&mut self, line: &str) {
+        self.press(KeyPress::char(':'));
+        for character in line.chars() {
+            self.press(KeyPress::char(character));
+        }
+        self.press(KeyPress::plain(Key::Enter));
     }
 
     fn press(&mut self, key: KeyPress) {
@@ -350,6 +364,198 @@ fn capture_real_frames_for_the_documentation() {
     let anonymize = Anonymize::for_state(&fancy.state);
     let (unicode, _) = fancy.render(WIDE);
     write_frame("overview-unicode.txt", &unicode, &anonymize);
+}
+
+#[test]
+#[ignore = "live-system run: follows a real process tree and reads the frame back"]
+fn following_a_real_process_tree_scopes_the_real_table() {
+    // The §7.2 table is where a defect hides best: the reducer tests use a fixture with
+    // eight processes and one obvious family, while this machine has a thousand processes,
+    // several deep trees, and PIDs that are reused. Every serious defect in this project
+    // was found by rendering a real frame, so this presses the real key against the real
+    // machine and reads the answer off the screen.
+    let mut live = Live::new(WIDE, GlyphMode::Ascii, ColorMode::Off, ThemeId::DefaultDark);
+    // Two samples, because a process's CPU is `WarmingUp` until it has a delta — and a
+    // subtree summed from `WarmingUp` members is the case that must *not* read as zero.
+    live.warm(2);
+    live.press(KeyPress::char('2'));
+
+    let root = busiest_parent(&live.state).expect("this machine has a process with children");
+    let expected = subtree_pids(&live.state, root);
+    assert!(
+        expected.len() > 1,
+        "the chosen root has descendants: {expected:?}"
+    );
+
+    let (before, _) = live.render(WIDE);
+    let visible_before = table_pids(&before);
+    assert!(
+        visible_before.len() > expected.len(),
+        "the unscoped table shows more than the family: {} rows vs {} members",
+        visible_before.len(),
+        expected.len()
+    );
+
+    // The palette rather than `F`, because selecting a specific row out of a thousand
+    // would be a test of the arrow keys. `follow <pid>` goes through the same reducer.
+    live.command(&format!("follow {}", root.pid));
+    let (after, _) = live.render(WIDE);
+
+    assert!(
+        after.contains(&format!("following {}", root.pid)),
+        "the title must say why the table is short:\n{}",
+        first_lines(&after, 6)
+    );
+    assert!(
+        after.contains("cpu ") && after.contains("rss "),
+        "the label must carry the family's summed cost, which is on no row:\n{}",
+        first_lines(&after, 6)
+    );
+
+    let visible_after = table_pids(&after);
+    assert!(
+        !visible_after.is_empty(),
+        "a followed subtree must not empty the table:\n{}",
+        first_lines(&after, 12)
+    );
+    for pid in &visible_after {
+        assert!(
+            expected.contains(pid),
+            "{pid} is on screen but is not in {}'s subtree {expected:?}",
+            root.pid
+        );
+    }
+    assert!(
+        visible_after.contains(&root.pid),
+        "the root itself must stay visible"
+    );
+    // A subtree of a live machine loses and gains members between samples, so the table
+    // is asserted to be a *subset* of the membership rather than equal to it — and to be
+    // strictly smaller than the unscoped table, which is the whole observable effect.
+    assert!(
+        visible_after.len() < visible_before.len(),
+        "the scope must actually remove rows"
+    );
+
+    // Printed, because a live-system test whose only output is `ok` cannot show that it
+    // looked at something real — and because the label is the deliverable here.
+    for line in after
+        .lines()
+        .filter(|line| line.contains("PROCESSES  sort"))
+    {
+        println!("{}", line.trim_matches('|'));
+    }
+    println!(
+        "followed {} with {} members; {} of {} rows on screen",
+        root.pid,
+        expected.len(),
+        visible_after.len(),
+        visible_before.len()
+    );
+
+    // The sums cover the whole family, not the rows on screen, so narrowing the view has
+    // to make the family's size explicit — otherwise `cpu 10%` reads as belonging to the
+    // handful of rows a filter left behind.
+    live.command("filter zzzzzz-no-such-process");
+    let (narrowed, _) = live.render(WIDE);
+    assert!(
+        narrowed.contains(&format!("subtree of {}", expected.len())),
+        "a filtered view must state what the sums are over:\n{}",
+        first_lines(&narrowed, 6)
+    );
+    for line in narrowed
+        .lines()
+        .filter(|line| line.contains("PROCESSES  sort"))
+    {
+        println!("{}", line.trim_matches('|'));
+    }
+    live.command("filter");
+
+    live.command("unfollow");
+    let (lifted, _) = live.render(WIDE);
+    assert!(
+        !lifted.contains("following "),
+        "the scope must be gone from the title:\n{}",
+        first_lines(&lifted, 6)
+    );
+    assert!(
+        table_pids(&lifted).len() > visible_after.len(),
+        "and the rest of the machine must come back"
+    );
+}
+
+/// The process with the most children in the current snapshot, if any.
+///
+/// Chosen by child count rather than by PID so the test picks a real family — on macOS
+/// PID 1 parents nearly everything, which would make the "scope removes rows" assertion
+/// pass for the wrong reason.
+fn busiest_parent(state: &AppState) -> Option<ProcessIdentity> {
+    let snapshot = state.snapshot()?;
+    let mut best: Option<(usize, ProcessIdentity)> = None;
+    for process in &snapshot.processes {
+        // Skip PID 1 and anything parented by nothing: a subtree of init is the machine.
+        if process.identity.pid <= 1 {
+            continue;
+        }
+        let children = snapshot
+            .processes
+            .iter()
+            .filter(|other| other.parent_pid == Some(process.identity.pid))
+            .count();
+        if children == 0 {
+            continue;
+        }
+        if best.is_none_or(|(most, _)| children > most) {
+            best = Some((children, process.identity));
+        }
+    }
+    best.map(|(_, identity)| identity)
+}
+
+/// Every PID in `root`'s subtree, according to the aggregation under test.
+fn subtree_pids(state: &AppState, root: ProcessIdentity) -> Vec<u32> {
+    let snapshot = state.snapshot().expect("a snapshot");
+    SubtreeUsage::of(snapshot, root)
+        .map(|usage| usage.members.iter().map(|member| member.pid).collect())
+        .unwrap_or_default()
+}
+
+/// The PIDs of the process table's rows in a rendered frame.
+///
+/// Reads the frame rather than the state on purpose: the question this test exists to
+/// answer is what reached the screen.
+fn table_pids(frame: &str) -> Vec<u32> {
+    let mut pids = Vec::new();
+    let mut inside = false;
+    for line in frame.lines() {
+        if line.contains("PROCESSES  sort") {
+            inside = true;
+            continue;
+        }
+        if inside && line.starts_with('+') {
+            break;
+        }
+        if !inside {
+            continue;
+        }
+        // `|`, the selection marker, the pin marker, then the right-aligned PID.
+        let cells = line.trim_start_matches('|');
+        let Some(field) = cells.get(..12) else {
+            continue;
+        };
+        if let Some(pid) = field
+            .split_whitespace()
+            .next()
+            .and_then(|word| word.parse::<u32>().ok())
+        {
+            pids.push(pid);
+        }
+    }
+    pids
+}
+
+fn first_lines(frame: &str, count: usize) -> String {
+    frame.lines().take(count).collect::<Vec<_>>().join("\n")
 }
 
 #[test]

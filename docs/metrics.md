@@ -85,6 +85,36 @@ one. The comparable form is load per logical CPU: `11.4` on 8 CPUs is `1.43` per
 CPU, which is what the load pressure rule uses. On a machine whose CPU count is
 unknown, load-per-CPU is unavailable rather than assumed.
 
+### Inside a container
+
+The host's CPU count is still the host's. A group limited to 1.5 CPUs on a 64-CPU machine
+is not "2% of the machine"; it is a hard wall its processes are throttled against. monitrs
+reads `cpu.max` and shows the ceiling beside the count, never instead of it:
+
+```
+cpu    8 logical, 8 physical, cgroup 1.5 CPUs
+```
+
+The header carries the same thing as `cgroup 1.5 cpu`, ahead of the temperature, and the
+Inspect screen names the container itself where the cgroup path identifies one —
+`container docker 3f4a1b2c9d8e`. An unlimited group is *unsupported*, not a very large
+number of CPUs; a `cpu.max` that cannot be parsed is *unavailable*, not "no limit", because
+those two mean opposite things to someone trying to explain a stall.
+
+A configured limit counts even when the read that found it is stale. A limit is
+configuration rather than a measurement: if the last good read said 1.5 CPUs and this
+tick's failed, the group is still limited to 1.5, and falling back to the host's 64 would
+advertise headroom that does not exist.
+
+**The load average is not scoped to the container, and monitrs does not pretend it is.**
+`/proc/loadavg` is not namespaced either: inside a container it counts every runnable
+process on the machine, including other tenants'. Dividing that by this group's quota would
+pair a host numerator with a container denominator and produce a figure describing nothing
+— the same mistake as dividing host `used` by a cgroup limit. So the divisor stays the
+host's CPU count, and where a quota exists the label says `over 8 host cores` to make clear
+which machine the figure is about. The group's own saturation is cgroup PSI, a different
+measurement, and inventing it by division would be worse than not having it.
+
 ## Open files and sockets
 
 Three separate figures, all on the on-demand tier and all shown in the process
@@ -169,6 +199,14 @@ monitrs does not pretend otherwise.
 * **cgroup limits** — inside a container the applicable ceiling is the cgroup
   limit, not the host total. Both are shown and labelled where observable. An
   "unlimited" cgroup sentinel is recognised and does not shrink the ceiling.
+* **cgroup usage** — and the counterpart nobody expects to need: `used` above is the
+  **host's**, because `/proc/meminfo` is not namespaced. A process in a 2 GiB group on a
+  64 GiB host reads the host's 40 GiB and concludes it is nearly out of memory when it has
+  used 300 MiB of its own allowance. monitrs reads the group's own charge from
+  `memory.current` — the counter the kernel compares against `memory.max` when it decides
+  to OOM-kill — and shows it beside the limit it is enforced against:
+  `cgroup limit 2.0G, 512M used (25%)`. Both halves of that ratio come from the group, or
+  neither does; the host figure is never divided by a container limit.
 
 ## Filesystems and disks
 
@@ -374,6 +412,66 @@ limit and barely warm for a GPU — so the bar appears only where the sensor dec
 a ceiling, and a sensor that declares none shows the figure and says why there is no
 bar. This is the same rule that forbids a network utilization percentage without a
 known link speed.
+
+## Following a process with its children
+
+`F` on a process row scopes the table to that process and everything beneath it; `F`
+again lifts the scope. The palette has `follow [pid]` and `unfollow` for the same thing
+(§6.3). The panel title says `following 410` while the scope is on, because a table showing
+four rows out of a thousand with nothing on screen to explain it is indistinguishable from
+a monitor that has lost the other processes.
+
+The reason to follow rather than to filter is the figure in the trailing label:
+
+```
++ PROCESSES  sort CPU% desc  following 410 --------- 4 of 10 total, cpu >=107%, rss 479M -+
+```
+
+`cpu 107%` is what the family costs together, and it is on no row. A build's compilers come
+and go every second; the individual rows never answer "what is this build using".
+
+### The sums, and their limits
+
+* **`>=` means the sum is a lower bound.** A member whose CPU the OS refuses — a
+  compiler running as another user, say — is still counted as a member and still shown in
+  the table with `denied` in its CPU cell, but it cannot contribute to the total. The
+  marker is there so that three compilers out of four are not presented as the whole
+  family's cost. A sum with *no* contributors is not zero: it reports the members' own
+  state, so an all-refused family reads `denied` rather than `0%`.
+* **A stale member still contributes.** It was measured; the row is marked stale anyway.
+  Excluding it would make the family's total drop whenever one read failed once, which
+  looks like the build getting cheaper.
+* **`rss` over-counts shared pages.** Two compilers sharing 100 MiB of mapped libraries
+  contribute that 100 MiB twice, which is a property of RSS rather than of the sum — the
+  same property every per-process `RSS` column on every screen has. It is labelled `rss`,
+  not "memory used", for that reason. Neither platform gives monitrs a per-process
+  unique-memory figure cheaply enough to sample every second, so there is no honest
+  alternative number to show here.
+* **`subtree of N` appears only when it differs from the row count.** The sums always
+  cover the whole family, so when a text filter narrows the view to two rows, the label
+  says what the 107% is actually over.
+
+### What a subtree is, and is not
+
+Membership is **downwards only**: the followed process and its descendants, never its
+parent. Following `make` does not drag in the shell that launched it, or the terminal, or
+the login session.
+
+The root's own identity is a `(pid, start_key)` pair, not a PID, so a recycled PID cannot
+quietly become the thing being followed. When the root exits, monitrs **stops following**
+and says so:
+
+```
+stopped following 410: the process has exited
+```
+
+It does not keep following the orphans. The kernel reparents them to init, and a family
+whose common ancestor is gone is not the family that was asked for. Losing only *children*
+changes nothing — a build's membership changes constantly, and releasing the scope on every
+change would make the feature useless.
+
+Cycles in the parent links terminate and are counted rather than followed, as the tree view
+already does.
 
 ## History and attribution coverage
 

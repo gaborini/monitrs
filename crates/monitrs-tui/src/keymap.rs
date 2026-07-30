@@ -755,6 +755,13 @@ impl Keymap {
             Action::ToggleTreeView,
             "Toggle flat and tree process views",
         );
+        table.add(
+            BindingSection::Navigation,
+            TABLE_MODE,
+            Chord::key(KeyPress::char('F')),
+            Action::FollowSelected,
+            "Follow the selected process tree",
+        );
 
         // ------------------------------------------------------------- time lens
         // §2.1: `[` and `]` step, and their shifted forms leap. Both work from the
@@ -1526,6 +1533,7 @@ mod tests {
             (KeyPress::char('S'), Action::ReverseSort),
             (KeyPress::char('p'), Action::PinSelected),
             (KeyPress::char('f'), Action::ToggleTreeView),
+            (KeyPress::char('F'), Action::FollowSelected),
         ];
 
         for (press, expected) in cases {

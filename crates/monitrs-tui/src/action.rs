@@ -488,6 +488,17 @@ pub enum Action {
     PinSelected,
     /// Pin or unpin a specific process.
     Pin(ProcessIdentity),
+    /// Scope the process table to the selected process and its descendants (§6.2 `F`).
+    ///
+    /// A toggle: following the process already being followed stops following it, so one
+    /// key both enters and leaves the scope, as `p` does for pins.
+    FollowSelected,
+    /// Lift the subtree scope, whatever it was.
+    ///
+    /// Separate from the toggle because `unfollow` in the palette (§6.3) has to be
+    /// unambiguous about which way it goes, and because the reducer needs to lift the
+    /// scope itself when the root exits.
+    StopFollowing,
 
     // ---- detail (§7.5) ----
     /// Load the detail of a specific process.

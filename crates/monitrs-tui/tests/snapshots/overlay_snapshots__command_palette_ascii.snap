@@ -5,9 +5,7 @@ expression: text_of(&buffer)
 |                                                                                                        |
 |                                                                                                        |
 |                                                                                                        |
-|                                                                                                        |
-|                                                                                                        |
-|+ COMMAND ----------------------------------------------------------------------------- 11 commands ---+|
+|+ COMMAND ----------------------------------------------------------------------------- 13 commands ---+|
 ||:                                                                                                     ||
 ||------------------------------------------------------------------------------------------------------||
 ||> view <overview|processes|storage|network|inspect>  switch to a main view                            ||
@@ -21,4 +19,6 @@ expression: text_of(&buffer)
 ||  export snapshot <path>                             write a redacted JSON snapshot                   ||
 ||  config path                                        show where configuration is read from            ||
 ||  reload config                                      re-read the configuration file                   ||
+||  follow [pid]                                       scope the table to one process and its descend...||
+||  unfollow                                           show every process again                         ||
 |+------------------------------------------------------------------------------------------------------+|

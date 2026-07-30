@@ -40,7 +40,8 @@
 //! [`Token::Critical`]: crate::theme::Token::Critical
 
 use monitrs_core::model::{MetricState, ProcessIdentity};
-use monitrs_core::units::Percent;
+use monitrs_core::process::Summed;
+use monitrs_core::units::{ByteUnits, Percent};
 use ratatui::Frame;
 use ratatui::buffer::Buffer;
 use ratatui::layout::Rect;
@@ -48,11 +49,12 @@ use ratatui::widgets::{Borders, Widget};
 
 use crate::app::{AppState, ProcessRows};
 use crate::layout::{Column, TableLayout};
+use crate::widgets::states;
 use crate::widgets::{PinRow, Pins, Presentation, ProcessRow, ProcessTable, tree_prefix};
 
 use super::{
-    Chrome, SHARED_BOTTOM, draw_bordered_panel, inner_of, inset, muted_line, scroll_offset,
-    split_rows, truncation_label, write_lines,
+    Chrome, SHARED_BOTTOM, draw_bordered_panel, fit_label, inner_of, inset, muted_line,
+    scroll_offset, split_rows, truncation_label, write_lines,
 };
 
 /// Rows the process panel spends on its own column header.
@@ -123,7 +125,7 @@ pub(crate) fn draw_table_panel(
     borders: Borders,
 ) {
     let title = panel_title(state);
-    let trailing = count_label(state);
+    let trailing = fit_label(&label_parts(state, presentation), &title, area.width);
     // No inset: the table's first column is the one-cell selection marker, and §5.5
     // draws it flush against the border so `>` sits directly beside the frame.
     let inner = draw_bordered_panel(
@@ -159,10 +161,72 @@ fn panel_title(state: &AppState) -> String {
     if state.filter().only_user().is_some() {
         title.push_str("  user only");
     }
+    // Last, and named, because it is the strongest scope on the table: while it is on,
+    // the row count is not a count of the machine's processes. A table showing six rows
+    // out of two hundred with nothing on screen to say why is the failure §4 is about,
+    // and here the reason is not a metric's absence but the user's own earlier keypress —
+    // which they may well have forgotten.
+    if let Some(root) = state.followed() {
+        title.push_str(&format!("  following {}", root.pid));
+    }
     title
 }
 
-/// §5.5's `218 total`, or `12 of 218 total` when the filter is hiding rows.
+/// The panel's trailing label, in the order the last cells should be spent (§5.4).
+///
+/// The row count comes first because it is the only part that is always true; the subtree
+/// sums follow, because they are the reason to be following at all — "what is this build
+/// costing me" is one number, and it is not on any single row.
+fn label_parts(state: &AppState, presentation: Presentation<'_>) -> Vec<String> {
+    let mut parts = vec![count_label(state)];
+    let Some(usage) = state.followed_usage() else {
+        return parts;
+    };
+    // The sums always cover the whole family, never only the rows on screen — so the
+    // family's size is stated whenever the two differ, which is exactly when a reader
+    // would otherwise attribute `cpu 7.3%` to the two rows a text filter left behind.
+    // When they are equal it is the same number twice, and the cells are better spent on
+    // the figures.
+    if usage.len() != state.rows().len() {
+        parts.push(format!("subtree of {}", usage.len()));
+    }
+    parts.push(format!("cpu {}", summed_percent(&usage.cpu)));
+    parts.push(format!(
+        "rss {}",
+        summed_bytes(&usage.rss_bytes, presentation.units())
+    ));
+    parts
+}
+
+/// A summed percentage, marked as a lower bound where the sum is incomplete.
+///
+/// `>=` rather than a footnote, because the alternative is a figure that reads as the
+/// whole answer when three of the family's twenty-four processes would not report their
+/// CPU. A lower bound is the honest form of a partial sum, and it needs no legend.
+fn summed_percent(summed: &Summed<Percent>) -> String {
+    let text = states::describe_percent(&summed.value)
+        .flagged()
+        .trim_start()
+        .to_owned();
+    prefix_bound(summed.is_partial(), text)
+}
+
+/// The same for a summed byte figure.
+fn summed_bytes(summed: &Summed<u64>, units: ByteUnits) -> String {
+    let text = states::describe_bytes(&summed.value, units)
+        .flagged()
+        .trim_start()
+        .to_owned();
+    prefix_bound(summed.is_partial(), text)
+}
+
+/// Marks `text` as a lower bound when the sum it came from was partial.
+fn prefix_bound(partial: bool, text: String) -> String {
+    if partial { format!(">={text}") } else { text }
+}
+
+/// §5.5's `218 total`, or `12 of 218 total` when the filter or the subtree scope is
+/// hiding rows.
 fn count_label(state: &AppState) -> String {
     let total = state
         .snapshot()

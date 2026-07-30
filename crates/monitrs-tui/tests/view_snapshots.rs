@@ -50,7 +50,7 @@ use monitrs_core::process::{ProcessSort, ProcessSortKey};
 use monitrs_core::units::Percent;
 use monitrs_tui::action::ViewId;
 use monitrs_tui::app::{AppSettings, AppState};
-use monitrs_tui::event::Event;
+use monitrs_tui::event::{Event, Key, KeyPress, TerminalEvent};
 use monitrs_tui::glyphs::GlyphSet;
 use monitrs_tui::theme::{ColorDepth, ThemeId};
 use monitrs_tui::views;
@@ -77,6 +77,8 @@ struct Fixture {
     health: Option<CollectorHealth>,
     /// Whether to freeze the timeline after the last sample (§2.1).
     paused: bool,
+    /// A PID whose subtree the table is scoped to (§6.2 `F`).
+    following: Option<u32>,
 }
 
 impl Fixture {
@@ -91,6 +93,7 @@ impl Fixture {
             sort: ProcessSort::descending(ProcessSortKey::Cpu),
             health: None,
             paused: false,
+            following: None,
         }
     }
 
@@ -121,6 +124,15 @@ impl Fixture {
 
     fn paused(mut self) -> Self {
         self.paused = true;
+        self
+    }
+
+    /// Follows `pid`'s subtree once the samples have arrived (§6.2 `F`).
+    ///
+    /// Recorded as a PID rather than an identity because that is what the palette takes,
+    /// and the start key is the snapshot's to supply.
+    fn following(mut self, pid: u32) -> Self {
+        self.following = Some(pid);
         self
     }
 
@@ -158,6 +170,12 @@ impl Fixture {
         if let Some(health) = self.health {
             let _ = monitrs_tui::app::apply(&mut state, Event::<()>::health(health));
         }
+        if let Some(pid) = self.following {
+            // Typed into the palette rather than set on the state, because that is the
+            // only way a user can reach it — and `followed` is private to the app module
+            // for exactly that reason.
+            type_command(&mut state, &format!("follow {pid}"));
+        }
         if self.paused {
             let _ = monitrs_tui::app::reduce(&mut state, monitrs_tui::action::Action::TogglePause);
         }
@@ -167,6 +185,18 @@ impl Fixture {
         state.record_render(at, Duration::from_millis(4));
         state
     }
+}
+
+/// Types a line into the command palette and submits it (§6.3).
+fn type_command(state: &mut AppState, line: &str) {
+    let mut press = |key: KeyPress| {
+        let _ = monitrs_tui::app::apply::<()>(state, Event::Terminal(TerminalEvent::Key(key)));
+    };
+    press(KeyPress::char(':'));
+    for character in line.chars() {
+        press(KeyPress::char(character));
+    }
+    press(KeyPress::plain(Key::Enter));
 }
 
 /// A scenario whose host name is far longer than any header (§17.3).
@@ -976,6 +1006,52 @@ fn the_inspect_screen_in_a_container() {
     let text = text_of(&frame(&state, ascii()));
     assert!(text.contains("cgroup limit"), "{text}");
     assert!(text.contains("heuristic"), "{text}");
+    insta::assert_snapshot!(text);
+}
+
+#[test]
+fn following_a_build_scopes_the_table_to_it() {
+    // §7.2's table, scoped to one family: `make` with two compilers and an assembler,
+    // out of a machine that also has a browser, a database and a window server.
+    let state = Fixture::new((140, 38), ViewId::Processes)
+        .with_scenario(Scenario::a_build())
+        .following(410)
+        .build();
+    let text = text_of(&frame(&state, ascii()));
+
+    assert!(text.contains("following 410"), "{text}");
+    // The `cc` whose CPU the OS refuses is still a member, so the summed CPU is a lower
+    // bound and is marked as one. A bare figure here would present three of four
+    // compilers as the whole family's cost (§4).
+    assert!(
+        text.contains("cpu >="),
+        "a partial sum must be marked as a lower bound:\n{text}"
+    );
+    assert!(
+        !text.contains("WindowServer"),
+        "the machine is out of scope"
+    );
+    insta::assert_snapshot!(text);
+}
+
+#[test]
+fn following_a_build_in_tree_mode_reroots_the_tree_on_the_followed_process() {
+    // The scope goes through the ordinary filter, so `ProcessTree` re-attaches the
+    // children of a hidden process to their nearest surviving ancestor — which for a
+    // subtree means the followed root becomes the root of what is drawn, rather than the
+    // family's rows being scattered at depth zero.
+    let state = Fixture::new((140, 38), ViewId::Processes)
+        .with_scenario(Scenario::a_build())
+        .with_tree(true)
+        .following(410)
+        .build();
+    let text = text_of(&frame(&state, ascii()));
+
+    assert!(text.contains("following 410"), "{text}");
+    assert!(
+        !text.contains("zsh"),
+        "the parent shell is not in the subtree"
+    );
     insta::assert_snapshot!(text);
 }
 

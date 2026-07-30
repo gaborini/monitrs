@@ -31,7 +31,7 @@
 use core::fmt;
 use std::borrow::Borrow;
 
-use crate::model::{MetricState, ProcessSnapshot, UserIdentity};
+use crate::model::{MetricState, ProcessIdentity, ProcessSnapshot, UserIdentity};
 
 /// A `u32` renders to at most ten decimal digits.
 const MAX_U32_DIGITS: usize = 10;
@@ -200,6 +200,21 @@ pub enum ProcessPredicate<'a> {
     OwnedBy(u32),
     /// The hide-kernel-threads toggle (Linux; §7.2).
     NotKernelThread,
+    /// Keep only the members of one followed subtree.
+    ///
+    /// The membership is computed once per snapshot, by [`SubtreeUsage`], and passed in
+    /// as a **sorted** slice: descendancy is not a property of a single row, so unlike
+    /// the other three predicates this one cannot be decided from the row alone.
+    ///
+    /// It is a predicate rather than a step applied after filtering so that the existing
+    /// machinery does the right thing for free — in tree mode
+    /// [`ProcessTree::from_snapshot_filtered`] re-attaches a hidden process's children to
+    /// their nearest surviving ancestor, which for a subtree means the followed root
+    /// becomes the root of what is drawn.
+    ///
+    /// [`SubtreeUsage`]: crate::process::SubtreeUsage
+    /// [`ProcessTree::from_snapshot_filtered`]: crate::process::ProcessTree::from_snapshot_filtered
+    InSubtree(&'a [ProcessIdentity]),
 }
 
 impl ProcessPredicate<'_> {
@@ -215,6 +230,10 @@ impl ProcessPredicate<'_> {
                 .displayable()
                 .is_some_and(|(identity, _)| identity.uid == *uid),
             Self::NotKernelThread => !process.is_kernel_thread,
+            // Binary search rather than a linear scan: this runs once per row per
+            // frame, and a followed subtree on a build host can hold hundreds of
+            // members out of thousands of processes.
+            Self::InSubtree(members) => members.binary_search(&process.identity).is_ok(),
         }
     }
 }
@@ -229,6 +248,13 @@ pub struct ProcessFilter {
     pattern: Option<FilterPattern>,
     only_user: Option<u32>,
     hide_kernel_threads: bool,
+    /// The followed subtree's members, sorted, when the view is scoped to one.
+    ///
+    /// Owned rather than borrowed because a `ProcessFilter` outlives any one snapshot,
+    /// and recomputed whenever the rows are rebuilt: a subtree's membership changes
+    /// every time the root forks or a child exits, so a cached set would show a
+    /// yesterday's family.
+    subtree: Option<Vec<ProcessIdentity>>,
 }
 
 impl ProcessFilter {
@@ -290,18 +316,50 @@ impl ProcessFilter {
         self.hide_kernel_threads
     }
 
+    /// Scopes the filter to one subtree's members, or lifts the scope with `None`.
+    ///
+    /// Sorts the membership, because [`ProcessPredicate::InSubtree`] binary-searches it
+    /// and an unsorted slice would silently drop rows rather than fail. Sorting here
+    /// rather than requiring it of the caller is the difference between an invariant and
+    /// a convention.
+    ///
+    /// An *empty* membership is kept, not discarded: a root that has exited has no
+    /// members, and the honest result is an empty table plus the notice that says why —
+    /// not the whole process list back, which would look like the scope silently lifting.
+    #[must_use]
+    pub fn with_subtree(mut self, members: Option<Vec<ProcessIdentity>>) -> Self {
+        self.subtree = members.map(|mut members| {
+            members.sort_unstable();
+            members
+        });
+        self
+    }
+
+    /// The followed subtree's members, if the view is scoped to one.
+    #[must_use]
+    pub fn subtree(&self) -> Option<&[ProcessIdentity]> {
+        self.subtree.as_deref()
+    }
+
     /// Whether anything is being filtered at all.
     ///
     /// The header shows a filter indicator only when this is true, so an inactive
     /// filter cannot look like a hidden reason for a short table.
     #[must_use]
     pub const fn is_active(&self) -> bool {
-        self.pattern.is_some() || self.only_user.is_some() || self.hide_kernel_threads
+        self.pattern.is_some()
+            || self.only_user.is_some()
+            || self.hide_kernel_threads
+            || self.subtree.is_some()
     }
 
     /// The active predicates, in a fixed order.
     pub fn predicates(&self) -> impl Iterator<Item = ProcessPredicate<'_>> {
         [
+            // Cheapest and most selective first: a subtree scope usually cuts the table
+            // to a handful of rows, and `all` short-circuits, so the text pattern is not
+            // run over three thousand processes to then discard them.
+            self.subtree.as_deref().map(ProcessPredicate::InSubtree),
             self.pattern.as_ref().map(ProcessPredicate::Text),
             self.only_user.map(ProcessPredicate::OwnedBy),
             self.hide_kernel_threads

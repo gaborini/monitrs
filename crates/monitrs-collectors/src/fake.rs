@@ -176,6 +176,13 @@ impl FakeProcess {
         }
     }
 
+    /// Sets the parent PID, which is what makes a scenario a *tree*.
+    #[must_use]
+    pub const fn with_parent(mut self, pid: u32) -> Self {
+        self.parent_pid = Some(pid);
+        self
+    }
+
     /// Sets the CPU pattern.
     #[must_use]
     pub const fn with_cpu(mut self, cpu: Pattern) -> Self {
@@ -448,6 +455,58 @@ impl Scenario {
             physical_cpus: 128,
             ..Self::default()
         }
+    }
+
+    /// A build under a shell: `make` with two compilers and one assembler beneath it.
+    ///
+    /// Three deliberate properties, because this is the fixture the subtree aggregation is
+    /// snapshotted against:
+    ///
+    /// * **The family is not contiguous in table order.** The unrelated processes sit
+    ///   between its members, so a scope that happened to keep a run of adjacent rows
+    ///   could not pass by accident.
+    /// * **It is three levels deep.** A subtree that only ever collected direct children
+    ///   would look right until `as` went missing.
+    /// * **One member's CPU is refused.** The summed figure is then a *lower* bound, which
+    ///   is the case §4 is about: a partial sum presented as the whole answer is worse
+    ///   than one marked as partial, and worse still than the zero a naive sum produces.
+    #[must_use]
+    pub fn a_build() -> Self {
+        let mut processes = vec![
+            FakeProcess::new(400, 400_000, "zsh", "-zsh").with_cpu(Pattern::Steady(0.2)),
+            FakeProcess::new(410, 410_000, "make", "make -j4")
+                .with_parent(400)
+                .with_cpu(Pattern::Steady(3.0))
+                .with_rss(48 * MIB),
+        ];
+        processes.push(
+            FakeProcess::new(411, 411_000, "cc", "cc -O2 -c parser.c")
+                .with_parent(410)
+                .with_cpu(Pattern::Steady(96.0))
+                .with_rss(212 * MIB),
+        );
+        // A compiler owned by another user, whose CPU the OS will not report. It is still
+        // a member, and it is still counted in the family's size.
+        processes.push(
+            FakeProcess::new(412, 412_000, "cc", "cc -O2 -c codegen.c")
+                .with_parent(410)
+                .with_cpu(Pattern::PermissionDenied)
+                .with_rss(198 * MIB)
+                .with_user("builder", 900),
+        );
+        processes.push(
+            FakeProcess::new(413, 413_000, "as", "as -o codegen.o")
+                .with_parent(412)
+                .with_cpu(Pattern::Steady(8.0))
+                .with_rss(21 * MIB),
+        );
+        let mut scenario = Self::default();
+        // Interleaved: the default scenario's processes first, then the family's, so the
+        // sort by CPU scatters them rather than grouping them.
+        let mut all = scenario.processes;
+        all.splice(2..2, processes);
+        scenario.processes = all;
+        scenario
     }
 
     /// A container: cgroup limits far below the host's, and an identity to name it.

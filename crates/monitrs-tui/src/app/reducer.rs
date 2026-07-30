@@ -204,6 +204,14 @@ pub fn reduce(state: &mut AppState, action: Action) -> Effects {
             None => Effects::new(),
         },
         Action::Pin(identity) => toggle_pin(state, identity),
+        Action::FollowSelected => match state.selected() {
+            Some(identity) => {
+                state.selection.confirm();
+                toggle_follow(state, identity)
+            }
+            None => Effects::new(),
+        },
+        Action::StopFollowing => stop_following(state),
 
         // ------------------------------------------------------------------ detail
         Action::RequestProcessDetail(identity) => request_detail(state, identity),
@@ -331,6 +339,10 @@ fn snapshot_arrived(state: &mut AppState, snapshot: Arc<SystemSnapshot>) -> Effe
 
     let mut effects = redraw();
     announce_pressure(state, alerts, &mut effects);
+    // A family whose common ancestor is gone is not the family the user asked to watch:
+    // the kernel gives the orphans to init, and continuing to sum them would report a
+    // build that finished as a build still running.
+    release_followed_root(state, &mut effects);
     // §15.1: an action waiting for confirmation must not survive the process it
     // targets. Revalidating here means the dialog disappears with a reason rather
     // than confirming into nothing.
@@ -676,6 +688,71 @@ fn apply_sort(state: &mut AppState, sort: ProcessSort) -> Effects {
 }
 
 /// `p`: pins or unpins by identity (§2.5).
+/// Resolves a typed PID to an identity in the newest sample, then follows it.
+///
+/// The start key comes from the snapshot rather than from the user, which is the whole
+/// reason the palette takes a bare PID: `ProcessIdentity` exists so that a recycled PID
+/// cannot be mistaken for the process that held it, and the only honest way to fill in
+/// the other half is to look it up now.
+///
+/// Two PIDs can never collide here — a PID is unique among live processes at any instant —
+/// so the first match is the only match.
+fn follow_pid(state: &mut AppState, pid: u32) -> Effects {
+    let identity = state
+        .latest
+        .as_deref()
+        .and_then(|snapshot| {
+            snapshot
+                .processes
+                .iter()
+                .find(|process| process.identity.pid == pid)
+        })
+        .map(|process| process.identity);
+    match identity {
+        Some(identity) => toggle_follow(state, identity),
+        None => refuse(
+            state,
+            Notice::watch(
+                NoticeKind::Interaction,
+                format!("no process {pid} in this sample"),
+            ),
+        ),
+    }
+}
+
+/// Follows `identity`'s subtree, or stops if it is already the followed root.
+///
+/// Refuses a root that is not in the current snapshot rather than accepting it and
+/// showing an empty table: an identity the user could not have selected from this
+/// snapshot came from somewhere else — a palette command, a stale row — and "6 of 218"
+/// silently becoming "0 of 218" is the kind of empty screen §4 exists to prevent.
+fn toggle_follow(state: &mut AppState, identity: ProcessIdentity) -> Effects {
+    if state.followed == Some(identity) {
+        return stop_following(state);
+    }
+    if state.followed_root_is_gone(identity) {
+        return refuse(
+            state,
+            Notice::watch(
+                NoticeKind::Interaction,
+                format!("{} is not in this sample; nothing to follow", identity.pid),
+            ),
+        );
+    }
+    state.followed = Some(identity);
+    let _ = state.resync_rows();
+    redraw()
+}
+
+/// Lifts the subtree scope. A no-op, with no redraw, when nothing was followed.
+fn stop_following(state: &mut AppState) -> Effects {
+    if state.followed.take().is_none() {
+        return Effects::new();
+    }
+    let _ = state.resync_rows();
+    redraw()
+}
+
 fn toggle_pin(state: &mut AppState, identity: ProcessIdentity) -> Effects {
     if let Some(index) = state.pins.iter().position(|pin| *pin == identity) {
         let _ = state.pins.remove(index);
@@ -869,6 +946,9 @@ fn submit_command(state: &mut AppState) -> Effects {
 fn run_command(state: &mut AppState, command: Command) -> Effects {
     match command {
         Command::ChangeView(view) => change_view(state, view),
+        Command::Follow(None) => reduce(state, Action::FollowSelected),
+        Command::Follow(Some(pid)) => follow_pid(state, pid),
+        Command::Unfollow => stop_following(state),
         Command::Sort(field) => set_sort(state, field),
         Command::Filter(text) => set_filter(state, text),
         Command::Interval(interval) => set_interval(state, interval),
@@ -1129,6 +1209,32 @@ fn revalidate_pending(state: &mut AppState, effects: &mut Effects) {
     if let Some(refusal) = revalidate(state, stage.identity()) {
         merge(effects, refusal);
     }
+}
+
+/// Stops following a root that this snapshot no longer contains, and says so.
+///
+/// Silence would be the worse failure. The table would empty out with an intact
+/// `following 31842 rustc` in its title and no reason on the screen, which reads as the
+/// monitor losing the processes rather than as the build finishing — and the user's next
+/// move would be to distrust the whole table (§4, §26).
+///
+/// Driven by the live snapshot, like the pressure announcements above and for the same
+/// reason: §2.1 freezes the display, not collection, and a scrubbed timeline must not
+/// defer this until `L` and then deliver it as news.
+fn release_followed_root(state: &mut AppState, effects: &mut Effects) {
+    let Some(root) = state.followed() else {
+        return;
+    };
+    if !state.followed_root_is_gone(root) {
+        return;
+    }
+    state.followed = None;
+    let _ = state.resync_rows();
+    state.notify(Notice::info(
+        NoticeKind::Interaction,
+        format!("stopped following {}: the process has exited", root.pid),
+    ));
+    merge(effects, redraw());
 }
 
 /// Forgets everything cached about a process that has gone.
@@ -1680,6 +1786,226 @@ mod tests {
                 .iter()
                 .any(|notice| notice.message.contains("pinned")),
             "the refusal is explained"
+        );
+    }
+
+    // ---------------------------------------------------------- following a subtree
+
+    /// A build: `make` under the shell, two `cc` under `make`, and one grandchild.
+    ///
+    /// Interleaved with unrelated processes in table order on purpose, so a scope that
+    /// happened to keep a contiguous run of rows could not pass by accident.
+    fn family() -> Vec<Fake> {
+        vec![
+            Fake::new(400, 400_000, "zsh").parent(1).cpu(0.2),
+            Fake::new(410, 410_000, "make")
+                .parent(400)
+                .command("make -j4")
+                .cpu(3.0),
+            Fake::new(507, 100_010, "WindowServer").cpu(21.0),
+            Fake::new(411, 411_000, "cc").parent(410).cpu(96.0),
+            Fake::new(9_182, 850_300, "node").cpu(12.0),
+            Fake::new(412, 412_000, "cc").parent(410).cpu(92.0),
+            Fake::new(413, 413_000, "as").parent(412).cpu(8.0),
+            Fake::new(1, 1, "launchd").cpu(0.1),
+        ]
+    }
+
+    /// The same build, but it finishes: every member is gone from sample 2 on.
+    fn family_that_finishes() -> Vec<Fake> {
+        family()
+            .into_iter()
+            .map(|process| match process.identity_at(1).map(|id| id.pid) {
+                Some(410..=413) => process.exiting_at(2),
+                _ => process,
+            })
+            .collect()
+    }
+
+    /// Moves the selection onto `pid`'s row the way the arrow keys would.
+    fn select_pid(state: &mut AppState, pid: u32) {
+        let index = state
+            .rows()
+            .as_slice()
+            .iter()
+            .position(|row| row.identity.pid == pid)
+            .expect("the process is in the table");
+        let _ = reduce(state, Action::SelectFirst);
+        for _ in 0..index {
+            let _ = reduce(state, Action::SelectNext);
+        }
+        assert_eq!(state.selected().map(|identity| identity.pid), Some(pid));
+    }
+
+    /// Presses `F` on `pid`'s row, which is the whole user-facing path.
+    fn follow(state: &mut AppState, pid: u32) {
+        select_pid(state, pid);
+        let _ = reduce(state, Action::FollowSelected);
+    }
+
+    fn visible_pids(state: &AppState) -> Vec<u32> {
+        let mut pids: Vec<u32> = state
+            .rows()
+            .as_slice()
+            .iter()
+            .map(|row| row.identity.pid)
+            .collect();
+        pids.sort_unstable();
+        pids
+    }
+
+    #[test]
+    fn following_a_process_scopes_the_table_to_it_and_its_descendants() {
+        let mut state = state();
+        deliver(&mut state, 1, &family());
+        follow(&mut state, 410);
+
+        assert_eq!(
+            visible_pids(&state),
+            vec![410, 411, 412, 413],
+            "the root and every descendant, and nothing else"
+        );
+        assert_eq!(state.followed().map(|root| root.pid), Some(410));
+        // The shell that launched it is not part of the family being watched: a subtree
+        // goes downwards, and including the parent would drag in the login session.
+        assert!(!visible_pids(&state).contains(&400));
+    }
+
+    #[test]
+    fn following_the_same_process_twice_shows_everything_again() {
+        let mut state = state();
+        deliver(&mut state, 1, &family());
+        follow(&mut state, 410);
+        assert_eq!(state.rows().len(), 4);
+
+        follow(&mut state, 410);
+        assert_eq!(state.rows().len(), family().len(), "the scope is lifted");
+        assert!(state.followed().is_none());
+    }
+
+    #[test]
+    fn the_subtree_sums_what_the_whole_family_is_using() {
+        let mut state = state();
+        deliver(&mut state, 1, &family());
+        follow(&mut state, 410);
+
+        let usage = state.followed_usage().expect("a followed root");
+        assert_eq!(usage.len(), 4);
+        // 3 + 96 + 92 + 8: the figure that is on no row, which is the point.
+        let cpu = usage
+            .cpu
+            .value
+            .fresh()
+            .copied()
+            .expect("every member reported");
+        assert!((cpu.value() - 199.0).abs() < 0.01, "{cpu}");
+        assert!(!usage.cpu.is_partial(), "nothing was missing");
+    }
+
+    #[test]
+    fn a_followed_root_that_exits_releases_the_scope_and_says_so() {
+        let mut state = state();
+        let processes = family_that_finishes();
+        deliver(&mut state, 1, &processes);
+        follow(&mut state, 410);
+        assert_eq!(state.rows().len(), 4);
+
+        deliver(&mut state, 2, &processes);
+
+        assert!(state.followed().is_none(), "the scope is lifted");
+        assert!(
+            state.rows().len() > 1,
+            "the table is not left showing nothing"
+        );
+        assert!(
+            state.notices().iter().any(|notice| {
+                notice.message.contains("stopped following") && notice.message.contains("exited")
+            }),
+            "silence here reads as the monitor losing the processes: {:?}",
+            state
+                .notices()
+                .iter()
+                .map(|notice| notice.message.clone())
+                .collect::<Vec<_>>()
+        );
+    }
+
+    #[test]
+    fn a_followed_root_survives_a_sample_that_only_loses_its_children() {
+        // The build's last compiler exits; `make` is still there and still worth
+        // watching. Releasing the scope on any membership change would make following a
+        // build useless, because a build's membership changes constantly.
+        let mut state = state();
+        let processes: Vec<Fake> = family()
+            .into_iter()
+            .map(|process| match process.identity_at(1).map(|id| id.pid) {
+                Some(411..=413) => process.exiting_at(2),
+                _ => process,
+            })
+            .collect();
+        deliver(&mut state, 1, &processes);
+        follow(&mut state, 410);
+
+        deliver(&mut state, 2, &processes);
+
+        assert_eq!(state.followed().map(|root| root.pid), Some(410));
+        assert_eq!(visible_pids(&state), vec![410], "the root, alone for now");
+    }
+
+    #[test]
+    fn following_a_process_that_is_not_in_the_sample_is_refused() {
+        let mut state = state();
+        deliver(&mut state, 1, &family());
+
+        let effects = run_command(&mut state, Command::Follow(Some(4_242)));
+
+        assert!(state.followed().is_none());
+        assert!(!effects.is_empty(), "a refusal still redraws its notice");
+        assert!(
+            state
+                .notices()
+                .iter()
+                .any(|notice| notice.message.contains("no process 4242")),
+            "the refusal names the PID it could not find"
+        );
+    }
+
+    #[test]
+    fn the_palette_can_follow_a_pid_and_lift_the_scope() {
+        let mut state = state();
+        deliver(&mut state, 1, &family());
+
+        let _ = run_command(&mut state, Command::Follow(Some(410)));
+        assert_eq!(state.followed().map(|root| root.pid), Some(410));
+        // The start key came from the snapshot, not from the user: a PID alone is not an
+        // identity, and looking it up now is the only honest way to fill in the rest.
+        assert_eq!(state.followed().map(|root| root.start_key), Some(410_000));
+
+        let _ = run_command(&mut state, Command::Unfollow);
+        assert!(state.followed().is_none());
+    }
+
+    #[test]
+    fn unfollowing_when_nothing_is_followed_does_nothing_at_all() {
+        let mut state = state();
+        deliver(&mut state, 1, &family());
+        assert!(
+            reduce(&mut state, Action::StopFollowing).is_empty(),
+            "no redraw for a no-op"
+        );
+    }
+
+    #[test]
+    fn a_text_filter_composes_with_the_subtree_scope() {
+        let mut state = state();
+        deliver(&mut state, 1, &family());
+        follow(&mut state, 410);
+
+        let _ = reduce(&mut state, Action::SetFilter("cc".to_owned()));
+        assert_eq!(
+            visible_pids(&state),
+            vec![411, 412],
+            "both scopes apply, not whichever was set last"
         );
     }
 

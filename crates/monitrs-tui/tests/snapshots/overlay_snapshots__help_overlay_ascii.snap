@@ -2,7 +2,7 @@
 source: crates/monitrs-tui/tests/overlay_snapshots.rs
 expression: text_of(&buffer)
 ---
-|                   + HELP ------------------------------------------- 1-38 of 45 ---+                   |
+|                   + HELP ------------------------------------------- 1-38 of 46 ---+                   |
 |                   |Global                                                          |                   |
 |                   | q                  Quit                                        |                   |
 |                   | Ctrl-C             Quit safely from any mode                   |                   |
@@ -38,7 +38,7 @@ expression: text_of(&buffer)
 |                   | S                  Reverse the current sort                    |                   |
 |                   | p                  Pin or unpin the selected process           |                   |
 |                   | f                  Toggle flat and tree process views          |                   |
+|                   | F                  Follow the selected process tree            |                   |
 |                   |Time Lens                                                       |                   |
 |                   | [                  Step one sample back                        |                   |
-|                   | ]                  Step one sample forward                     |                   |
 |                   +----------------------------------------------------------------+                   |

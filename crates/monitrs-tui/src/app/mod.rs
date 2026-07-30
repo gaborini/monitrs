@@ -76,7 +76,7 @@ use monitrs_core::history::{HistoryConfig, HistoryRing};
 use monitrs_core::model::{
     CollectorHealth, ProcessDetail, ProcessIdentity, ProcessSnapshot, SystemSnapshot,
 };
-use monitrs_core::process::{ProcessFilter, ProcessSort};
+use monitrs_core::process::{ProcessFilter, ProcessSort, SubtreeUsage};
 use monitrs_core::units::ByteUnits;
 use ratatui::layout::Rect;
 
@@ -336,6 +336,12 @@ pub struct AppState {
     pub(in crate::app) rows: ProcessRows,
     pub(in crate::app) selection: Selection,
     pub(in crate::app) pins: Vec<ProcessIdentity>,
+    /// The subtree root the table is scoped to (§6.2 `F`), if any.
+    ///
+    /// One root, not a set: "what is this build costing me" is a question about one
+    /// family at a time, and following several at once would produce a table whose rows
+    /// belong to unrelated trees with no way to tell which.
+    pub(in crate::app) followed: Option<ProcessIdentity>,
 
     // ---- presentation ----
     pub(in crate::app) display: DisplaySettings,
@@ -417,6 +423,7 @@ impl AppState {
             rows: ProcessRows::empty(),
             selection: Selection::new(),
             pins: Vec::new(),
+            followed: None,
             display,
             env,
             resolver: KeyResolver::with_timeout(keymap, sequence_timeout),
@@ -907,13 +914,78 @@ impl AppState {
     /// The single place rows are built, so the §7.2 stability rules cannot be
     /// bypassed by a code path that forgot to call them.
     pub(in crate::app) fn resync_rows(&mut self) -> Resync {
-        self.rows = ProcessRows::build(
-            self.displayed.as_deref(),
-            &self.filter,
-            self.sort,
-            self.tree_mode,
-        );
+        // The subtree scope is applied to a *copy* of the filter rather than stored in
+        // it, because membership changes every time the followed root forks or a child
+        // exits: the compiled filter is what the user typed, and a set of identities
+        // cached alongside it would be a yesterday's family. Computed here, at the one
+        // place rows are built, so it cannot go stale relative to the rows.
+        let members = self.followed_members();
+        self.rows = match members {
+            Some(members) => ProcessRows::build(
+                self.displayed.as_deref(),
+                &self.filter.clone().with_subtree(Some(members)),
+                self.sort,
+                self.tree_mode,
+            ),
+            None => ProcessRows::build(
+                self.displayed.as_deref(),
+                &self.filter,
+                self.sort,
+                self.tree_mode,
+            ),
+        };
         self.selection.resync(&self.rows)
+    }
+
+    /// The followed subtree's members against the displayed snapshot.
+    ///
+    /// `None` when nothing is being followed, or before the first snapshot. `Some` of an
+    /// **empty** vector when the root is gone from this snapshot — an empty table with
+    /// the notice that says why, rather than the whole process list back, which would
+    /// read as the scope silently lifting.
+    ///
+    /// Against `displayed`, not `latest`: while the Time Lens is scrubbed the table shows
+    /// a retained sample, and scoping it by a membership computed from the live one would
+    /// hide rows that are on the screen the user is looking at (§2.1).
+    fn followed_members(&self) -> Option<Vec<ProcessIdentity>> {
+        let root = self.followed?;
+        let snapshot = self.displayed.as_deref()?;
+        Some(
+            SubtreeUsage::of(snapshot, root)
+                .map(|usage| usage.members)
+                .unwrap_or_default(),
+        )
+    }
+
+    /// The subtree root the table is scoped to (§6.2 `F`), if any.
+    #[must_use]
+    pub const fn followed(&self) -> Option<ProcessIdentity> {
+        self.followed
+    }
+
+    /// Whether `root` is absent from the newest sample.
+    ///
+    /// Against `latest` rather than `displayed`, because this decides whether to *stop*
+    /// following: a scrubbed timeline showing a five-minute-old sample would otherwise
+    /// keep a root alive long after it exited, and then drop it at the moment the user
+    /// pressed `L`. Answers `false` before the first snapshot — nothing is known to be
+    /// gone when nothing is known at all (§4).
+    #[must_use]
+    pub fn followed_root_is_gone(&self, root: ProcessIdentity) -> bool {
+        self.latest
+            .as_deref()
+            .is_some_and(|snapshot| !snapshot.processes.iter().any(|p| p.identity == root))
+    }
+
+    /// What the followed subtree is currently costing, against the displayed snapshot.
+    ///
+    /// `None` when nothing is followed or the root has exited. The sums carry their own
+    /// coverage, so a renderer can say "at least this much" where a member's figures
+    /// could not be read (§4).
+    #[must_use]
+    pub fn followed_usage(&self) -> Option<SubtreeUsage> {
+        let root = self.followed?;
+        SubtreeUsage::of(self.displayed.as_deref()?, root)
     }
 
     /// Replaces the filter text and recompiles the filter.

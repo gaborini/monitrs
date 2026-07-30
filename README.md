@@ -189,7 +189,7 @@ Full, always-current help is generated from the live keymap: press `?`.
 |---|---|
 | `q`, `Ctrl-C` | Quit |
 | `?` | Context-aware help |
-| `1`–`5` | Overview / Processes / Storage / Network / Inspect |
+| `1`–`7` | Overview / Processes / CPU / Storage / Network / Inspect / Battery |
 | `Tab`, `Shift-Tab` | Next / previous panel |
 | `Space` | Pause or resume the visible timeline |
 | `[` `]` | Step back / forward through history |
@@ -198,6 +198,7 @@ Full, always-current help is generated from the live keymap: press `?`.
 | `n` `N` | Next / previous match |
 | `s` `S` | Sort selector / reverse sort |
 | `f` | Toggle flat and tree view |
+| `F` | Follow the selected process tree |
 | `p` | Pin or unpin the selected process |
 | `Enter` | Inspect the selected item |
 | `x` | Signal dialog for the selected process |

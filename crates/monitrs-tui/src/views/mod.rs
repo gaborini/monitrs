@@ -955,6 +955,35 @@ pub(crate) fn draw_bordered_panel(
     inner
 }
 
+/// As many of `parts` as fit beside `title` in a panel's trailing label, in order.
+///
+/// [`Panel`] drops its trailing label *whole* rather than truncating it, which is right
+/// for a count and wrong for a sentence: at 80 columns the full text does not fit, and
+/// without this the parts that *would* have fitted vanish along with the one that
+/// overflowed. So they are fitted here in priority order, and a part that does not fit
+/// ends the label rather than letting a shorter one behind it jump the queue (§5.4).
+///
+/// Deliberately pessimistic about the chrome: a part dropped one cell early costs a
+/// clause, while one kept a cell too late costs the whole label.
+pub(crate) fn fit_label(parts: &[String], title: &str, panel_width: u16) -> String {
+    // The corners, the rule either side of the title, and the three cells the panel
+    // keeps before its right corner.
+    let chrome = display_width(title) + 10;
+    let room = usize::from(panel_width).saturating_sub(chrome);
+    let mut out = String::new();
+    for part in parts {
+        let separator = if out.is_empty() { 0 } else { 2 };
+        if display_width(&out) + separator + display_width(part) > room {
+            break;
+        }
+        if separator > 0 {
+            out.push_str(", ");
+        }
+        out.push_str(part);
+    }
+    out
+}
+
 /// The rectangle a panel with `borders` would leave inside `area`, without drawing.
 ///
 /// Screens need the interior height *before* the panel is drawn, because the
