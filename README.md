@@ -261,8 +261,12 @@ Full, always-current help is generated from the live keymap: press `?`.
 | `?` | Context-aware help |
 | `1`–`7` | Overview / Processes / CPU / Storage / Network / Inspect / Battery |
 | `Tab`, `Shift-Tab` | Next / previous panel |
+| `j` `k`, `Down` `Up` | Next / previous row |
+| `Ctrl-D` `Ctrl-U` | Page down / up |
+| `gg` `G`, `Home` `End` | First / last row |
 | `Space` | Pause or resume the visible timeline |
-| `[` `]` | Step back / forward through history |
+| `[` `]` | Step back / forward one sample |
+| `{` `}` | Leap back / forward through history |
 | `L` | Return to live |
 | `/` | Filter |
 | `n` `N` | Next / previous match |
@@ -272,15 +276,23 @@ Full, always-current help is generated from the live keymap: press `?`.
 | `p` | Pin or unpin the selected process |
 | `Enter` | Inspect the selected item |
 | `x` | Signal dialog for the selected process |
-| `:` | Command palette |
+| `y` | Confirm the pending action |
+| `Y` | Confirm a *forceful* action — `SIGKILL` accepts only this |
+| `:` | Command palette (§6.3) |
 | `t` `g` | Cycle theme / glyph mode |
 | `r` | Force refresh |
 | `Esc` | Close overlay or cancel |
 
+The palette is not only a second way to press a key. Thirteen commands live there, and
+three of them have no key at all: `follow <pid>` and `unfollow` for the subtree scope, and
+`export snapshot <path>`. The others set the view, sort, filter, sample interval, history
+span, theme, glyphs and colour depth, show the configuration path, and reload it. Type `:`
+and the list appears; it narrows as you type and completes towards the highlighted entry.
+
 `T`, `K`, and `R` *propose* SIGTERM, SIGKILL, and renice. None of them acts on a
 single keypress; each opens a confirmation showing the process identity and the
-consequences, and the forceful ones want a distinct key rather than `Enter`, so
-leaning on the confirm key cannot escalate. The identity is rechecked immediately
+consequences, and the forceful ones want `Y` rather than the `y` that confirms everything
+else, so leaning on the confirm key cannot escalate. The identity is rechecked immediately
 before the write: a PID that was reused between the dialog and the confirmation is
 refused rather than acted on.
 
@@ -296,7 +308,26 @@ monitrs config check    # validate without launching
 ```
 
 CLI flags override file values. See
-[`docs/configuration.md`](docs/configuration.md) for every key.
+[`docs/configuration.md`](docs/configuration.md) for every key — including
+`diagnostics.bell_on_critical`, off by default, which rings the terminal bell once when a
+pressure signal escalates into critical.
+
+## Scripting: one snapshot, as JSON
+
+```sh
+monitrs snapshot --format json
+```
+
+Takes one sample, prints it, exits. Every metric carries its own availability, so a field
+your machine cannot produce reads `"unsupported"` or `"permission_denied"` rather than `0` —
+the same rule the interface follows, in a form a script can branch on.
+
+The payload starts with `"schema_version"`, and that number is a promise: it is bumped
+whenever a field is **removed** or its meaning changes, so a consumer can refuse an export it
+does not understand instead of misreading it. It is `2` as of 0.2.0, and
+[`CHANGELOG.md`](CHANGELOG.md) says exactly which fields moved and why. Command lines are
+redacted by default; nothing in the export contains an environment variable, because the
+model has no field for one.
 
 ## A warning about metrics
 
