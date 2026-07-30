@@ -26,7 +26,15 @@ use std::time::{Duration, Instant, SystemTime};
 
 use criterion::{BenchmarkId, Criterion, Throughput, criterion_group, criterion_main};
 use monitrs_collectors::fake::{Pattern, Scenario};
+use monitrs_collectors::linux::diskstats::parse_diskstats;
+use monitrs_collectors::linux::loadavg::parse_loadavg;
+use monitrs_collectors::linux::meminfo::parse_meminfo;
+use monitrs_collectors::linux::netdev::parse_net_dev;
+use monitrs_collectors::linux::process::{parse_pid_io, parse_pid_stat, parse_pid_status};
+use monitrs_collectors::linux::psi::parse_pressure;
+use monitrs_collectors::linux::stat::parse_proc_stat;
 use monitrs_collectors::{DueTiers, FakeCollector, SampleTick, SnapshotSource as _};
+use monitrs_core::diagnostics::{PressureEngine, Thresholds};
 use monitrs_core::history::{
     ContributorSet, HistoryConfig, HistoryLimits, HistoryMetric, HistoryRing, HistoryView,
     RecordOutcome,
@@ -34,10 +42,14 @@ use monitrs_core::history::{
 use monitrs_core::model::ProcessIdentity;
 use monitrs_core::process::{ProcessFilter, ProcessSort, ProcessSortKey, ProcessTree};
 use monitrs_core::rates::{CounterTracker, CounterWidth, KeyedRateTrackers};
+use monitrs_core::units::Percent;
 use monitrs_core::units::{
     ByteUnits, format_age, format_byte_rate, format_bytes_compact, pad_left,
 };
 use monitrs_core::{MetricState, SystemSnapshot};
+use monitrs_tui::glyphs::GlyphSet;
+use monitrs_tui::theme::{ColorDepth, ThemeId};
+use monitrs_tui::widgets::{Meter, Presentation, Sparkline};
 
 /// The §16.1 reference process count.
 const REFERENCE_PROCESSES: usize = 200;
@@ -473,6 +485,183 @@ fn bench_sample(c: &mut Criterion) {
     group.finish();
 }
 
+// ---------------------------------------------------------------------- §16.3
+// The three items §16.3 names that had no benchmark: ASCII and Unicode graph
+// generation, Linux fixture parsing, and diagnostic-rule evaluation.
+
+/// A plottable series of `count` samples, shaped like a real one.
+///
+/// Every fourth sample is unavailable, because a sparkline's cost depends on how
+/// often it has to draw the gap marker rather than a bar, and a series that is
+/// entirely available would measure the cheap half only (§4).
+fn plot_series(count: usize) -> Vec<MetricState<Percent>> {
+    (0..count)
+        .map(|index| {
+            if index % 4 == 3 {
+                MetricState::WarmingUp
+            } else {
+                let magnitude = (index % 100) as f32;
+                MetricState::Available(Percent::new(magnitude).unwrap_or(Percent::ZERO))
+            }
+        })
+        .collect()
+}
+
+/// §16.3: ASCII and Unicode graph generation.
+///
+/// Both glyph modes, because Unicode's eighth-block ramp has eight levels against
+/// ASCII's five and the two take different paths through the ramp lookup — and §5.1
+/// makes ASCII a first-class mode rather than a fallback, so its cost matters just as
+/// much.
+fn bench_graphs(c: &mut Criterion) {
+    let mut group = c.benchmark_group("graphs");
+    let theme = ThemeId::DefaultDark.theme();
+    let series = plot_series(300);
+
+    for (mode, glyphs) in [
+        ("ascii", GlyphSet::ascii()),
+        ("unicode", GlyphSet::unicode()),
+    ] {
+        let presentation = Presentation::new(glyphs, theme, ColorDepth::TrueColor);
+        for width in [40u16, 96, 160] {
+            group.throughput(Throughput::Elements(u64::from(width)));
+            group.bench_with_input(
+                BenchmarkId::new(format!("sparkline_{mode}"), width),
+                &width,
+                |b, &width| {
+                    b.iter(|| {
+                        black_box(
+                            Sparkline::new(presentation, &series)
+                                .with_label("CPU")
+                                .with_label_width(6)
+                                .line(width),
+                        )
+                    });
+                },
+            );
+            group.bench_with_input(
+                BenchmarkId::new(format!("meter_{mode}"), width),
+                &width,
+                |b, &width| {
+                    let value = MetricState::Available(
+                        Percent::new(63.5).expect("63.5 is a valid percentage"),
+                    );
+                    b.iter(|| {
+                        black_box(
+                            Meter::new(presentation, value)
+                                .with_label("MEM")
+                                .line(width),
+                        )
+                    });
+                },
+            );
+        }
+    }
+    group.finish();
+}
+
+/// The sanitized Linux fixtures, embedded so a renamed one is a compile error.
+///
+/// The same files the parser tests read, reached by path rather than through the
+/// library's own `cfg(test)` fixture module — a benchmark is not a test build, so it
+/// cannot see that module. §17.2's property survives either way: delete a fixture and
+/// this stops compiling.
+mod fixtures {
+    macro_rules! fixture {
+        ($name:ident => $path:literal) => {
+            pub(super) const $name: &[u8] = include_bytes!(concat!(
+                env!("CARGO_MANIFEST_DIR"),
+                "/../monitrs-collectors/fixtures/linux/",
+                $path
+            ));
+        };
+    }
+
+    fixture!(PROC_STAT => "cases/proc_stat/typical.txt");
+    fixture!(MEMINFO => "cases/meminfo/typical.txt");
+    fixture!(DISKSTATS => "cases/diskstats/typical.txt");
+    fixture!(NET_DEV => "cases/net_dev/typical.txt");
+    fixture!(LOADAVG => "cases/loadavg/typical.txt");
+    fixture!(PRESSURE => "cases/pressure/cpu_with_full.txt");
+    fixture!(PID_STAT => "cases/pid_stat/simple.txt");
+    fixture!(PID_STAT_PARENS => "cases/pid_stat/parens_and_spaces_in_name.txt");
+    fixture!(PID_STATUS => "cases/pid_status/typical.txt");
+    fixture!(PID_IO => "cases/pid_io/typical.txt");
+}
+
+/// §16.3: Linux fixture parsing.
+///
+/// Runs on every platform, which is the point of every parser taking bytes rather
+/// than a path: the cost of reading `/proc` is the kernel's, and the cost of parsing
+/// what it returned is ours, and only the second one is a number we can act on.
+///
+/// `pid_stat` appears twice on purpose. The parenthesised-name case is the one that
+/// cannot be split on whitespace — the process name may contain spaces and brackets —
+/// so it takes the scan-from-the-right path, and a per-process parser is run once per
+/// process per tick.
+fn bench_linux_parsers(c: &mut Criterion) {
+    let mut group = c.benchmark_group("linux_parsers");
+
+    macro_rules! case {
+        ($name:literal, $bytes:expr, $parse:expr) => {{
+            let bytes: &[u8] = $bytes;
+            group.throughput(Throughput::Bytes(bytes.len() as u64));
+            group.bench_function($name, |b| b.iter(|| black_box($parse(black_box(bytes)))));
+        }};
+    }
+
+    case!("proc_stat", fixtures::PROC_STAT, parse_proc_stat);
+    case!("meminfo", fixtures::MEMINFO, parse_meminfo);
+    case!("diskstats", fixtures::DISKSTATS, parse_diskstats);
+    case!("net_dev", fixtures::NET_DEV, parse_net_dev);
+    case!("loadavg", fixtures::LOADAVG, parse_loadavg);
+    case!("pressure", fixtures::PRESSURE, parse_pressure);
+    case!("pid_stat", fixtures::PID_STAT, parse_pid_stat);
+    case!("pid_stat_parens", fixtures::PID_STAT_PARENS, parse_pid_stat);
+    case!("pid_status", fixtures::PID_STATUS, parse_pid_status);
+    case!("pid_io", fixtures::PID_IO, parse_pid_io);
+
+    group.finish();
+}
+
+/// §16.3: diagnostic-rule evaluation.
+///
+/// Measured on a *warm* engine, because a cold one short-circuits: every tracker
+/// returns warming up until its window fills, which skips the comparison work the
+/// rules actually do (§11.3). The engine is therefore fed the full sustained window
+/// before the timed loop starts.
+///
+/// Also measured at 10,000 processes, even though no rule iterates the process table —
+/// so that the number can be *shown* not to scale with it, which is the interesting
+/// property rather than an assumption.
+fn bench_diagnostics(c: &mut Criterion) {
+    let mut group = c.benchmark_group("diagnostics");
+
+    for processes in [REFERENCE_PROCESSES, HIGH_LOAD_PROCESSES] {
+        let series = snapshots(processes, 40);
+        group.bench_with_input(
+            BenchmarkId::new("observe_one_snapshot", processes),
+            &processes,
+            |b, _| {
+                let mut engine = PressureEngine::new(Thresholds::default());
+                // Warm past the sustained window so the timed observation does the
+                // full comparison rather than returning warming up.
+                for snapshot in series.iter().take(20) {
+                    let _ = engine.observe(snapshot);
+                }
+                let mut next = 20usize;
+                b.iter(|| {
+                    let snapshot = &series[next % series.len()];
+                    next = next.wrapping_add(1);
+                    black_box(engine.observe(black_box(snapshot)))
+                });
+            },
+        );
+    }
+
+    group.finish();
+}
+
 criterion_group!(
     benches,
     bench_rates,
@@ -480,6 +669,9 @@ criterion_group!(
     bench_contributors,
     bench_process_list,
     bench_formatting,
-    bench_sample
+    bench_sample,
+    bench_graphs,
+    bench_linux_parsers,
+    bench_diagnostics
 );
 criterion_main!(benches);

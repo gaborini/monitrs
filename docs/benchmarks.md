@@ -25,7 +25,14 @@ modest 8-CPU laptop, so treat these as a lower bound on real-world cost.
 
 ```sh
 cargo bench -p monitrs --bench pipeline
+
+# One group at a time, which is what you want while changing something:
+cargo bench -p monitrs --bench pipeline -- linux_parsers
 ```
+
+The end-to-end §16.1 numbers further down come from two different commands, named in
+that section: they need the live collector and the assembled renderer, which a
+criterion benchmark is the wrong shape for.
 
 The run below used shortened sampling for turnaround:
 
@@ -136,6 +143,65 @@ no OS reads. It is a floor for the sampling loop, not a prediction of it: the
 live `sysinfo` collector's cost is dominated by reading `/proc` or calling
 `sysctl`, which this cannot model.
 
+### Graph generation
+
+Both glyph modes, at three widths, drawing one row of a series where every fourth
+sample is unavailable — the gap marker is a different path from a bar, and a series
+that was entirely available would measure the cheap half only (§4).
+
+| Benchmark | 40 cells | 96 cells | 160 cells |
+|---|---:|---:|---:|
+| `sparkline_ascii` | 586 ns | 952 ns | 1.37 µs |
+| `sparkline_unicode` | 755 ns | 1.40 µs | 2.14 µs |
+| `meter_ascii` | 565 ns | 756 ns | 1.03 µs |
+| `meter_unicode` | 749 ns | 1.32 µs | 2.01 µs |
+
+Unicode costs about 1.5× ASCII, which is the eighth-block ramp having eight levels
+against ASCII's five and a multi-byte character per cell. §5.1 makes ASCII a
+first-class mode rather than a fallback, so the interesting number is that neither is
+expensive: an Overview draws six of these, about 13 µs, against a measured 200 µs
+frame.
+
+### Linux fixture parsing
+
+Per call, against the sanitized `typical` fixture for each file. These run on macOS —
+every parser takes bytes rather than a path, so the kernel's cost of *producing*
+`/proc` is not measured here and the parser's cost of consuming it is.
+
+| Benchmark | Time | Bytes |
+|---|---:|---|
+| `loadavg` | 36 ns | one line |
+| `pid_io` | 118 ns | per process |
+| `pressure` | 144 ns | PSI, one resource |
+| `pid_stat` | 393 ns | per process |
+| `pid_stat_parens` | 383 ns | per process, name with spaces and brackets |
+| `proc_stat` | 481 ns | all cores |
+| `pid_status` | 620 ns | per process |
+| `net_dev` | 956 ns | all interfaces |
+| `diskstats` | 994 ns | all devices |
+
+Two things worth reading off this. The three per-process parsers together are about
+1.1 µs, so a thousand processes cost about 1.1 ms of *parsing* per tick — against tens
+of milliseconds for the reads that feed them. And `pid_stat_parens` is not slower than
+`pid_stat`: the case that cannot be split on whitespace, because a process name may
+contain spaces and brackets, takes the scan-from-the-right path and pays nothing for
+it. That was an assumption worth checking rather than believing.
+
+### Diagnostic-rule evaluation
+
+Measured on a *warm* engine. A cold one short-circuits — every tracker answers warming
+up until its window fills — so timing that would measure the path the rules do not
+take (§11.3).
+
+| Benchmark | 200 processes | 10,000 processes |
+|---|---:|---:|
+| `observe_one_snapshot` | 144 ns | 147 ns |
+
+The point of the second column is that there is no difference. No rule iterates the
+process table, and this shows it rather than asserting it: evaluating the whole radar
+costs about the same as parsing one `/proc/pressure` file, whatever the machine is
+running.
+
 ## The §16.1 end-to-end budgets
 
 Six of the eight are now measured on this machine. §16.1's last line says these are
@@ -218,12 +284,9 @@ met, idle CPU is not, and the reason is measured rather than guessed.
 
 ## What is not measured yet
 
-Named here so their absence is not mistaken for a passing grade:
+Named here so their absence is not mistaken for a passing grade. §16.3's own list of
+ten benchmarks is now complete; what is left is end-to-end.
 
-* Linux `/proc` fixture parsing — §16.3 lists it; the parsers exist but the
-  benchmark does not.
-* Diagnostic-rule evaluation.
-* ASCII and Unicode graph generation.
 * The 12-hour soak test. A 30-minute run with the real collector is on record in
   [`soak-testing.md`](soak-testing.md#runs-on-record) and shows no growth, but the
   §16.1 gate is twelve hours and that has not been run. Nor has any soak on Linux.
