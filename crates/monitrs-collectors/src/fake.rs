@@ -246,6 +246,13 @@ impl FakeProcess {
 pub struct Scenario {
     /// Host name shown in the header.
     pub hostname: Box<str>,
+    /// Target architecture reported by the fake host.
+    ///
+    /// Fixed rather than read from `std::env::consts::ARCH`, because a UI snapshot
+    /// accepted on an arm64 developer machine must also pass on an x86_64 CI
+    /// runner. §17.3 requires host-dependent values to be normalized in fixtures,
+    /// and the architecture is the same class of value as the hostname.
+    pub arch: &'static str,
     /// Logical CPU count.
     pub logical_cpus: u16,
     /// Physical core count.
@@ -294,6 +301,7 @@ impl Default for Scenario {
     fn default() -> Self {
         Self {
             hostname: "dev-mbp".into(),
+            arch: "aarch64",
             logical_cpus: 8,
             physical_cpus: 8,
             total_memory_bytes: 32 * GIB,
@@ -468,7 +476,7 @@ impl FakeCollector {
             os_name: MetricState::Available("fake-os".into()),
             os_version: MetricState::Available("1.0".into()),
             kernel_version: MetricState::Available("fake-kernel 1.0".into()),
-            arch: std::env::consts::ARCH,
+            arch: self.scenario.arch,
             cpu_brand: MetricState::Available("Fake CPU".into()),
             // A fixed 3d 04:12 plus one interval per sample, matching §5.5.
             uptime: MetricState::Available(
@@ -1020,6 +1028,25 @@ mod tests {
         assert_eq!(second.elapsed, Duration::from_secs(1));
         assert!(second.cpu.total.fresh().is_some());
         assert!(second.load.fresh().is_some());
+    }
+
+    #[test]
+    fn nothing_in_a_snapshot_depends_on_the_host_it_runs_on() {
+        // The whole value of this collector is that a frame rendered from it is the
+        // same frame everywhere. `arch` was read from `env::consts::ARCH` once, which
+        // made every UI snapshot fail on a CI runner with a different architecture.
+        let mut collector = FakeCollector::default();
+        let snapshots = collect(&mut collector, 2);
+        let host = &snapshots.last().expect("snapshots").host;
+        assert_eq!(
+            host.arch, "aarch64",
+            "the fake host must not report the real one"
+        );
+        assert_eq!(
+            host.hostname.fresh().map(|name| &**name),
+            Some("dev-mbp"),
+            "and neither must the hostname"
+        );
     }
 
     #[test]
