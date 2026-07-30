@@ -221,9 +221,9 @@ collector would be measuring the thing with itself.
 | ordinary frame render below 16 ms at 160×48 | median 200 µs, p95 353 µs, max 410 µs | pass, by a factor of 45 |
 | input-to-visible-response below 50 ms | median 417 µs, p95 486 µs | pass, by a factor of 100 |
 | sample collection below 200 ms p95 | fast-only tick (4 in 5): median 36–50 ms, p95 59–71 ms. Fast+medium (every 5th): median 113–130 ms, p95 136–149 ms | pass, and with more room than an earlier measurement suggested |
-| resident memory below 50 MiB | median 29 MiB, max 31 MiB | pass |
+| resident memory below 50 MiB | median 24.5–26.7 MiB, peak 27.2 MiB | pass |
 | no unbounded file-descriptor growth | flat at 3 over a 30-minute soak with the real collector | pass over half an hour; the 12-hour run is still owed |
-| idle self CPU median below 1%, p95 below 2% | **median 1.3–2.7%, p95 11–15%** over two runs | **fails, and close on the median** |
+| idle self CPU median below 1%, p95 below 2% | median **0.5–1.1%** over three runs, p95 **6–11%** | median met; **p95 fails** |
 | no unbounded memory growth over 12 hours | 30 minutes: 30.2 MiB → 28.5 MiB resident, retained history bounded, 0 snapshots dropped | evidence, not the gate — see [`soak-testing.md`](soak-testing.md#runs-on-record) |
 | no redraw busy loop | not measured as such | — |
 
@@ -259,15 +259,43 @@ components and 21 interfaces:
 | `Networks::refresh` | 0.85 ms | fast |
 | global CPU + memory | 0.09 ms | fast |
 
-A fast tick is therefore about 64 ms of OS reads, and the assembled collector measures
-36–50 ms for one — at the default one-second interval, 4–5% of one core, which is the
-measured idle median. The 5-second medium tick adds temperatures and a second disk
-walk, reaching 113–130 ms, which is the p95.
+A fast tick started at about 64 ms of OS reads. With the two fixes above it is about
+14 ms of CPU — the native walk, the per-process counters, and the disk I/O counters —
+and the measured idle median fell from 3.7–5.1% to **0.5–1.1%**, meeting the 1% budget.
+
+What remains is the p95, at 6–11% against a 2% budget, and it is the medium tier: the
+85 ms `Components::refresh` for temperatures, which §8.6 puts on a 5-second schedule.
+Averaged that is 1.7% of a core, but it arrives as one spike in the second it lands, and
+a p95 taken once a second sees the spike. Nothing has been measured about whether that
+read can be made cheaper, so it is the next thing to look at rather than a conclusion.
 
 Three things follow, and none of them is a micro-optimisation:
 
-1. **Asking `sysinfo` for fewer process fields does not help.** Requesting nothing at
-   all still costs 26 ms of the 29: the enumeration dominates, not the fields.
+1. **Asking `sysinfo` for fewer process fields does not help — but not asking at all
+   does.** *Fixed.* Requesting `ProcessRefreshKind::nothing()` still costs 26 ms of the
+   29, because the per-process `proc_pidinfo` calls that validate each entry are the
+   cost rather than the fields. In CPU terms the walk is **30.8 ms**, against 2.3 ms for
+   the native `kern.proc.all` walk and 6.0 ms for the per-process counters that the
+   macOS layer already makes — and that layer replaces every row the baseline produces.
+   So the baseline is now told to stop producing them
+   (`CommonCollector::delegate_process_table`), and the four fields the native row still
+   took from it — identity, name, command, executable — come from the native side.
+
+   The interesting part is the **name**, because that is where this could have quietly
+   become a regression. Three candidates were measured against 1030 live processes:
+   `p_comm` matched 591 and is a *prefix* of the rest, since `MAXCOMLEN` truncates it to
+   16 bytes; the executable's file name matched 1022; `argv[0]` accounts for the last 8.
+   `argv[0]` was tried first and the test comparing the two collectors is what rejected
+   it — a process may write anything there, and the measured contents included
+   `Cursor Helper (Plugin): extension-host (agent-exec) servicrab [2-14]`,
+   `server-memory@2026.1.26` for a `node` process, and `-zsh` for a login shell. The
+   rule is therefore the executable's file name, preferring the path the process was
+   *launched* from (free, in the argument blob) over `proc_pidpath`'s resolved one, so a
+   versioned install shows `claude` rather than `2.1.220`. It differs from `sysinfo` for
+   a handful of processes, in the bounded direction.
+
+   Immutable per process, so it is read once and cached by identity — measured at 1.7 ms
+   of CPU for a thousand processes, i.e. once, not per tick.
 2. **`Disks::refresh(false)` was the single most expensive line in the fast tier, and
    for something the fast tier never reads.** *Fixed.* The call reads as "refresh,
    cheaply or not"; it is not. It calls

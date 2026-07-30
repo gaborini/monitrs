@@ -266,8 +266,8 @@ the process count the budgets assume, and per-process OS reads are where the cos
 
 | Budget | Target | Measured (1000 processes, not the reference workload) |
 |---|---|---|
-| Idle self CPU | median < 1%, p95 < 2% | **median 1.3–2.7%, p95 11–15% — fails** |
-| Resident memory | < 50 MiB in the default configuration | median 29 MiB, peak 31 MiB |
+| Idle self CPU | median < 1%, p95 < 2% | median 0.5–1.1% — met; **p95 6–11% — fails** |
+| Resident memory | < 50 MiB in the default configuration | median 24.5–26.7 MiB, peak 27.2 MiB |
 | Input to visible response | < 50 ms when no collector result is needed | median 417 µs, p95 486 µs |
 | Frame render at 160×48 | < 16 ms | median 200 µs, p95 353 µs |
 | Sample collection at 200 processes | < 200 ms p95 | p95 59–71 ms for a fast-only tick at 1000 processes; 136–149 ms when the medium tier joins |

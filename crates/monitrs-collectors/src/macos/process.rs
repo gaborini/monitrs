@@ -439,7 +439,7 @@ pub fn read_process_arguments(pid: u32) -> MetricState<Box<str>> {
     match sysctl::read_growable(&mut mib, &mut buffer) {
         Ok(0) => MetricState::TemporarilyUnavailable(UnavailableReason::ProcessExited),
         Ok(written) => match buffer.get(..written).and_then(parse_procargs2) {
-            Some(command) if !command.is_empty() => MetricState::Available(command),
+            Some(args) if !args.command.is_empty() => MetricState::Available(args.command),
             // The buffer was readable but held no argv, which happens for a process
             // that has execed nothing. The caller falls back to the kernel's short
             // name rather than showing an empty cell.
@@ -455,17 +455,46 @@ pub fn read_process_arguments(pid: u32) -> MetricState<Box<str>> {
     }
 }
 
-/// Parses a `KERN_PROCARGS2` blob into a space-joined command line.
+/// What one `KERN_PROCARGS2` blob holds, beyond the command line.
+///
+/// Three facts, and all three are immutable for the life of the process — a
+/// process cannot change its own `argv[0]` or the path it was executed from — which
+/// is what makes them worth caching by [`ProcessIdentity`] instead of re-reading
+/// every tick.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(super) struct ProcArgs {
+    /// The executable path, the blob's first field.
+    pub(super) exec_path: Option<Box<str>>,
+    /// `argv[0]` exactly as the process was invoked.
+    pub(super) argv0: Option<Box<str>>,
+    /// Every argument, space-joined, which is what the `COMMAND` column shows.
+    pub(super) command: Box<str>,
+}
+
+/// Parses a `KERN_PROCARGS2` blob.
 ///
 /// The layout is documented by its consumers rather than by a header: a 32-bit
 /// `argc`, then the executable path, then NUL padding, then `argc` NUL-terminated
 /// arguments, then the environment — which this deliberately stops before, because
 /// §15.2 forbids reading environment values at all.
-fn parse_procargs2(blob: &[u8]) -> Option<Box<str>> {
+///
+/// The executable path used to be skipped. It is the cheapest thing in this blob and
+/// the only route to a process's real name that does not cost a second syscall, so it
+/// is now returned along with `argv[0]`: `sysinfo`'s process name is `argv[0]`'s file
+/// name where argv is readable and the executable's file name otherwise, and
+/// reproducing that exactly is what let the baseline's 31 ms-of-CPU process walk be
+/// removed from the fast tier.
+fn parse_procargs2(blob: &[u8]) -> Option<ProcArgs> {
     let (count, rest) = blob.split_at_checked(size_of::<u32>())?;
     let argc = u32::from_ne_bytes(count.try_into().ok()?);
     // The executable path comes first and is not one of the `argc` arguments.
-    let mut cursor = rest.iter().position(|byte| *byte == 0)? + 1;
+    let path_end = rest.iter().position(|byte| *byte == 0)?;
+    let exec_path: Option<Box<str>> = rest
+        .get(..path_end)
+        .map(|bytes| String::from_utf8_lossy(bytes).into_owned())
+        .filter(|path| !path.is_empty())
+        .map(Box::from);
+    let mut cursor = path_end + 1;
     // Skip the alignment padding between the path and `argv[0]`.
     while rest.get(cursor).copied() == Some(0) {
         cursor += 1;
@@ -482,7 +511,64 @@ fn parse_procargs2(blob: &[u8]) -> Option<Box<str>> {
         parts.push(String::from_utf8_lossy(part).into_owned());
         cursor += end + 1;
     }
-    Some(parts.join(" ").into())
+    let argv0 = parts
+        .first()
+        .filter(|first| !first.is_empty())
+        .map(|first| Box::from(first.as_str()));
+    Some(ProcArgs {
+        exec_path,
+        argv0,
+        command: parts.join(" ").into(),
+    })
+}
+
+/// The file name of a path, as a fresh `Box<str>`.
+///
+/// Returns `None` for a path that ends in a separator or is empty, so a caller can
+/// fall through to the next source rather than showing an empty name.
+fn file_name(path: &str) -> Option<Box<str>> {
+    let name = path.rsplit('/').next().unwrap_or(path);
+    (!name.is_empty()).then(|| Box::from(name))
+}
+
+/// `proc_pidpath` for one process.
+///
+/// The fallback for the third of the process table whose `KERN_PROCARGS2` is refused:
+/// unlike that sysctl, this answers for another user's processes. Measured at 1.7 ms
+/// of CPU for a thousand processes, which is why it is worth calling once per process
+/// and caching, and not worth calling every tick.
+fn executable_path(pid: u32) -> Option<Box<str>> {
+    // `PROC_PIDPATHINFO_MAXSIZE`, which libc does not expose as a constant.
+    const MAX: usize = 4 * libc::PATH_MAX as usize;
+    let raw_pid = c_int::try_from(pid).ok()?;
+    let mut buffer = vec![0u8; MAX];
+    // SAFETY: `buffer` is `MAX` bytes long and `MAX` is the size passed, so the call
+    // cannot write past it. A non-positive return means nothing was written.
+    let written = unsafe {
+        libc::proc_pidpath(
+            raw_pid,
+            buffer.as_mut_ptr().cast(),
+            u32::try_from(MAX).unwrap_or(0),
+        )
+    };
+    let written = usize::try_from(written).ok().filter(|len| *len > 0)?;
+    let path = buffer.get(..written)?;
+    Some(Box::from(String::from_utf8_lossy(path).into_owned()))
+}
+
+/// The parsed `KERN_PROCARGS2` blob, or `None` when it could not be read.
+///
+/// Deliberately does not distinguish *why*. [`read_process_arguments`] does, because
+/// the detail overlay must show a refusal as a refusal (§26); here the caller only
+/// needs to know whether to fall through to `proc_pidpath`, and telling a refusal
+/// from an exit would cost a second syscall per process to answer a question nothing
+/// asks.
+fn read_process_arguments_parsed(pid: u32) -> Option<ProcArgs> {
+    let raw_pid = c_int::try_from(pid).ok()?;
+    let mut mib = [libc::CTL_KERN, libc::KERN_PROCARGS2, raw_pid];
+    let mut buffer = Vec::new();
+    let written = sysctl::read_growable(&mut mib, &mut buffer).ok()?;
+    buffer.get(..written).and_then(parse_procargs2)
 }
 
 /// Resolved user names, cached because the lookup can consult a directory service.
@@ -581,6 +667,15 @@ pub(super) struct ProcessEnricher {
     read: KeyedRateTrackers<ProcessIdentity>,
     write: KeyedRateTrackers<ProcessIdentity>,
     users: UserNames,
+    /// The name, command line and executable of every live process.
+    ///
+    /// Read once, when a process is first seen, and then kept: a process cannot
+    /// change its own `argv[0]` or the path it was executed from, so re-reading them
+    /// every tick was buying the same answer a thousand times a second. Keyed by
+    /// [`ProcessIdentity`] rather than by PID so a reused PID gets its own entry
+    /// (§26), and pruned by the same pass that prunes the rate trackers, which is
+    /// what bounds it (§10.3).
+    facts: HashMap<ProcessIdentity, ProcessFacts>,
     /// Whether any process's counters were readable on the last tick.
     ///
     /// Drives the per-process-I/O capability: on a machine where every read is
@@ -588,6 +683,18 @@ pub(super) struct ProcessEnricher {
     any_counters_readable: bool,
     /// Whether any process's counters were refused on the last tick.
     any_counters_denied: bool,
+}
+
+/// What a process is, as opposed to what it is currently doing.
+///
+/// Everything here is fixed at `exec` time. The values are `Box<str>` and cloned
+/// into each snapshot rather than shared, because a snapshot is handed across a
+/// thread boundary and must not borrow from the collector (§10.4).
+#[derive(Clone, Debug)]
+struct ProcessFacts {
+    name: Box<str>,
+    command: Box<str>,
+    exe: Option<Box<str>>,
 }
 
 impl ProcessEnricher {
@@ -601,6 +708,7 @@ impl ProcessEnricher {
             read: KeyedRateTrackers::new(CounterWidth::Bits64),
             write: KeyedRateTrackers::new(CounterWidth::Bits64),
             users: UserNames::default(),
+            facts: HashMap::new(),
             any_counters_readable: false,
             any_counters_denied: false,
         }
@@ -671,8 +779,76 @@ impl ProcessEnricher {
         self.cpu.retain(|identity| live.contains(identity));
         self.read.retain(|identity| live.contains(identity));
         self.write.retain(|identity| live.contains(identity));
+        // The facts cache is pruned by the same pass, for the same reason: a machine
+        // that churns through PIDs would otherwise accumulate one entry per process
+        // that has ever existed (§10.3).
+        self.facts.retain(|identity, _| live.contains(identity));
 
         rows
+    }
+
+    /// The immutable facts about `process`, read once and then remembered.
+    ///
+    /// The name is **the executable's file name**, falling back to `p_comm`.
+    ///
+    /// Three candidates were measured against 1030 live processes before this was
+    /// settled, and the reasoning matters more than the ranking:
+    ///
+    /// * **`p_comm`**, the kernel's short name, is free — it is already in the process
+    ///   table — and always present, but `MAXCOMLEN` truncates it to 16 bytes. It
+    ///   matched the baseline for 591 processes and was a *prefix* of it for 1023, so
+    ///   truncation was the only difference: `Google Chrome Helper (Renderer)` arrives
+    ///   as `Google Chrome He`. Unusable as a first choice, correct as a last one.
+    /// * **The executable's file name** matched 1022 of 1030 and is never truncated.
+    ///   It comes free with the argument blob (its first field) and from
+    ///   `proc_pidpath` otherwise — which matters, because `KERN_PROCARGS2` is refused
+    ///   for other users' processes: 1 of 333 root-owned ones on the machine this was
+    ///   measured on, against 333 of 333 for `proc_pidpath`.
+    ///
+    ///   The order of those two is not arbitrary. The blob carries the path the process
+    ///   was *launched* from and `proc_pidpath` resolves symlinks to the real file, so
+    ///   for a versioned install — `~/.local/bin/claude` pointing at
+    ///   `.../versions/2.1.220` — the blob says `claude` and `proc_pidpath` says
+    ///   `2.1.220`. The launched path is the one a user recognises, and it is also the
+    ///   cheaper of the two, so it goes first.
+    /// * **`argv[0]`** accounts for the remaining 8, and was tried first — until the
+    ///   test that compares the two collectors showed what argv[0] actually contains.
+    ///   It is not a name; it is an argument, and a process may write anything into
+    ///   it. Measured examples: `Cursor Helper (Plugin): extension-host (agent-exec)
+    ///   servicrab [2-14]`, `server-memory@2026.1.26` for a `node` process, and `-zsh`
+    ///   for a login shell. A `NAME` column of 32 cells cannot absorb that, and the
+    ///   badness is unbounded — whereas the failure mode of the executable's name is
+    ///   bounded and dull: a binary whose launch path is itself a version-numbered file
+    ///   is called `2.1.220`.
+    ///
+    /// So this deliberately differs from `sysinfo` for a handful of processes, and it
+    /// differs in the predictable direction. The full command line, argv[0] included,
+    /// is in the `COMMAND` column either way.
+    ///
+    /// A name is never empty: an empty row is indistinguishable from a rendering bug,
+    /// and every process has at least a `p_comm`.
+    fn facts_for(&mut self, process: &KernelProcess) -> ProcessFacts {
+        if let Some(known) = self.facts.get(&process.identity) {
+            return known.clone();
+        }
+        let parsed = read_process_arguments_parsed(process.identity.pid);
+        // `proc_pidpath` only when the blob could not supply the path, which keeps the
+        // common case at one syscall for a process we have never seen before.
+        let exe = parsed
+            .as_ref()
+            .and_then(|args| args.exec_path.clone())
+            .or_else(|| executable_path(process.identity.pid));
+        let name = exe
+            .as_deref()
+            .and_then(file_name)
+            .unwrap_or_else(|| process.comm.clone());
+        let facts = ProcessFacts {
+            name,
+            command: parsed.map(|args| args.command).unwrap_or_default(),
+            exe,
+        };
+        self.facts.insert(process.identity, facts.clone());
+        facts
     }
 
     /// Builds one enriched row.
@@ -748,46 +924,35 @@ impl ProcessEnricher {
             name: self.users.resolve(process.uid),
         });
 
-        match baseline {
-            Some(previous) => ProcessSnapshot {
-                identity,
-                parent_pid: process.parent_pid,
-                name: if previous.name.is_empty() {
-                    process.comm.clone()
-                } else {
-                    previous.name
-                },
-                command: previous.command,
-                exe: previous.exe,
-                user,
-                state: process.state,
-                cpu,
-                memory,
-                io,
-                threads,
-                age,
-                started_at: MetricState::Available(process.started_at),
-                is_kernel_thread: previous.is_kernel_thread,
-            },
-            // A process the baseline could not see at all — which on macOS is
-            // every process whose `proc_pidinfo` read it was refused. The kernel's
-            // short name is all there is, and it is better than omitting the row.
-            None => ProcessSnapshot {
-                identity,
-                parent_pid: process.parent_pid,
-                name: process.comm.clone(),
-                command: Box::from(""),
-                exe: None,
-                user,
-                state: process.state,
-                cpu,
-                memory,
-                io,
-                threads,
-                age,
-                started_at: MetricState::Available(process.started_at),
-                is_kernel_thread: false,
-            },
+        // The identity, name, command and executable all come from this layer now.
+        // The baseline row is consulted only for what it alone can still contribute —
+        // and on macOS that is nothing, since `is_kernel_thread` is always false here
+        // (§7.2: macOS has no per-process kernel threads to hide). It is kept as an
+        // argument rather than removed because the Linux enrichment composes the same
+        // way, and a `None` here must produce a complete row rather than a stub.
+        // An empty command is left empty rather than filled with the name.
+        // `ProcessSnapshot::command_or_name` is the one place that decides what a row
+        // with no readable command line shows, it is already tested, and a second
+        // copy of that decision here would be a second thing to keep in step. The
+        // *reason* it is unreadable is not lost either: the detail overlay reads the
+        // arguments on demand through `read_process_arguments`, which reports
+        // `PermissionDenied` as itself (§26).
+        let facts = self.facts_for(process);
+        ProcessSnapshot {
+            identity,
+            parent_pid: process.parent_pid,
+            name: facts.name,
+            command: facts.command,
+            exe: facts.exe,
+            user,
+            state: process.state,
+            cpu,
+            memory,
+            io,
+            threads,
+            age,
+            started_at: MetricState::Available(process.started_at),
+            is_kernel_thread: baseline.is_some_and(|previous| previous.is_kernel_thread),
         }
     }
 
@@ -1051,11 +1216,23 @@ mod tests {
         blob.extend_from_slice(b"ssh\0");
         blob.extend_from_slice(b"host\0");
         blob.extend_from_slice(b"SECRET=hunter2\0");
-        let command = parse_procargs2(&blob).expect("two arguments");
-        assert_eq!(&*command, "ssh host");
+        let args = parse_procargs2(&blob).expect("two arguments");
+        assert_eq!(&*args.command, "ssh host");
         assert!(
-            !command.contains("hunter2"),
+            !args.command.contains("hunter2"),
             "§15.2 forbids reading environment values at all"
+        );
+        // The two fields that used to be discarded. Both are immutable for the life
+        // of the process, which is what makes them cacheable rather than per-tick.
+        assert_eq!(
+            args.exec_path.as_deref(),
+            Some("/usr/bin/ssh"),
+            "the blob's first field is the executable path"
+        );
+        assert_eq!(
+            args.argv0.as_deref(),
+            Some("ssh"),
+            "argv[0] is how the process was invoked, which is not the same as its path"
         );
     }
 

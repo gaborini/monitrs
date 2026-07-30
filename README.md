@@ -282,9 +282,9 @@ workload, so read them as a hard case rather than a flattering one:
 | frame render below 16 ms at 160×48 | median 200 µs, p95 353 µs |
 | input-to-visible-response below 50 ms | median 417 µs, p95 486 µs |
 | sample collection below 200 ms p95 | p95 59–71 ms for the ordinary tick; 136–149 ms for the every-fifth one |
-| resident memory below 50 MiB | median 29 MiB, peak 31 MiB |
+| resident memory below 50 MiB | median 24.5–26.7 MiB, peak 27.2 MiB |
 | no unbounded growth | 30-minute soak: resident size fell, descriptors flat, nothing dropped |
-| **idle self CPU below 1% median, 2% p95** | **median 1.3–2.7%, p95 11–15% — fails** |
+| idle self CPU below 1% median, 2% p95 | median 0.5–1.1% — met; **p95 6–11% — fails** |
 
 The last row is the honest one. monitrs' own computation is about 35 µs per tick;
 the cost is OS reads, and on this host the process table and the disk counters cost

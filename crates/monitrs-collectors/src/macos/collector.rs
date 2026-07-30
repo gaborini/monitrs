@@ -138,7 +138,12 @@ impl MacosCollector {
     /// Fails only if the baseline fails: every native read here is optional, and a
     /// machine where all of them fail is still monitorable at baseline fidelity.
     pub fn new() -> Result<Self, CollectorError> {
-        let baseline = CommonCollector::new()?;
+        let mut baseline = CommonCollector::new()?;
+        // This layer replaces every process row the baseline would produce, so the
+        // baseline is told to stop producing them: 30.8 ms of CPU per fast tick on a
+        // thousand-process machine, against 8.3 ms for the native walk that supersedes
+        // it. See `CommonCollector::delegate_process_table`.
+        baseline.delegate_process_table();
         let facts = MachineFacts::query();
         let timebase = Timebase::query();
         let cpu = CpuTracker::new();
@@ -620,6 +625,124 @@ mod tests {
                 row_is_self_consistent(process),
                 "pid {} mixes a measured value with a denied one",
                 process.identity.pid
+            );
+        }
+    }
+
+    /// The native process table names processes usefully, and mostly as before.
+    ///
+    /// This collector stopped asking `sysinfo` for the process table — 30.8 ms of CPU
+    /// per fast tick — and derives the name itself from the executable's file name
+    /// (see `ProcessEnricher::facts_for` for the three candidates and why this one
+    /// won). That is only a saving if the names stay useful, so this asserts the
+    /// properties that make them useful rather than equality with `sysinfo`:
+    ///
+    /// * no name is empty;
+    /// * names are not truncated to `MAXCOMLEN`, which is what using `p_comm` alone
+    ///   would silently do;
+    /// * no name is a rewritten `argv[0]` — the failure mode of the rule that was
+    ///   tried first, and which this test is what caught;
+    /// * the two collectors still agree for the overwhelming majority, so a change that
+    ///   broke naming wholesale could not pass.
+    ///
+    /// The tolerance is deliberate and small. `sysinfo` prefers argv[0] for a handful
+    /// of processes and this does not, so a few names differ by design.
+    #[test]
+    #[ignore = "platform smoke test: reads the live machine"]
+    fn the_native_process_table_names_processes_usefully() {
+        let mut native = MacosCollector::new().expect("constructs");
+        let mut baseline = CommonCollector::new().expect("constructs");
+        let (_, native_snapshot) = sample_twice(&mut native);
+
+        let mut tick = SampleTick::first(Instant::now(), SystemTime::now());
+        let _ = baseline.sample(&tick).expect("a first baseline sample");
+        std::thread::sleep(Duration::from_millis(300));
+        tick = tick.advance(Instant::now(), SystemTime::now(), DueTiers::ALL);
+        let baseline_snapshot = baseline.sample(&tick).expect("a second baseline sample");
+
+        // Matched by PID, not by identity: the baseline's start key is the start time
+        // in whole seconds and this layer's is in microseconds, so the two identities
+        // are never equal by construction. The seconds are then required to agree,
+        // which is what rules out a PID reused between the two samples.
+        let by_pid: std::collections::HashMap<u32, &monitrs_core::model::ProcessSnapshot> =
+            baseline_snapshot
+                .processes
+                .iter()
+                .map(|process| (process.identity.pid, process))
+                .collect();
+
+        let mut compared = 0usize;
+        let mut mismatches: Vec<String> = Vec::new();
+        let mut empty_names = 0usize;
+        for process in &native_snapshot.processes {
+            assert!(
+                !process.name.is_empty(),
+                "pid {} has no name; an empty cell is indistinguishable from a bug",
+                process.identity.pid
+            );
+            if process.name.is_empty() {
+                empty_names += 1;
+            }
+            let Some(previous) = by_pid.get(&process.identity.pid) else {
+                // Started or exited between the two collectors' samples.
+                continue;
+            };
+            if process.identity.start_key / 1_000_000 != previous.identity.start_key {
+                // The same PID naming a different process in each snapshot, or a
+                // process that started within the second the two samples straddle.
+                continue;
+            }
+            compared += 1;
+            if process.name != previous.name && mismatches.len() < 10 {
+                mismatches.push(format!(
+                    "pid {}: native {:?}, baseline {:?}",
+                    process.identity.pid, process.name, previous.name
+                ));
+            }
+        }
+
+        assert_eq!(empty_names, 0);
+        assert!(
+            compared > 100,
+            "expected the two collectors to see the same table, compared {compared}"
+        );
+
+        // A few differ by design; a lot differing means the rule broke.
+        let differing = mismatches.len();
+        let tolerance = compared / 20;
+        assert!(
+            differing <= tolerance.max(16),
+            "{differing} of {compared} names differ from the baseline, which is more \
+             than the handful `argv[0]` accounts for: {mismatches:?}"
+        );
+
+        // The properties that make a name useful, which are what this rule is for.
+        let longest = native_snapshot
+            .processes
+            .iter()
+            .map(|process| process.name.chars().count())
+            .max()
+            .unwrap_or(0);
+        assert!(
+            longest > 16,
+            "no name is longer than MAXCOMLEN, so the rule has silently fallen back to \
+             the kernel's short name for everything; longest was {longest}"
+        );
+        for process in &native_snapshot.processes {
+            // A rewritten argv[0] is the failure this rule exists to avoid. Measured
+            // examples were 40 to 74 characters and contained spaces and colons; a real
+            // executable file name contains neither.
+            assert!(
+                !process.name.contains(": "),
+                "pid {} is named {:?}, which is a rewritten argv[0] rather than a name",
+                process.identity.pid,
+                process.name
+            );
+            assert!(
+                !process.name.starts_with('-'),
+                "pid {} is named {:?}; a leading dash is a login shell's argv[0]",
+                process.identity.pid,
+                process.name
             );
         }
     }

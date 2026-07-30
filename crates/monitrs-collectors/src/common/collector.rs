@@ -71,6 +71,9 @@ pub struct CommonCollector {
     cached_disk_capacity: Vec<CachedDisk>,
     cached_sensors: SensorSnapshot,
     capabilities: CapabilitySnapshot,
+    /// Whether a native layer supplies the process table (see
+    /// [`Self::delegate_process_table`]).
+    process_table_delegated: bool,
 }
 
 /// Static per-device facts, refreshed on the medium tier.
@@ -127,7 +130,31 @@ impl CommonCollector {
             cached_disk_capacity: Vec::new(),
             cached_sensors: SensorSnapshot::warming_up(),
             capabilities: baseline_capabilities(),
+            process_table_delegated: false,
         })
+    }
+
+    /// Stops walking the process table, because a native layer supplies it.
+    ///
+    /// The most expensive thing this collector does. Measured on macOS against 987
+    /// processes, `sysinfo`'s process refresh costs **30.8 ms of CPU** per fast tick —
+    /// while the macOS enrichment, which replaces every row it produces, walks the same
+    /// table for 2.3 ms and reads its per-process counters for 6.0 ms. The baseline's
+    /// walk was buying identity, name, command and executable, and the native layer can
+    /// now supply all four; nothing else it produced survived the merge.
+    ///
+    /// Asking for fewer *fields* does not help — `ProcessRefreshKind::nothing()` still
+    /// costs 26 of the 29 ms, because the per-process `proc_pidinfo` calls that
+    /// validate each entry are the cost, not the fields. Skipping the walk entirely is
+    /// the only saving available, which is why this is a switch rather than a
+    /// refinement.
+    ///
+    /// Everything else the baseline reports is unaffected: total memory, the CPU
+    /// aggregate, disks, filesystems, networks and sensors all come from other
+    /// `sysinfo` objects. `process_detail` also still works — it refreshes exactly one
+    /// PID on demand, which is a different call and is not on any tier.
+    pub fn delegate_process_table(&mut self) {
+        self.process_table_delegated = true;
     }
 
     /// Logical CPU count, needed to normalize process CPU (§8.3).
@@ -232,6 +259,21 @@ impl CommonCollector {
         self.system.refresh_cpu_usage();
         self.system
             .refresh_memory_specifics(MemoryRefreshKind::everything());
+
+        if self.process_table_delegated {
+            // A native layer owns the process table (see `delegate_process_table`), so
+            // the CPU baseline has to come from the per-CPU readings alone rather than
+            // from "did any process report a percentage yet".
+            if !self.cpu_has_baseline {
+                self.cpu_has_baseline = self.system.cpus().iter().any(|cpu| cpu.cpu_usage() > 0.0);
+            }
+            self.networks.refresh(true);
+            if !disks_already_refreshed {
+                self.disks
+                    .refresh_specifics(false, sysinfo::DiskRefreshKind::nothing().with_io_usage());
+            }
+            return;
+        }
 
         // `remove_dead_processes = true` is what keeps the process map from
         // growing without bound as PIDs churn (§10.3).
@@ -364,6 +406,12 @@ impl CommonCollector {
     }
 
     fn processes(&mut self, tick: &SampleTick) -> Vec<ProcessSnapshot> {
+        if self.process_table_delegated {
+            // Empty rather than whatever `sysinfo` last happened to hold. A native
+            // layer replaces this list wholesale, and returning a stale table would
+            // mean any row it did not overwrite was published as current (§4).
+            return Vec::new();
+        }
         let total_memory = self.system.total_memory();
         let can_rate = tick.can_compute_rates();
         let has_cpu = self.cpu_has_baseline && can_rate;
