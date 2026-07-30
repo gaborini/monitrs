@@ -8,7 +8,9 @@ says so.
 
 **The interface launches**, and the §23 verbs — launch, monitor, filter, inspect,
 pause, seek, return live, quit — have each been exercised by hand in a real
-terminal. What is still missing before `0.1.0`:
+terminal. So has the renice flow, by `scripts/verify-renice.py`: it drives the real
+binary on a pty, presses `R` on a process it started itself, and then asks `ps` —
+not monitrs — whether the value changed. What is still missing before `0.1.0`:
 
 * **No twelve-hour soak is on record.** A 30-minute run with the shipped collector
   is ([`soak-testing.md`](soak-testing.md#runs-on-record)): resident size fell over
