@@ -57,7 +57,7 @@ signal-hook = { version = "0.3.18", default-features = false, features = ["itera
 # --- cli / config ---
 clap = { version = "4.6.4", features = ["derive", "wrap_help"] }
 clap_complete = "4.6.4"
-clap_mangen = "0.2.32"
+clap_mangen = "0.3.0"
 serde = { version = "1.0.229", features = ["derive"] }
 serde_json = "1.0.151"
 # `display` is needed to *write* TOML: `config init` renders a starter file, and
