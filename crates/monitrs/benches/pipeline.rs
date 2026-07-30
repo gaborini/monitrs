@@ -47,6 +47,8 @@ use monitrs_core::units::{
     ByteUnits, format_age, format_byte_rate, format_bytes_compact, pad_left,
 };
 use monitrs_core::{MetricState, SystemSnapshot};
+use monitrs_tui::app::{AppSettings, AppState, apply};
+use monitrs_tui::event::{Event, KeyPress, TerminalEvent};
 use monitrs_tui::glyphs::GlyphSet;
 use monitrs_tui::theme::{ColorDepth, ThemeId};
 use monitrs_tui::widgets::{Meter, Presentation, Sparkline};
@@ -662,6 +664,72 @@ fn bench_diagnostics(c: &mut Criterion) {
     group.finish();
 }
 
+/// What the reducer costs to absorb one snapshot, which is the number that settles
+/// "can a keypress queue behind a snapshot".
+///
+/// It had no benchmark, which is why a 90 ms worst-case input latency in a soak report
+/// was explained for a while as a keypress waiting behind one of these. It is not: at
+/// the reference workload an absorb is tens of microseconds, and even at ten thousand
+/// processes it is under two milliseconds, so a keypress can be delayed by at most that.
+/// Having the number here makes the claim checkable in one command instead of an
+/// afternoon.
+///
+/// Each iteration feeds a *newer* snapshot, because the reducer correctly rejects one
+/// that is not (`RecordOutcome::NotNewer`) and a benchmark that measured the rejection
+/// would report a hot path as free.
+fn bench_absorb(c: &mut Criterion) {
+    let mut group = c.benchmark_group("absorb");
+
+    for processes in [REFERENCE_PROCESSES, HIGH_LOAD_PROCESSES] {
+        let series = snapshots(processes, 24);
+        group.throughput(Throughput::Elements(processes as u64));
+        group.bench_with_input(
+            BenchmarkId::new("apply_snapshot", processes),
+            &processes,
+            |b, _| {
+                let mut state = AppState::new(AppSettings {
+                    size: (160, 48),
+                    ..AppSettings::default()
+                });
+                let mut next = 0usize;
+                let mut sequence = 0u64;
+                b.iter(|| {
+                    let mut snapshot = series[next % series.len()].clone();
+                    next = next.wrapping_add(1);
+                    sequence = sequence.wrapping_add(1);
+                    snapshot.sequence = sequence;
+                    black_box(apply::<()>(
+                        &mut state,
+                        Event::Snapshot(std::sync::Arc::new(snapshot)),
+                    ))
+                });
+            },
+        );
+    }
+
+    // A keypress and a tick, for scale: these are what a snapshot absorb would be
+    // delaying, and they are three orders of magnitude smaller.
+    let series = snapshots(REFERENCE_PROCESSES, 4);
+    let mut state = AppState::new(AppSettings {
+        size: (160, 48),
+        ..AppSettings::default()
+    });
+    let _ = apply::<()>(
+        &mut state,
+        Event::Snapshot(std::sync::Arc::new(series[0].clone())),
+    );
+    group.bench_function("apply_keypress", |b| {
+        b.iter(|| {
+            black_box(apply::<()>(
+                &mut state,
+                Event::Terminal(TerminalEvent::Key(KeyPress::char('j'))),
+            ))
+        });
+    });
+
+    group.finish();
+}
+
 criterion_group!(
     benches,
     bench_rates,
@@ -672,6 +740,7 @@ criterion_group!(
     bench_sample,
     bench_graphs,
     bench_linux_parsers,
-    bench_diagnostics
+    bench_diagnostics,
+    bench_absorb
 );
 criterion_main!(benches);

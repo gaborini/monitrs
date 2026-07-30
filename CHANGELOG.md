@@ -135,9 +135,9 @@ Named because §16.1's own last line asks for measurement rather than claims:
 * **No twelve-hour soak is on record.** A 30-minute run with the shipped collector
   is, and shows no growth. The twelve-hour run is the actual gate, and nothing has
   been soaked on Linux.
-* **Worst-case input latency under sustained load was 90 ms**, against a 50 ms
-  budget — a keypress queued behind a snapshot the reducer was absorbing on the same
-  thread, not a stall. Recorded, not yet resolved.
+* A slow terminal can block a frame for an unbounded time, and no instrument here can
+  see it: the frame-time measurement renders through ratatui's `TestBackend`, which
+  stops short of the write to the terminal, and the soak harness has no renderer.
 * Per-process socket counts and device busy time are unsupported on macOS: the first
   costs one syscall per descriptor, the second has no documented API. Both say
   `n/a` rather than guessing.

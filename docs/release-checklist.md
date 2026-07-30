@@ -16,8 +16,9 @@ not monitrs — whether the value changed. What is still missing before `0.1.0`:
   is ([`soak-testing.md`](soak-testing.md#runs-on-record)): resident size fell over
   the run, descriptors stayed at 3, retained history stayed bounded with the ring
   full, and nothing was dropped even with the channel saturated. That is evidence,
-  not the gate — §16.1 says twelve hours, and it also measured a 90 ms worst-case
-  input latency against a 50 ms budget that is recorded and not yet resolved.
+  not the gate — §16.1 says twelve hours. (The 90 ms worst-case input latency that run
+  reported turned out to be the harness measuring two thread wake-ups rather than
+  monitrs; see [`soak-testing.md`](soak-testing.md).)
 * **The idle self-CPU budget of §16.1 is not met.** Measured on a 12-core Mac with
   about a thousand processes: median 1.3–2.7%, p95 11–15%, against a budget of 1% and
   2%. The median is close; the p95 is not.

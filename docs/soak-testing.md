@@ -198,14 +198,47 @@ What it establishes over half an hour and 2212 snapshots:
   drop count of zero, which is §10.3's rule doing its job under saturation.
 * **No worker failed to join.**
 
-One number deserves care rather than a victory lap. The worst single input latency
-was **90 ms**, against §16.1's 50 ms budget for input-to-visible-response; the median
-was 36 µs. The stall probe runs *after* the injector stops, so that 90 ms is from the
-ordinary run: it is a keypress queued behind a snapshot the reducer was absorbing on
-the same thread, not a stall. `capture.rs` measures the reduce-and-render path itself
-at a 486 µs p95, so the interface is not slow — a keypress can wait behind other work
-on the UI thread. Whether §16.1's "when no collector result is required" covers that
-case is a fair question, and it is recorded here rather than argued away.
+### About the 90 ms in that report — it was not what it looked like
+
+The run above reported `worst 90.321209ms` against a median of 36 µs, and this document
+first explained it as a keypress queued behind a snapshot the reducer was absorbing on
+the same thread. **That explanation was wrong**, and it is worth recording how, because
+the harness was measuring something other than what its label said.
+
+What was measured afterwards:
+
+* `apply(Event::Snapshot(..))` against 979 live processes costs a median of 140 µs and a
+  maximum of 228 µs — and at 10,000 fake processes, 1.68 ms median, 2.58 ms max. A
+  keypress can be delayed by at most one absorb. There is no path from there to 90 ms.
+* Absorbing a detail reply costs 167 ns, a keypress 167 ns, a tick 42 ns, and
+  `SelfUsage::sample` — the only other work on the soak's UI thread — 959 ns.
+* The mechanism never fired. Over a 1800-second reproduction, 2 keys of 33,310 arrived
+  behind a snapshot in the same drain, and the channel depth never exceeded 1 of 64 —
+  which the recorded report's own `peak depth 1 of 64` line already said.
+* **A control settles it.** Two bare threads doing exactly the injector's dance over
+  crossbeam channels, in the same process, for the same 30 minutes, with no monitrs code
+  on the path at all, produced a statistically identical distribution: p99 10.075 ms
+  against monitrs' 10.070 ms, p99.9 16.921 against 17.454, max 34.898 against 35.741.
+  The tail is macOS thread wake-up latency, visibly quantised at about 10 ms.
+
+So the number was two thread wake-ups with about 10 µs of reducer between them. Worse,
+it was *not* §16.1's input-to-visible-response in either direction: it included the
+injector thread's own wake from a parked `recv_timeout` — 57% of the worst sample — which
+no real keypress travels, since a keypress becomes visible at the next frame and never
+returns to the input thread; and it excluded the render entirely, because this harness
+has no renderer. **`crates/monitrs/tests/capture.rs` owns that budget** and measures it
+at a 486 µs p95.
+
+Two things changed as a result. The harness now records three series — send to the
+reducer's answer, the full round trip, and the cost of the send itself — so the segment
+that is monitrs is separable from the segments that are the scheduler. And
+responsiveness is asserted on the **99th percentile** rather than the maximum; the
+maximum is still printed and still checked against a 3-second ceiling, because a maximum
+over tens of thousands of samples is a good stall detector and a poor latency budget.
+
+One caveat on the correction: the investigation never reproduced 90 ms — its own worst
+was 35.7 ms — so the conclusion rests on the control tracking monitrs at every
+percentile rather than on hitting the same figure. A second long run would strengthen it.
 
 ### Still owed
 

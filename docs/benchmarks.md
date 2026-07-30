@@ -187,6 +187,23 @@ of milliseconds for the reads that feed them. And `pid_stat_parens` is not slowe
 contain spaces and brackets, takes the scan-from-the-right path and pays nothing for
 it. That was an assumption worth checking rather than believing.
 
+### Reducer absorb
+
+What it costs to fold one snapshot into the application state — history record, filter,
+sort, selection resync — and, for scale, what that absorb would be delaying.
+
+| Benchmark | 200 processes | 10,000 processes |
+|---|---:|---:|
+| `apply_snapshot` | 18.6 µs | 2.01 ms |
+| `apply_keypress` | 65 ns | — |
+
+This is the number that settles "can a keypress queue behind a snapshot". At the
+reference workload the answer is 18.6 µs, and even at ten thousand processes a keypress
+can be delayed by at most 2 ms — which is why the 90 ms worst case an early soak reported
+could not have been what it was first explained as. Independent measurement against the
+*live* collector at 979 processes agreed: median 140 µs, max 228 µs. The claim went
+unchecked for as long as it did partly because this benchmark did not exist.
+
 ### Diagnostic-rule evaluation
 
 Measured on a *warm* engine. A cold one short-circuits — every tracker answers warming
@@ -332,9 +349,12 @@ ten benchmarks is now complete; what is left is end-to-end.
 * The 12-hour soak test. A 30-minute run with the real collector is on record in
   [`soak-testing.md`](soak-testing.md#runs-on-record) and shows no growth, but the
   §16.1 gate is twelve hours and that has not been run. Nor has any soak on Linux.
-* The worst-case input latency under sustained load, which that soak measured at
-  90 ms against a 50 ms budget — a keypress queued behind a snapshot absorb on the
-  UI thread, not a stall. Recorded there; not yet decided.
+* Whether a slow terminal can block a frame. `capture.rs` renders through ratatui's
+  `TestBackend`, which stops short of the write to the terminal, and the soak has no
+  renderer at all — so a pty consumer that stops reading is invisible to both.
+  (The 90 ms worst-case input latency an earlier soak reported is *resolved*, not
+  outstanding: it was the measurement, not the program — see
+  [`soak-testing.md`](soak-testing.md).)
 * The end-to-end numbers above on the §16.1 reference workload — 8 CPUs and 200
   processes — rather than on this machine.
 * Whether anything constitutes a redraw busy loop, as opposed to the idle-redraw

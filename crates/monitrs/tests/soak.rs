@@ -340,8 +340,25 @@ struct SoakReport {
     last_sequence: u64,
     /// Detail replies the UI received.
     details: u64,
-    /// Simulated keypresses the UI acknowledged, with their round-trip latency.
+    /// How long each acknowledged keypress took to *reach the reducer's answer*.
+    ///
+    /// Measured from the injector's send to the instant the UI thread stamps after
+    /// `apply` returns. This is the series responsiveness is asserted on.
     latencies: Vec<Duration>,
+    /// The same keypresses, measured as a full round trip back to the injector.
+    ///
+    /// Kept because it is what this harness reported for a long time, and because a
+    /// regression in the acknowledgement path — a full ack channel, an injector that
+    /// cannot keep up — would show here and nowhere else. It is *not* a measure of
+    /// monitrs: it adds the injector thread's own wake from a parked `recv_timeout`,
+    /// which was 57% of the worst sample when this was investigated, and no real user
+    /// path contains it.
+    round_trips: Vec<Duration>,
+    /// How long `EventSender::send` itself took for each keypress.
+    ///
+    /// Near-zero unless the channel is full, which is exactly when it stops being
+    /// near-zero — and it was previously invisible inside the total.
+    send_costs: Vec<Duration>,
     /// Keypresses that were never acknowledged.
     unanswered: u64,
     /// The deepest the event channel was ever observed.
@@ -400,20 +417,45 @@ impl SoakReport {
         (first, last)
     }
 
-    /// The median observed input latency.
-    fn median_latency(&self) -> Duration {
-        if self.latencies.is_empty() {
+    /// The `fraction` quantile of `series`, by nearest rank.
+    fn quantile(series: &[Duration], fraction: f64) -> Duration {
+        if series.is_empty() {
             return Duration::ZERO;
         }
-        let mut sorted = self.latencies.clone();
+        let mut sorted = series.to_vec();
         sorted.sort_unstable();
+        #[expect(
+            clippy::cast_possible_truncation,
+            clippy::cast_sign_loss,
+            reason = "the product of a length and a fraction in [0, 1], clamped to the \
+                      last index below"
+        )]
+        let index = ((sorted.len() as f64) * fraction) as usize;
         sorted
-            .get(sorted.len() / 2)
+            .get(index.min(sorted.len().saturating_sub(1)))
             .copied()
             .unwrap_or(Duration::ZERO)
     }
 
-    /// The worst observed input latency.
+    /// The median observed input latency.
+    fn median_latency(&self) -> Duration {
+        Self::quantile(&self.latencies, 0.5)
+    }
+
+    /// The 99th-percentile input latency, which is what responsiveness is asserted on.
+    ///
+    /// Not the max. A maximum over tens of thousands of samples on a general-purpose
+    /// OS is a measurement of the scheduler's worst wake-up, not of this program: an
+    /// investigation of a 90 ms worst case found that two bare threads doing nothing
+    /// but passing messages, with no monitrs code on the path, produced the same tail
+    /// at every percentile. The max is still printed and still asserted against
+    /// [`MAX_LATENCY_CEILING`], because a max is exactly the right instrument for
+    /// detecting a stall — and the wrong one for a latency budget.
+    fn p99_latency(&self) -> Duration {
+        Self::quantile(&self.latencies, 0.99)
+    }
+
+    /// The worst observed input latency, kept as a stall detector.
     fn max_latency(&self) -> Duration {
         self.latencies
             .iter()
@@ -465,11 +507,27 @@ impl fmt::Display for SoakReport {
         )?;
         writeln!(
             f,
-            "input:          {} keys, median {:?}, worst {:?}, {} unanswered",
+            "input:          {} keys, median {:?}, p95 {:?}, p99 {:?}, worst {:?}, \
+             {} unanswered",
             self.latencies.len(),
             self.median_latency(),
+            Self::quantile(&self.latencies, 0.95),
+            self.p99_latency(),
             self.max_latency(),
             self.unanswered
+        )?;
+        writeln!(
+            f,
+            "  send:         median {:?}, worst {:?}    (grows only when the channel is full)",
+            Self::quantile(&self.send_costs, 0.5),
+            self.send_costs.iter().copied().max().unwrap_or_default()
+        )?;
+        writeln!(
+            f,
+            "  round trip:   median {:?}, p99 {:?}, worst {:?}    (adds this thread's own wake-up; not a monitrs measurement)",
+            Self::quantile(&self.round_trips, 0.5),
+            Self::quantile(&self.round_trips, 0.99),
+            self.round_trips.iter().copied().max().unwrap_or_default()
         )?;
         writeln!(
             f,
@@ -516,8 +574,9 @@ impl fmt::Display for SoakReport {
 /// Everything the injector thread shares with the UI thread.
 #[derive(Debug)]
 struct Injector {
-    /// Round-trip latency of every acknowledged keypress.
-    latencies: Arc<std::sync::Mutex<Vec<Duration>>>,
+    /// Send-to-reducer-answer latency of every acknowledged keypress, the full round
+    /// trip back to this thread, and the cost of the send itself.
+    latencies: Arc<std::sync::Mutex<Vec<(Duration, Duration, Duration)>>>,
     /// Keypresses the UI never acknowledged.
     unanswered: Arc<AtomicU64>,
     /// Set when the thread has left its loop, so the UI can wait for it before
@@ -559,11 +618,21 @@ fn spawn_input_injector(
             if !sender.send(Event::Terminal(TerminalEvent::Key(KeyPress::char('k')))) {
                 break;
             }
+            let sent_cost = sent_at.elapsed();
             match acks.recv_timeout(ACK_TIMEOUT) {
-                Ok(_) => {
-                    let latency = sent_at.elapsed();
+                // The UI thread stamps its acknowledgement *after* `apply` returns, so
+                // `acked_at` is when the reducer had its answer. Using it rather than
+                // `sent_at.elapsed()` leaves out this thread's own wake from a parked
+                // `recv_timeout`, which an investigation of a 90 ms worst case measured
+                // at 57% of that sample — a segment no real keypress travels, since a
+                // keypress becomes visible at the next frame and never comes back to
+                // the input thread. The full round trip is kept alongside it so a
+                // regression in the acknowledgement path is still visible.
+                Ok(acked_at) => {
+                    let latency = acked_at.saturating_duration_since(sent_at);
+                    let round_trip = sent_at.elapsed();
                     if let Ok(mut latencies) = latencies.lock() {
-                        latencies.push(latency);
+                        latencies.push((latency, round_trip, sent_cost));
                     }
                 }
                 Err(_) => {
@@ -870,11 +939,14 @@ fn run_soak(config: SoakConfig) -> SoakReport {
     let history = (state.history().len(), state.history().capacity());
     let history_ceiling = state.history().limits().estimated_capacity_bytes();
     let failed = workers.join_all();
-    let latencies = injector
+    let samples = injector
         .latencies
         .lock()
         .map(|guard| guard.clone())
         .unwrap_or_default();
+    let latencies: Vec<Duration> = samples.iter().map(|(latency, _, _)| *latency).collect();
+    let round_trips: Vec<Duration> = samples.iter().map(|(_, trip, _)| *trip).collect();
+    let send_costs: Vec<Duration> = samples.iter().map(|(_, _, send)| *send).collect();
 
     SoakReport {
         config,
@@ -885,6 +957,8 @@ fn run_soak(config: SoakConfig) -> SoakReport {
         last_sequence,
         details,
         latencies,
+        round_trips,
+        send_costs,
         unanswered: injector.unanswered.load(Ordering::Relaxed),
         peak_queue,
         coalesced: health.coalesced(),
@@ -982,6 +1056,17 @@ fn the_runtime_neither_grows_nor_stalls_under_sustained_load() {
         "§16.2: median input latency {median:?} exceeds {MEDIAN_LATENCY_CEILING:?} \
          under load"
     );
+    // Responsiveness on the 99th percentile, not on the maximum. A max over tens of
+    // thousands of samples on a general-purpose OS measures the scheduler's worst
+    // wake-up: a control of two bare threads passing messages, with no monitrs code on
+    // the path, reproduced this harness's tail at every percentile.
+    let p99 = report.p99_latency();
+    assert!(
+        p99 <= MEDIAN_LATENCY_CEILING,
+        "§16.2: 99th-percentile input latency {p99:?} exceeds \
+         {MEDIAN_LATENCY_CEILING:?} under load"
+    );
+    // And the max stays, as the stall detector it is good for.
     let worst = report.max_latency();
     assert!(
         worst <= MAX_LATENCY_CEILING,
