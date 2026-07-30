@@ -13,27 +13,62 @@ with it.
 
 ## Demo
 
-_Pending._ The interface runs, but no screenshot has been captured from it yet, and
-§20.1 of the design forbids shipping a mocked-up one — so this section stays empty
-rather than showing something that was drawn by hand.
+A real frame, captured from the running program on a Mac with about a thousand
+processes, in strict ASCII mode with colour off — the form that survives a README, a
+terminal without colour, and a screen reader. It is written by
+`crates/monitrs/tests/capture.rs` straight out of the renderer with live data
+(`cargo test -p monitrs --release --test capture -- --ignored`), so it cannot drift
+from what monitrs actually draws, and §20.1's ban on a mocked-up screenshot is kept.
 
-The layout it is built towards, in strict ASCII mode:
+Trimmed to 118 columns on the right for legibility; the full 160-column frames, the
+Unicode variant, and the 80×24 compact layout are in
+[`docs/screenshots/`](docs/screenshots/). The hostname and the login name are
+substituted for the machine this was taken on — every measurement, process name and
+state is exactly as rendered, and the substitutes are the same width so no column
+moves.
 
 ```text
-+ monitrs host:dev-mbp  LIVE  1.0s  up 3d 04:12 -------- 22:14:44 ----------+
-| CPU  37% [#############----------------------]  load 4.12 3.84 3.21       |
-| MEM  71% [#########################----------]  22.8/32.0 GiB  swap 0.2G  |
-+ PRESSURE --------------------+-- HISTORY 5m -------------------------------+
-| . CPU normal     37%         | CPU  .....::-=+*##@%#*+=--:...              |
-| ! MEM watch      71%         | MEM  ====+++++*********########             |
-| . DISK normal    12%         | I/O  .......:==#@@*=:........               |
-| ? NET unknown   18M/s        |        ^ -00:37 selected                    |
-+ PROCESSES --------------------------------------------------- 218 total ---+
-|   PID USER       CPU%  MEM%     RSS   READ/s WRITE/s  AGE      COMMAND     |
-|>31842 gabor      287%   8.1%   2.6G    18M     42M    00:43    rustc       |
-|  1221 postgres    54%   3.0%   982M   128K      7M    12d      postgres    |
-+----------------------------------------------------------------------------+
++ monitrs  host:dev-mbp  [>LIVE]  250ms  up 9d 00:11 -----------------------------------------------------------------
+| CPU   19% [#################=----------------------------------------------------------------------------]  load  6.
+| MEM   62% [##########################################################=-----------------------------------]  30G/48G
++ PRESSURE -----------------------+ HISTORY 5m -----------------------------------------------------------------------
+| . CPU     normal        19%     | CPU
+| . MEM     normal        38%     | MEM
+| . NET     normal      35K/s     | I/O
+| . LOAD    normal       6.08     | CORE  +++=....::::
+|                                 |
++ PROCESSES  sort CPU% desc  no kthreads -----------------------------------------------------------------------------
+|      PID USER     S   CPU%  MEM%   RSS  VIRT  READ/s WRITE/s  THR      AGE NAME                             COMMAND
+|>   45241 me       R    35%  1.8%  875M  1.8T    0B/s    0B/s   26    30:24 Cursor Helper (Renderer)         /Applica
+|    45234 me       R    30%  0.3%  128M  464G    0B/s    0B/s   17    30:25 Cursor Helper                    /Applica
+|    62728 me       R    16%  1.6%  803M  421G    0B/s    0B/s   34 10:52:18 claude                           claude
+|    69211 me       R    16%  0.0%   24M  415G    0B/s    0B/s    5    00:07 capture-35a93566c2c11cd4         /Users/y
+|     1398 me       R    10%  0.4%  173M  416G    0B/s    0B/s   10       9d Terminal                         /System/
+|    63011 me       R   8.3%  1.4%  675M  1.8T    0B/s    0B/s   27 10:50:22 Google Chrome Helper (Renderer)  /Applica
+|    84339 me       R   6.7%  0.5%  247M  465G    0B/s    0B/s   25       3d Google Chrome Helper             /Applica
+|    84322 me       R   6.3%  1.7%  835M  513G    0B/s    0B/s   53       3d Google Chrome                    /Applica
+|    12800 me       R   3.0%  0.1%   25M  415G    0B/s    0B/s    4       3d python                           /Users/y
+|     4571 me       R   2.9%  0.1%   25M  415G    0B/s    0B/s    4       2d python                           /Users/y
+|    64501 me       R   1.7%  0.1%   25M  415G    0B/s    0B/s    4    02:41 mdworker_shared                  /System/
+|    66589 me       R   1.7%  0.1%   27M  415G    0B/s    0B/s    4    01:18 mdworker_shared                  /System/
+|    31474 me       R   1.0%  1.8%  896M  439G    0B/s    0B/s   24       1d com.apple.Virtualization.Virt... /System/
+|    55338 me       R   0.9%  0.6%  303M  1.8T    0B/s    0B/s   23    08:25 Cursor Helper (Plugin)           Cursor H
+|    55330 me       R   0.9%  0.5%  245M  1.8T    0B/s    0B/s   21    08:25 Cursor Helper (Plugin)           Cursor H
 ```
+
+Things worth noticing, all of which are the design rather than the accident of one
+frame:
+
+* **`>` marks the selection, and it starts on the busiest process** — not on PID 1.
+  The cursor follows a process once you choose one, and until then it tracks the top
+  of the table (§7.2).
+* **`normal` is spelled out next to a `.` symbol.** Colour is never the only carrier
+  of meaning, so every state has a redundant character (§5.2).
+* **`n/a` and `denied` are different words.** A metric the OS refused to report is
+  not the same as one this machine cannot produce, and neither is a zero (§4, §26).
+* **`THR` has real numbers.** They come from the native macOS layer; the
+  cross-platform baseline cannot see them, which is why monitrs enriches by default
+  (§9.2).
 
 ## What makes it different
 

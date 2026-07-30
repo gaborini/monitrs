@@ -53,9 +53,29 @@ sits next to things that can contain paths and filters you may not want readable
 
 * **Reload is atomic.** The whole candidate file is parsed and validated before
   anything replaces the running configuration, so a typo cannot leave monitrs
-  half-reconfigured. Settings that changed but cannot take effect until restart
-  (currently `display.mouse` and `config_version`) are reported rather than
-  silently dropped.
+  half-reconfigured. A refused reload says so and leaves the running configuration
+  in force; it is not a reason to stop.
+
+  What a successful reload reaches is deliberately all three places the settings
+  live: the running configuration, the interface, and the sampler thread. The
+  interface picks up the theme, the glyph mode, the colour depth, the units, the
+  ordering, the filter, the kernel-thread toggle and the keymap; the sampler picks
+  up `sampling.interval` and the whole of `[diagnostics]`. A reload that changes
+  `sampling.interval` or `sampling.history` reshapes the history ring, which
+  **discards the samples it holds** — the Time Lens starts again from now, and
+  monitrs says so rather than letting a scrubbed timeline quietly empty.
+
+  Two settings cannot take effect until restart, and are named in the notice
+  rather than silently dropped:
+
+  | Key | Why |
+  |---|---|
+  | `display.mouse` | Mouse capture is a terminal mode set once at startup. Reported for as long as the file disagrees with the mode the terminal is actually in, not merely on the first reload that changed it. |
+  | `config_version` | The version the running session was validated against. |
+
+  An unusable keymap — a binding that conflicts with a built-in key — invalidates
+  the whole candidate. Falling back to the built-in keymap would take away the
+  bindings you still have, on the strength of a file you have just broken.
 * **Configuration is data.** Nothing in it is ever executed, and there are no
   pre- or post-action hooks.
 * **Environment variable interpolation is not supported** in v1. `${HOME}` is used
