@@ -2,7 +2,7 @@
 source: crates/monitrs-tui/tests/overlay_snapshots.rs
 expression: text_of(&buffer)
 ---
-|                   + HELP ------------------------------------------- 1-38 of 43 ---+                   |
+|                   + HELP ------------------------------------------- 1-38 of 44 ---+                   |
 |                   |Global                                                          |                   |
 |                   | q                  Quit                                        |                   |
 |                   | Ctrl-C             Quit safely from any mode                   |                   |
@@ -12,9 +12,10 @@ expression: text_of(&buffer)
 |                   | Shift-Tab          Focus the previous panel                    |                   |
 |                   | 1                  Go to the Overview view                     |                   |
 |                   | 2                  Go to the Processes view                    |                   |
-|                   | 3                  Go to the Storage view                      |                   |
-|                   | 4                  Go to the Network view                      |                   |
-|                   | 5                  Go to the Inspect view                      |                   |
+|                   | 3                  Go to the CPU view                          |                   |
+|                   | 4                  Go to the Storage view                      |                   |
+|                   | 5                  Go to the Network view                      |                   |
+|                   | 6                  Go to the Inspect view                      |                   |
 |                   | Space              Pause or resume the visible timeline        |                   |
 |                   | L                  Return to the live sample                   |                   |
 |                   | :                  Open the command palette                    |                   |
@@ -40,5 +41,4 @@ expression: text_of(&buffer)
 |                   | [                  Step one sample back                        |                   |
 |                   | ]                  Step one sample forward                     |                   |
 |                   | {                  Leap ten samples back                       |                   |
-|                   | }                  Leap ten samples forward                    |                   |
 |                   +----------------------------------------------------------------+                   |

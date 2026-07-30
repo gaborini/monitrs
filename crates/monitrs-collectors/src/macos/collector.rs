@@ -31,7 +31,7 @@ use std::time::SystemTime;
 
 use monitrs_core::SystemSnapshot;
 use monitrs_core::model::{
-    CapabilityState, MetricState, ProcessDetailResult, ProcessIdentity, Tier,
+    CapabilityState, CoreClass, MetricState, ProcessDetailResult, ProcessIdentity, Tier,
 };
 use monitrs_core::rates::{CounterTracker, CounterWidth};
 
@@ -72,6 +72,11 @@ pub struct MachineFacts {
     pub page_size: Option<u64>,
     /// Statistics-clock frequency the CPU tick counters are counted in.
     pub tick_rate: Option<u32>,
+    /// The machine's core classes, in the order the kernel numbers them.
+    ///
+    /// Empty on a homogeneous machine, which is a fact rather than an absence: an
+    /// Intel Mac has one kind of core and there is nothing to distinguish.
+    pub core_classes: Vec<CoreClass>,
 }
 
 impl MachineFacts {
@@ -97,8 +102,69 @@ impl MachineFacts {
             boot_time: read_boot_time(),
             page_size: memory::read_page_size().ok(),
             tick_rate: cpu::ticks_per_second(),
+            core_classes: read_core_classes(),
         }
     }
+}
+
+/// Reads the asymmetric-core topology from `hw.perflevelN`.
+///
+/// Apple Silicon splits its CPUs into performance and efficiency cores, and the
+/// difference matters for reading a per-core view: four efficiency cores at 90% and
+/// four performance cores idle is a machine doing very little, while the reverse is a
+/// machine working hard — the same eight numbers either way.
+///
+/// The names come from `hw.perflevelN.name`, so the vocabulary is the platform's rather
+/// than one invented here. All of these are documented, public MIBs (§9.3).
+///
+/// The kernel numbers logical CPUs so that level 0 comes first, which is why the
+/// indices can be assigned by walking the levels in order and taking the next `n`.
+/// Returns an empty list on a machine with fewer than two levels: one class is no
+/// classification.
+fn read_core_classes() -> Vec<CoreClass> {
+    let levels = sysctl::scalar_by_name::<i32>(c"hw.nperflevels")
+        .ok()
+        .and_then(|count| u16::try_from(count).ok())
+        .unwrap_or(0);
+    if levels < 2 {
+        return Vec::new();
+    }
+
+    let mut classes = Vec::new();
+    let mut next_index = 0u16;
+    for level in 0..levels {
+        // `CString` per level rather than a fixed table: the MIB name embeds the
+        // index, and there is no bound on how many levels a future machine has.
+        let logical_name =
+            std::ffi::CString::new(format!("hw.perflevel{level}.logicalcpu")).unwrap_or_default();
+        let physical_name =
+            std::ffi::CString::new(format!("hw.perflevel{level}.physicalcpu")).unwrap_or_default();
+        let label_name =
+            std::ffi::CString::new(format!("hw.perflevel{level}.name")).unwrap_or_default();
+
+        let Some(logical) = sysctl::scalar_by_name::<i32>(&logical_name)
+            .ok()
+            .and_then(|count| u16::try_from(count).ok())
+            .filter(|count| *count > 0)
+        else {
+            // A level that will not say how many CPUs it has cannot be placed, and
+            // guessing would misattribute every core after it.
+            return Vec::new();
+        };
+        let physical = sysctl::scalar_by_name::<i32>(&physical_name)
+            .ok()
+            .and_then(|count| u16::try_from(count).ok());
+        let name =
+            sysctl::string_by_name(&label_name).unwrap_or_else(|_| format!("level {level}").into());
+
+        classes.push(CoreClass {
+            name,
+            logical: (next_index..next_index.saturating_add(logical)).collect(),
+            physical_count: physical,
+        });
+        next_index = next_index.saturating_add(logical);
+    }
+    classes
 }
 
 /// Reads `kern.boottime`, which is a `timeval` and so has microsecond resolution.
@@ -423,6 +489,9 @@ impl SnapshotSource for MacosCollector {
         // is coming, for a value this kernel has no concept of. §4 has a state for
         // exactly this, and it is the one the capability flag already declares.
         snapshot.pressure.psi = MetricState::Unsupported;
+        // Topology, not a measurement: read once at construction and republished on
+        // every snapshot so the CPU screen never has to wait for it.
+        snapshot.cpu.core_classes = self.facts.core_classes.clone();
         self.declare_capabilities(&mut snapshot.capabilities);
         Ok(snapshot)
     }

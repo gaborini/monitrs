@@ -416,6 +416,7 @@ impl ObservedCpu {
             total: baseline_total,
             per_core: baseline_per_core,
             frequency_mhz,
+            core_classes,
         } = baseline;
 
         // An enrichment with nothing to say must not overwrite a baseline that has
@@ -448,6 +449,7 @@ impl ObservedCpu {
             },
             per_core,
             frequency_mhz,
+            core_classes,
         }
     }
 }

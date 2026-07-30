@@ -28,6 +28,46 @@ impl CpuUsage {
     }
 }
 
+/// A class of logical CPUs that differ in kind, not just in load.
+///
+/// Apple Silicon has performance and efficiency cores; big.LITTLE ARM machines have
+/// the same split under other names. It matters for reading a per-core view: four
+/// efficiency cores at 90% and four performance cores idle is a machine doing very
+/// little, and the opposite is a machine working hard — the same eight numbers.
+///
+/// The name comes from the platform (`hw.perflevelN.name` on macOS) rather than from
+/// a table here, because inventing the vocabulary would mean guessing at hardware
+/// this code has never seen.
+#[derive(Clone, Debug, Eq, PartialEq)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+pub struct CoreClass {
+    /// What the platform calls it, e.g. `Performance` or `Efficiency`.
+    pub name: Box<str>,
+    /// The logical CPUs in this class, as indices into
+    /// [`CpuSnapshot::per_core`].
+    ///
+    /// Indices rather than a count, because a renderer needs to know *which* cores
+    /// they are to colour or group them, and a count would force it to assume the
+    /// classes are contiguous.
+    pub logical: Vec<u16>,
+    /// Physical cores in this class, where the platform reports it separately.
+    pub physical_count: Option<u16>,
+}
+
+impl CoreClass {
+    /// How many logical CPUs this class holds.
+    #[must_use]
+    pub fn len(&self) -> usize {
+        self.logical.len()
+    }
+
+    /// Whether the class holds no CPUs, which a platform should never report.
+    #[must_use]
+    pub fn is_empty(&self) -> bool {
+        self.logical.is_empty()
+    }
+}
+
 /// The per-state split of CPU time.
 ///
 /// macOS exposes only `user`, `system`, `nice`, and `idle`; the Linux-only
@@ -110,6 +150,14 @@ pub struct CpuSnapshot {
     pub per_core: MetricState<Vec<CpuUsage>>,
     /// Current clock, where reported.
     pub frequency_mhz: MetricState<u64>,
+    /// The machine's core classes, where the platform names them.
+    ///
+    /// Empty where there is one class or none is reported, which is the honest
+    /// answer for a homogeneous machine — an empty list is not "unknown", it is
+    /// "there is nothing to distinguish". `MetricState` is deliberately not used:
+    /// this is topology, fixed for the life of the machine, and a topology that
+    /// could be `WarmingUp` would invite a renderer to wait for it.
+    pub core_classes: Vec<CoreClass>,
 }
 
 impl CpuSnapshot {
@@ -122,6 +170,9 @@ impl CpuSnapshot {
             total: MetricState::WarmingUp,
             per_core: MetricState::WarmingUp,
             frequency_mhz: MetricState::WarmingUp,
+            // Empty rather than warming up: topology is not measured, it is read
+            // once, and a collector that knows of no classes is reporting a fact.
+            core_classes: Vec::new(),
         }
     }
 }

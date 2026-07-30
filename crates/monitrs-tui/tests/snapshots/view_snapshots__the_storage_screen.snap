@@ -39,4 +39,4 @@ expression: text
 ||DEVICE      READ/s WRITE/s   R-IOPS   W-IOPS MODEL            MOUNTS                                                                      ||
 ||disk0        18M/s   42M/s      320      810 Fake NVMe        /                                                                           ||
 |+------------------------------------------------------------------------------------------------------------------------------------------+|
-| 1 Overview  2 Processes [3 Storage] 4 Network  5 Inspect                                                                   / filter  ? help|
+| 1 Overview  2 Processes  3 CPU [4 Storage] 5 Network  6 Inspect                                                            / filter  ? help|

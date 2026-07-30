@@ -33,13 +33,20 @@ use std::path::PathBuf;
 
 use monitrs_core::model::ProcessIdentity;
 
-/// The five top-level views, bound to `1`–`5` by §6.2.
+/// The six top-level views, bound to `1`–`6` by §6.2.
+///
+/// `Cpu` sits next to `Processes` on purpose: "which process is busy" and "which core
+/// is busy" are the same question asked from two ends, and a user who has just sorted
+/// the table by CPU is one key away from the cores. It cost renumbering the three
+/// screens after it, which is a real price paid once.
 #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
 pub enum ViewId {
     /// §7.1: CPU, memory, load, pressure radar, top processes.
     Overview,
     /// §7.2: the process table.
     Processes,
+    /// Per-core utilization, the aggregate breakdown, and core topology.
+    Cpu,
     /// §7.3: filesystems and devices.
     Storage,
     /// §7.4: interfaces and throughput.
@@ -49,10 +56,11 @@ pub enum ViewId {
 }
 
 impl ViewId {
-    /// Every view, in `1`–`5` order.
-    pub const ALL: [Self; 5] = [
+    /// Every view, in `1`–`6` order.
+    pub const ALL: [Self; 6] = [
         Self::Overview,
         Self::Processes,
+        Self::Cpu,
         Self::Storage,
         Self::Network,
         Self::Inspect,
@@ -64,9 +72,10 @@ impl ViewId {
         match self {
             Self::Overview => '1',
             Self::Processes => '2',
-            Self::Storage => '3',
-            Self::Network => '4',
-            Self::Inspect => '5',
+            Self::Cpu => '3',
+            Self::Storage => '4',
+            Self::Network => '5',
+            Self::Inspect => '6',
         }
     }
 
@@ -76,9 +85,10 @@ impl ViewId {
         match digit {
             '1' => Some(Self::Overview),
             '2' => Some(Self::Processes),
-            '3' => Some(Self::Storage),
-            '4' => Some(Self::Network),
-            '5' => Some(Self::Inspect),
+            '3' => Some(Self::Cpu),
+            '4' => Some(Self::Storage),
+            '5' => Some(Self::Network),
+            '6' => Some(Self::Inspect),
             _ => None,
         }
     }
@@ -89,6 +99,7 @@ impl ViewId {
         match self {
             Self::Overview => "Overview",
             Self::Processes => "Processes",
+            Self::Cpu => "CPU",
             Self::Storage => "Storage",
             Self::Network => "Network",
             Self::Inspect => "Inspect",
@@ -101,6 +112,7 @@ impl ViewId {
         match self {
             Self::Overview => "overview",
             Self::Processes => "processes",
+            Self::Cpu => "cpu",
             Self::Storage => "storage",
             Self::Network => "network",
             Self::Inspect => "inspect",
@@ -856,10 +868,10 @@ mod tests {
         }
         assert_eq!(
             ViewId::ALL.map(ViewId::digit),
-            ['1', '2', '3', '4', '5'],
-            "§6.2 binds the views to 1-5 in this order"
+            ['1', '2', '3', '4', '5', '6'],
+            "§6.2 binds the views to 1-6 in this order, with CPU inserted at 3"
         );
-        assert_eq!(ViewId::from_digit('6'), None);
+        assert_eq!(ViewId::from_digit('7'), None);
         assert_eq!(ViewId::from_digit('0'), None);
     }
 

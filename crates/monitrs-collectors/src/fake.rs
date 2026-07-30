@@ -255,6 +255,14 @@ pub struct Scenario {
     pub arch: &'static str,
     /// Logical CPU count.
     pub logical_cpus: u16,
+    /// Whether the fake machine has asymmetric cores.
+    ///
+    /// `true` by default, so the snapshot suites exercise the grouped per-core path —
+    /// which is the interesting one, and the one every Apple Silicon Mac takes. Set it
+    /// `false` for a homogeneous machine: an Intel box, most servers, and most virtual
+    /// machines, where the platform reports no classes and one group is no
+    /// classification.
+    pub asymmetric_cores: bool,
     /// Physical core count.
     pub physical_cpus: u16,
     /// Total physical memory.
@@ -303,6 +311,7 @@ impl Default for Scenario {
             hostname: "dev-mbp".into(),
             arch: "aarch64",
             logical_cpus: 8,
+            asymmetric_cores: true,
             physical_cpus: 8,
             total_memory_bytes: 32 * GIB,
             swap_total_bytes: 2 * GIB,
@@ -521,6 +530,32 @@ impl FakeCollector {
             total: self.age(total.map(CpuUsage::plain), sequence),
             per_core: self.age(per_core, sequence),
             frequency_mhz: MetricState::Available(3_200),
+            // Two classes, so every snapshot test and the CPU screen exercise the
+            // heterogeneous path rather than only the flat one. The split mirrors the
+            // shape of a real asymmetric machine: the faster cores come first.
+            core_classes: if !self.scenario.asymmetric_cores {
+                // A homogeneous machine: no classes at all, which is a fact rather than
+                // an absence.
+                Vec::new()
+            } else {
+                let logical = self.scenario.logical_cpus;
+                let performance = logical.saturating_sub(logical / 4).max(1);
+                vec![
+                    monitrs_core::model::CoreClass {
+                        name: "Performance".into(),
+                        logical: (0..performance).collect(),
+                        physical_count: Some(performance),
+                    },
+                    monitrs_core::model::CoreClass {
+                        name: "Efficiency".into(),
+                        logical: (performance..logical).collect(),
+                        physical_count: Some(logical.saturating_sub(performance)),
+                    },
+                ]
+                .into_iter()
+                .filter(|class| !class.is_empty())
+                .collect()
+            },
         }
     }
 

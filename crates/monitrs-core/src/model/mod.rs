@@ -20,7 +20,7 @@ mod snapshot;
 mod storage;
 
 pub use capability::{CapabilitySnapshot, CapabilityState};
-pub use cpu::{CpuBreakdown, CpuNormalization, CpuSnapshot, CpuUsage, LoadSnapshot};
+pub use cpu::{CoreClass, CpuBreakdown, CpuNormalization, CpuSnapshot, CpuUsage, LoadSnapshot};
 pub use health::{
     CollectorHealth, CollectorIssue, MAX_RETAINED_ISSUES, SelfOverhead, Tier, TierHealth,
 };

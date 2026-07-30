@@ -1454,7 +1454,14 @@ fn the_eighty_by_twenty_four_layout_keeps_identity_and_the_headline_numbers() {
     }
     // §5.7's Compact band: the one-line summary and the tab strip survive.
     assert!(text.contains("CPU"), "{text}");
-    assert!(text.contains("1 Overview"), "{text}");
+    // The strip condenses to digits at this width, and does so *because* there are six
+    // screens: five fitted their names into 80 columns and six do not. The active one is
+    // still bracketed, so a reader can see where they are — and the names are one `?`
+    // away, which the next assertion checks is advertised.
+    assert!(
+        text.contains("[1] 2") && !text.contains("1 Overview"),
+        "at 80 columns the tab strip should be digits with the active one bracketed:\n{text}"
+    );
     assert!(text.contains("? help"), "{text}");
     // Dropped, and named in the document as dropped.
     for dropped in ["VIRT", "THR", "PRESSURE", "HISTORY", "PINS"] {

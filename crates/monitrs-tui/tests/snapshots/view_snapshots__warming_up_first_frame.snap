@@ -39,4 +39,4 @@ expression: text
 || nothing pinned; p pins the selected process                         | NET   rx warming  tx warming                                       ||
 ||                                                                     | DISK  rd warming  wr warming                                       ||
 |+---------------------------------------------------------------------+--------------------------------------------------------------------+|
-|[1 Overview] 2 Processes  3 Storage  4 Network  5 Inspect                                                                   / filter  ? help|
+|[1 Overview] 2 Processes  3 CPU  4 Storage  5 Network  6 Inspect                                                            / filter  ? help|

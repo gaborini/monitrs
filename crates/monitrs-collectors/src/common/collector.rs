@@ -338,6 +338,9 @@ impl CommonCollector {
             // Frequency lives on the CPU refresh group we do not request every
             // tick; reading it here would report a stale value as current.
             frequency_mhz: MetricState::Unsupported,
+            // The baseline cannot see core classes: `sysinfo` reports a flat list of
+            // CPUs. The native layers fill this in where the platform names them.
+            core_classes: Vec::new(),
         }
     }
 

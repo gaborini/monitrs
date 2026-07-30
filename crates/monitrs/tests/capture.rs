@@ -322,7 +322,16 @@ fn capture_real_frames_for_the_documentation() {
     let (compact, _) = live.render((80, 24));
     write_frame("processes-80x24-ascii.txt", &compact, &anonymize);
 
-    live.press(KeyPress::char('5'));
+    // The CPU screen, which is the whole reason `3` exists.
+    live.press(KeyPress::char('3'));
+    let (cpu, _) = live.render(WIDE);
+    assert!(
+        cpu.contains("BUSIEST PROCESSES"),
+        "the CPU screen must name the processes accounting for the load"
+    );
+    write_frame("cpu-ascii.txt", &cpu, &anonymize);
+
+    live.press(KeyPress::char('6'));
     let (inspect, _) = live.render(WIDE);
     assert!(
         inspect.contains("n/a") || inspect.contains("unsupported"),

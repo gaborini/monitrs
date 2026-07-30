@@ -693,6 +693,60 @@ fn the_processes_screen() {
 }
 
 #[test]
+fn the_cpu_screen() {
+    // The heterogeneous case, which is the one the screen exists for: the fake platform
+    // reports two core classes, so the cores arrive grouped and named rather than as a
+    // flat list of numbers that mean different things depending on which core they are.
+    let state = Fixture::new((140, 38), ViewId::Cpu).build();
+    let text = text_of(&frame(&state, ascii()));
+    assert!(text.contains("PERFORMANCE"), "{text}");
+    assert!(text.contains("EFFICIENCY"), "{text}");
+    // The load average is useless without knowing how many cores it is spread over.
+    assert!(text.contains("per core"), "{text}");
+    // And the processes accounting for it, because a busy core raises exactly that
+    // question.
+    assert!(text.contains("BUSIEST PROCESSES"), "{text}");
+    insta::assert_snapshot!(text_of(&frame(&state, ascii())));
+}
+
+#[test]
+fn the_cpu_screen_on_a_machine_with_one_kind_of_core() {
+    // A homogeneous machine reports no classes, and one group is no classification: the
+    // panel is drawn unlabelled rather than inventing a name for the only kind there is.
+    let scenario = Scenario {
+        asymmetric_cores: false,
+        ..Scenario::default()
+    };
+    let state = Fixture::new((140, 38), ViewId::Cpu)
+        .with_scenario(scenario)
+        .build();
+    let text = text_of(&frame(&state, ascii()));
+    assert!(
+        text.contains("CORES"),
+        "the one group is unlabelled:\n{text}"
+    );
+    assert!(
+        !text.contains("PERFORMANCE") && !text.contains("EFFICIENCY"),
+        "a machine that reports no classes must not be given invented ones:\n{text}"
+    );
+    insta::assert_snapshot!(text);
+}
+
+#[test]
+fn the_cpu_screen_while_warming_up() {
+    // §8.2: the first frame has no rates at all, so every core and the total say so
+    // rather than showing zero.
+    let state = Fixture::new((140, 38), ViewId::Cpu).with_samples(1).build();
+    let text = text_of(&frame(&state, ascii()));
+    assert!(text.contains("warming"), "{text}");
+    assert!(
+        !text.contains("0%"),
+        "a warming-up core must not render as 0%:\n{text}"
+    );
+    insta::assert_snapshot!(text);
+}
+
+#[test]
 fn the_storage_screen() {
     // §7.3: two clearly labelled sections, and no unlabelled percentage.
     let state = Fixture::new((140, 38), ViewId::Storage).build();

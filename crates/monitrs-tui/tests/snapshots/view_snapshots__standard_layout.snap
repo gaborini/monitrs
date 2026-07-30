@@ -31,4 +31,4 @@ expression: "text_of(&frame(&state, ascii()))"
 || . CPU     normal        79% [######################################=--------------------------------------]||
 || . MEM     normal        29% [################################=--------------------------------------------]||
 |+------------------------------------------------------------------------------------------------------------+|
-|[1 Overview] 2 Processes  3 Storage  4 Network  5 Inspect                                     / filter  ? help|
+|[1 Overview] 2 Processes  3 CPU  4 Storage  5 Network  6 Inspect                              / filter  ? help|

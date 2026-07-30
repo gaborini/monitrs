@@ -39,4 +39,4 @@ expression: text
 ||  memory       2.6G rss, 16G virt, 8.1% of total                     |  lag          1400ms                                               ||
 ||  disk         !permission denied read, !permission denied write (...|  history      24 samples of 300, 162K                              ||
 |+---------------------------------------------------------------------+--------------------------------------------------------------------+|
-| 1 Overview  2 Processes  3 Storage  4 Network [5 Inspect]                                                                  / filter  ? help|
+| 1 Overview  2 Processes  3 CPU  4 Storage  5 Network [6 Inspect]                                                           / filter  ? help|

@@ -50,6 +50,7 @@
 //!
 //! [`MetricState`]: monitrs_core::model::MetricState
 
+pub mod cpu;
 pub mod inspect;
 pub mod network;
 pub mod overlays;
@@ -224,6 +225,7 @@ pub fn render(frame: &mut Frame<'_>, area: Rect, state: &AppState, presentation:
     match state.view() {
         ViewId::Overview => overview::render(frame, area, state, presentation),
         ViewId::Processes => processes::render(frame, area, state, presentation),
+        ViewId::Cpu => cpu::render(frame, area, state, presentation),
         ViewId::Storage => storage::render(frame, area, state, presentation),
         ViewId::Network => network::render(frame, area, state, presentation),
         ViewId::Inspect => inspect::render(frame, area, state, presentation),
@@ -1460,7 +1462,7 @@ mod tests {
             "§5.4: switching view must not move the strip"
         );
         assert!(first.iter().any(|(text, _)| text == "[1 Overview]"));
-        assert!(second.iter().any(|(text, _)| text == "[5 Inspect]"));
+        assert!(second.iter().any(|(text, _)| text == "[6 Inspect]"));
     }
 
     #[test]
