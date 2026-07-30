@@ -31,9 +31,18 @@ directories.workspace = true
 ratatui.workspace = true
 serde.workspace = true
 serde_json.workspace = true
+# Read for the self-overhead measurement only: one single-process refresh of our
+# own PID (§26). The same crate the common collector uses, so measuring ourselves
+# adds no second platform path and no unsafe code to this crate.
+sysinfo.workspace = true
 thiserror.workspace = true
 toml.workspace = true
 tracing.workspace = true
+# §13's sanctioned logging stack, used by `logging.rs`. `tracing-appender` is here
+# for its non-blocking writer: a log write that blocked on a slow disk would show
+# up as collector lag, i.e. the tool would distort what it measures (§14.2, §16.2).
+tracing-appender.workspace = true
+tracing-subscriber.workspace = true
 
 [dev-dependencies]
 criterion.workspace = true
