@@ -35,7 +35,7 @@
 //! The fake collector is the default because it makes the load a knob and the run
 //! reproducible — but it opens no files, so on its own it can only show that the
 //! *runtime* leaks no descriptors. `MONITRS_SOAK_REAL_COLLECTOR=1` swaps in
-//! [`CommonCollector`], which is the code that actually opens things, and is what a
+//! [`platform_collector`], which is the code that actually opens things, and is what a
 //! pre-release soak should run at least once. See [`SourceKind`].
 //!
 //! # Why the module source is included rather than imported
@@ -43,12 +43,14 @@
 //! `monitrs` is a binary crate, so it has no library target for an integration test
 //! to link against, and `runtime.rs` is deliberately `pub(crate)`. `#[path]` puts
 //! the real module into this test binary, which is the only way to drive it without
-//! widening its visibility for the sake of a test.
+//! widening its visibility for the sake of a test. `logging.rs` comes along because
+//! `runtime.rs` calls into it, not because the soak run logs anything.
 //!
 //! That has one visible consequence: `cargo test` sets `cfg(test)` for an
-//! integration target too, so `runtime.rs`'s own unit tests are compiled into this
-//! binary and run again here under `runtime::tests::*`. They are fast, and having
-//! the soak binary re-verify the channel invariants it depends on is no loss.
+//! integration target too, so those modules' own unit tests are compiled into this
+//! binary and run again here under `runtime::tests::*` and `logging::tests::*`. They
+//! are fast, and having the soak binary re-verify the channel invariants it depends
+//! on is no loss.
 //!
 //! # Why the input thread is simulated
 //!
@@ -75,19 +77,26 @@ use crossbeam_channel::Sender;
 
 use monitrs_collectors::fake::Scenario;
 use monitrs_collectors::selfstat::{SELF_MEASUREMENT_COMPILED, SelfUsage};
-use monitrs_collectors::{CommonCollector, FakeCollector, TierIntervals};
+use monitrs_collectors::{FakeCollector, platform_collector};
 use monitrs_core::history::{HistoryConfig, MIN_HISTORY_DURATION, MIN_SAMPLE_INTERVAL};
 use monitrs_core::model::ProcessIdentity;
 use monitrs_tui::app::{AppSettings, AppState, apply};
 use monitrs_tui::event::{Event, KeyPress, TerminalEvent};
 
+// `runtime.rs` records the collector's duration and the channel's losses through
+// `crate::logging` (§14.2), so the same `#[path]` trick has to bring that module in
+// too or the module would not compile here. No subscriber is installed in this
+// binary, so every one of those calls is the no-op dispatch a run without
+// `--debug-log` gets — which is also the configuration §16.1's budgets assume.
+#[path = "../src/logging.rs"]
+mod logging;
 #[path = "../src/runtime.rs"]
 mod runtime;
 
 use runtime::{
-    ChannelHealth, DetailRequest, EVENT_CHANNEL_CAPACITY, EventSender, SampleRequest, Shutdown,
-    Workers, detail_channel, drain_to_newest_snapshot, event_channel, spawn_detail_worker,
-    spawn_sampler_thread, spawn_tick_thread,
+    ChannelHealth, DetailRequest, EVENT_CHANNEL_CAPACITY, EventSender, SampleRequest,
+    SamplingControl, Shutdown, Workers, detail_channel, drain_to_newest_snapshot, event_channel,
+    spawn_detail_worker, spawn_sampler_thread, spawn_tick_thread,
 };
 
 /// The event payload type. The soak run never reloads configuration, so the
@@ -202,7 +211,7 @@ enum SourceKind {
     /// means the descriptor curve proves that the *runtime* leaks no descriptors,
     /// not that the platform collector leaks none. It cannot: it opens nothing.
     Fake,
-    /// [`CommonCollector`]: the real thing, `/proc` reads and all.
+    /// [`platform_collector`]: the real thing, native enrichment and all.
     ///
     /// The mode that actually tests §16.1's descriptor budget, because this is the
     /// code that opens files. Slower, and not reproducible, so it is opt-in.
@@ -612,7 +621,12 @@ fn run_soak(config: SoakConfig) -> SoakReport {
     let mut workers = Workers::new();
 
     let (detail_tx, detail_rx) = detail_channel();
-    let intervals = TierIntervals::derived_from(config.sample_interval);
+    // One control shared by the sampler; a soak run never changes it, but building
+    // it the way the real program does is the point of a soak run.
+    let sampling = SamplingControl::new(
+        config.sample_interval,
+        monitrs_core::diagnostics::Thresholds::default(),
+    );
     match config.source {
         SourceKind::Fake => {
             let scenario = Scenario::with_process_count(config.processes);
@@ -621,9 +635,8 @@ fn run_soak(config: SoakConfig) -> SoakReport {
                 FakeCollector::new(scenario.clone()).with_interval(config.sample_interval),
                 sender.clone(),
                 shutdown.clone(),
-                intervals,
+                sampling.clone(),
                 SampleRequest::new(),
-                monitrs_core::diagnostics::Thresholds::default(),
             )
             .expect("the sampler thread must spawn");
             spawn_detail_worker(
@@ -641,17 +654,16 @@ fn run_soak(config: SoakConfig) -> SoakReport {
             // its own baselines, which is why a collector is long-lived (§9.1).
             spawn_sampler_thread(
                 &mut workers,
-                CommonCollector::new().expect("the platform collector must construct"),
+                platform_collector().expect("the platform collector must construct"),
                 sender.clone(),
                 shutdown.clone(),
-                intervals,
+                sampling.clone(),
                 SampleRequest::new(),
-                monitrs_core::diagnostics::Thresholds::default(),
             )
             .expect("the sampler thread must spawn");
             spawn_detail_worker(
                 &mut workers,
-                CommonCollector::new().expect("the platform collector must construct"),
+                platform_collector().expect("the platform collector must construct"),
                 detail_rx,
                 sender.clone(),
                 shutdown.clone(),

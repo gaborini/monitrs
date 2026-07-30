@@ -218,10 +218,17 @@ pub(crate) struct ConfigArgs {
 
     /// Write a debug log to this file.
     ///
-    /// Off by default. Nothing is ever written to stdout or stderr while the
-    /// interface is running, because that would corrupt the display (§14.2).
-    /// Command lines are redacted and environment values are never logged.
-    #[arg(long, value_name = "PATH")]
+    /// Off by default, and honoured by every subcommand — `global` because
+    /// `monitrs snapshot --debug-log <PATH>` is how anyone would write it, and a
+    /// flag that has to precede the subcommand to work at all is a flag that
+    /// silently does nothing half the time.
+    ///
+    /// Nothing is ever written to stdout, and nothing reaches stderr while the
+    /// interface is running, because that would corrupt the display (§14.2). A
+    /// one-shot subcommand has no display to corrupt, so it mirrors the log to
+    /// stderr as well. Command lines are redacted and environment values are never
+    /// logged.
+    #[arg(long, value_name = "PATH", global = true)]
     pub(crate) debug_log: Option<PathBuf>,
 }
 

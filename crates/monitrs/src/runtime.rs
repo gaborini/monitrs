@@ -20,7 +20,9 @@
 //!   anyone reads them.
 //! * **Snapshots coalesce rather than queue.** When the UI falls behind, the
 //!   newest snapshot supersedes older ones, and the drop is *counted* so the lag
-//!   can be displayed. A monitor that hides its own lag is lying.
+//!   can be displayed — and written to the debug log, which §14.2 requires of both
+//!   the collector's duration and the dropped/coalesced counts. A monitor that
+//!   hides its own lag is lying.
 //! * **Nothing blocks keyboard handling.** Input lives on its own thread, so
 //!   enumerating 10,000 processes cannot delay a keypress.
 //! * **Every worker gets a shutdown token and is joined**, and if a worker will
@@ -31,8 +33,8 @@
 // non-test builds so the tests still prove the plumbing works.
 #![cfg_attr(not(test), allow(dead_code))]
 
-use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant, SystemTime};
 
 use crossbeam_channel::{Receiver, Sender, TrySendError};
@@ -48,6 +50,14 @@ use monitrs_tui::event::{Event, TerminalEvent};
 /// snapshot four ticks old it is worthless, and the memory it occupies is not.
 /// Large enough that a burst of keypresses is never lost.
 pub(crate) const EVENT_CHANNEL_CAPACITY: usize = 64;
+
+/// How long a worker may sleep before it looks at [`Shutdown`] again.
+///
+/// The upper bound on how long `q` can appear to do nothing, and equally the
+/// granularity at which a shortened sample interval takes effect. Small enough
+/// that neither is noticeable, large enough that an idle monitrs is not waking up
+/// to find nothing to do (§16.1's idle budget).
+const SHUTDOWN_SLICE: Duration = Duration::from_millis(100);
 
 /// A one-shot request that the sampler collect now rather than on schedule.
 ///
@@ -79,6 +89,83 @@ impl SampleRequest {
     /// Takes the request, clearing it.
     pub(crate) fn take(&self) -> bool {
         self.0.swap(false, Ordering::AcqRel)
+    }
+}
+
+/// The sampling settings the sampler thread re-reads while running.
+///
+/// Everything else the sampler needs is fixed when it is spawned. These two are
+/// not, because both are user-changeable while monitrs runs: §6.3's `interval`
+/// command and §12's configuration reload. Passing them by value at spawn time is
+/// what made both of those silently cosmetic — the state's copy changed, the screen
+/// said the interval was now 2s, and the thread kept sampling at the interval it
+/// started with.
+///
+/// The interval is an atomic because it is read on every loop iteration. The thresholds are behind a mutex because they are a struct of a dozen
+/// numbers that must change together — a torn read would apply half of a new
+/// policy — and the lock is taken once per sample and held for a clone, which is
+/// nothing next to the sample it precedes.
+///
+/// A poisoned threshold mutex is treated as "keep the last policy": §14.3 forbids
+/// panicking in a worker, and a Pressure Radar running on the previous thresholds
+/// is a far better outcome than a dead sampler.
+#[derive(Clone, Debug)]
+pub(crate) struct SamplingControl {
+    interval_millis: Arc<AtomicU64>,
+    thresholds: Arc<Mutex<Thresholds>>,
+}
+
+impl SamplingControl {
+    /// The control both worker threads start from.
+    pub(crate) fn new(interval: Duration, thresholds: Thresholds) -> Self {
+        let control = Self {
+            interval_millis: Arc::new(AtomicU64::new(0)),
+            thresholds: Arc::new(Mutex::new(thresholds)),
+        };
+        control.set_interval(interval);
+        control
+    }
+
+    /// The interval the next sample should target.
+    pub(crate) fn interval(&self) -> Duration {
+        Duration::from_millis(self.interval_millis.load(Ordering::Acquire))
+    }
+
+    /// Publishes a new interval. Takes effect on the next loop iteration.
+    ///
+    /// Zero is refused rather than clamped: a zero-millisecond interval would turn
+    /// the tick thread into a busy loop, which §16.1 rules out, and the reducer has
+    /// already clamped anything a user can type (`MIN_SAMPLE_INTERVAL`). Refusing
+    /// here keeps that guarantee even if a future caller forgets.
+    pub(crate) fn set_interval(&self, interval: Duration) {
+        let millis = u64::try_from(interval.as_millis())
+            .unwrap_or(u64::MAX)
+            .max(1);
+        self.interval_millis.store(millis, Ordering::Release);
+    }
+
+    /// The pressure policy the next sample should use.
+    pub(crate) fn thresholds(&self) -> Option<Thresholds> {
+        self.thresholds.lock().ok().map(|guard| *guard)
+    }
+
+    /// Publishes a new pressure policy (§12's `[diagnostics]` on reload).
+    ///
+    /// Returns whether it was stored: a poisoned lock means a previous holder
+    /// panicked, and the caller reports that rather than pretending the new
+    /// thresholds are in force.
+    #[allow(
+        dead_code,
+        reason = "called by the interactive loop, not by the soak harness"
+    )]
+    pub(crate) fn set_thresholds(&self, thresholds: Thresholds) -> bool {
+        match self.thresholds.lock() {
+            Ok(mut guard) => {
+                *guard = thresholds;
+                true
+            }
+            Err(_) => false,
+        }
     }
 }
 
@@ -331,7 +418,19 @@ where
 {
     workers.spawn("monitrs-tick", move || {
         while !shutdown.is_triggered() {
-            std::thread::sleep(interval);
+            // Sliced rather than one long sleep, so `q` is noticed within
+            // `SHUTDOWN_SLICE` even if a future caller passes a slow tick. This is the
+            // UI's heartbeat, not the sampling clock — the sample interval lives in
+            // `SamplingControl` and belongs to the sampler alone.
+            let mut slept = Duration::ZERO;
+            while slept < interval {
+                if shutdown.is_triggered() {
+                    return;
+                }
+                let slice = (interval - slept).min(SHUTDOWN_SLICE);
+                std::thread::sleep(slice);
+                slept += slice;
+            }
             if shutdown.is_triggered() {
                 break;
             }
@@ -352,26 +451,53 @@ pub(crate) fn spawn_sampler_thread<Cfg, S>(
     mut source: S,
     sender: EventSender<Cfg>,
     shutdown: Shutdown,
-    intervals: TierIntervals,
+    control: SamplingControl,
     forced: SampleRequest,
-    thresholds: Thresholds,
 ) -> std::io::Result<()>
 where
     Cfg: Send + 'static,
     S: SnapshotSource + 'static,
 {
     workers.spawn("monitrs-sampler", move || {
-        let mut scheduler = TierScheduler::new(intervals);
+        let mut interval = control.interval();
+        let mut scheduler = TierScheduler::new(TierIntervals::derived_from(interval));
         // The Pressure Radar is derived here rather than in the collector: a
         // collector reports measurements, and deciding that 91% CPU is `critical`
         // is policy (§2.3). The engine keeps its own hysteresis state, which is why
         // it lives with the sampler and not with the frame.
-        let mut pressure = PressureEngine::new(thresholds);
+        let mut policy = control.thresholds().unwrap_or_default();
+        let mut pressure = PressureEngine::new(policy);
         let mut sequence = 0u64;
         let mut previous: Option<Instant> = None;
 
         while !shutdown.is_triggered() {
             let now = Instant::now();
+
+            // A new interval reschedules every tier. The scheduler is rebuilt rather
+            // than nudged because its per-tier deadlines are derived from the
+            // interval, and half-updated deadlines would sample some tiers on the old
+            // schedule and some on the new one.
+            let current_interval = control.interval();
+            if current_interval != interval {
+                interval = current_interval;
+                scheduler = TierScheduler::new(TierIntervals::derived_from(interval));
+                // The cadence the hysteresis window was filled at no longer applies:
+                // §11.3 treats a break in the measurement stream as a reason to start
+                // the window again, and a changed interval is exactly that. Without
+                // this the engine would spend a few samples judging the new cadence
+                // against the old one and calling it a discontinuity anyway.
+                pressure.reset();
+            }
+            // A new policy discards the hysteresis too. A window half-filled under
+            // the old thresholds is not evidence for the new ones. `set_thresholds`
+            // rather than a new engine, so the interval reference the engine has
+            // learned survives a reload that did not change the cadence.
+            if let Some(current_policy) = control.thresholds()
+                && current_policy != policy
+            {
+                policy = current_policy;
+                pressure.set_thresholds(policy);
+            }
             // A forced refresh collects the fast tier out of turn; the schedule is
             // then marked complete, so `r` brings the next scheduled sample forward
             // rather than adding one on top of it.
@@ -382,9 +508,7 @@ where
             if !due.any() {
                 // Sleep in short slices so shutdown is noticed promptly even when
                 // the next tier is a long way off.
-                let remaining = scheduler
-                    .time_until_next(now)
-                    .min(Duration::from_millis(100));
+                let remaining = scheduler.time_until_next(now).min(SHUTDOWN_SLICE);
                 std::thread::sleep(remaining.max(Duration::from_millis(1)));
                 continue;
             }
@@ -398,8 +522,19 @@ where
                 due,
             };
 
-            match source.sample(&tick) {
+            // Measured around the collector alone, because that is the number §14.2
+            // asks for and the number §16.1 budgets. Publishing and reducing the
+            // snapshot are separately visible in the log.
+            let started = Instant::now();
+            let outcome = source.sample(&tick);
+            let collection = started.elapsed();
+            let tier = crate::logging::tier_for_pass(due);
+
+            match outcome {
                 Ok(mut snapshot) => {
+                    if let Some(tier) = tier {
+                        crate::logging::log_collection(tier, collection, snapshot.process_count());
+                    }
                     scheduler.mark_completed(due, now);
                     previous = Some(now);
                     sequence = sequence.saturating_add(1);
@@ -415,7 +550,12 @@ where
                         tracing::error!(%error, "collector failed fatally");
                         break;
                     }
-                    tracing::debug!(%error, "collector error, continuing");
+                    if let Some(tier) = tier {
+                        // Debug rather than warn, and with the duration attached: a
+                        // partially unavailable source fails every pass, and how long
+                        // it took to fail is the interesting half (§14.1, §14.2).
+                        crate::logging::log_collection_failure(tier, collection, &error);
+                    }
                     scheduler.mark_completed(due, now);
                     previous = Some(now);
                     // The sequence identifies the *attempt*, not the successful
@@ -503,9 +643,11 @@ pub(crate) fn drain_to_newest_snapshot<Cfg>(
 ) -> (Arc<SystemSnapshot>, Vec<Event<Cfg>>) {
     let mut newest = first;
     let mut others = Vec::new();
+    let mut superseded = 0u64;
     while let Ok(event) = receiver.try_recv() {
         match event {
             Event::Snapshot(snapshot) => {
+                superseded = superseded.saturating_add(1);
                 if snapshot.sequence >= newest.sequence {
                     health.record_coalesced();
                     newest = snapshot;
@@ -516,6 +658,23 @@ pub(crate) fn drain_to_newest_snapshot<Cfg>(
             }
             other => others.push(other),
         }
+    }
+    if superseded > 0 {
+        // §14.2 wants the dropped and coalesced counts at debug level, and this is
+        // the moment they changed. Recorded here rather than once per frame because
+        // the counters are cumulative: an unconditional line would repeat the same
+        // two numbers all day and bury everything else in the file. The sender
+        // coalesces too, but only when the channel is *full*, which guarantees the
+        // next drain finds a backlog and reports the totals anyway.
+        //
+        // The lag is the age of the snapshot about to be reduced, which is the part
+        // a reader cannot reconstruct from the counts: it says how stale the frame
+        // the user is looking at actually is (§7.5).
+        crate::logging::log_channel(
+            health.dropped(),
+            health.coalesced(),
+            Instant::now().saturating_duration_since(newest.captured_at),
+        );
     }
     (newest, others)
 }
@@ -613,6 +772,85 @@ mod tests {
         assert_eq!(health.coalesced(), 2);
     }
 
+    /// A temporary directory that removes itself, so no test leaves files behind.
+    struct TempDir(std::path::PathBuf);
+
+    impl TempDir {
+        fn new(label: &str) -> Self {
+            let base = std::env::temp_dir().join(format!(
+                "monitrs-runtime-test-{label}-{}",
+                std::process::id()
+            ));
+            let _ = std::fs::remove_dir_all(&base);
+            std::fs::create_dir_all(&base).expect("create temp dir");
+            Self(base)
+        }
+    }
+
+    impl Drop for TempDir {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_dir_all(&self.0);
+        }
+    }
+
+    /// Runs one drain with `queued` further snapshots waiting, and returns the log.
+    ///
+    /// `with_default` rather than a global subscriber: the drain runs on the calling
+    /// thread, so a thread-local dispatcher is enough and no test has to be the
+    /// first one in the process to run.
+    fn drain_with_logging(label: &str, queued: u64) -> String {
+        let dir = TempDir::new(label);
+        let path = dir.0.join("monitrs.log");
+        let settings = crate::logging::LogSettings::to_file(&path);
+        let (subscriber, log) = crate::logging::subscriber_for_test(&settings);
+
+        let (sender, receiver) = event_channel::<()>();
+        let make = |sequence: u64| {
+            let mut snapshot =
+                SystemSnapshot::warming_up(Instant::now(), SystemTime::UNIX_EPOCH, 8);
+            snapshot.sequence = sequence;
+            Arc::new(snapshot)
+        };
+        for sequence in 1..=queued {
+            assert!(sender.send(TestEvent::Snapshot(make(sequence))));
+        }
+
+        let health = sender.health();
+        tracing::subscriber::with_default(subscriber, || {
+            let (newest, _) = drain_to_newest_snapshot(&receiver, make(0), &health);
+            assert_eq!(newest.sequence, queued);
+        });
+        // Joins the writer thread, so the file is complete before it is read.
+        log.shutdown();
+        std::fs::read_to_string(&path).expect("the log file is readable")
+    }
+
+    #[test]
+    fn coalescing_is_recorded_in_the_debug_log_with_the_age_of_the_frame() {
+        // §14.2 asks for the dropped/coalesced counts at debug level. §7.5 shows the
+        // same numbers on screen; the log is what survives after the run.
+        let logged = drain_with_logging("coalesced", 2);
+        assert!(logged.contains("sample channel accounting"), "{logged}");
+        assert!(logged.contains("DEBUG"), "{logged}");
+        assert!(logged.contains("coalesced=2"), "{logged}");
+        assert!(logged.contains("dropped=0"), "{logged}");
+        assert!(
+            logged.contains("lag_ms="),
+            "the staleness of the frame is the part the counts cannot express: {logged}"
+        );
+    }
+
+    #[test]
+    fn a_drain_that_lost_nothing_writes_no_accounting_line() {
+        // The counters are cumulative, so an unconditional line would repeat the
+        // same numbers every frame and drown the log it belongs to.
+        let logged = drain_with_logging("uncoalesced", 0);
+        assert!(
+            logged.is_empty(),
+            "nothing was superseded, so there is nothing to report: {logged}"
+        );
+    }
+
     #[test]
     fn draining_never_regresses_to_an_older_snapshot() {
         let (sender, receiver) = event_channel::<()>();
@@ -651,9 +889,8 @@ mod tests {
             FakeCollector::new(Scenario::default()),
             sender,
             shutdown.clone(),
-            TierIntervals::derived_from(Duration::from_millis(250)),
+            SamplingControl::new(Duration::from_millis(250), Thresholds::default()),
             SampleRequest::new(),
-            Thresholds::default(),
         )
         .expect("spawns");
         assert_eq!(workers.len(), 1);
@@ -715,9 +952,8 @@ mod tests {
             FakeCollector::new(scenario),
             sender,
             shutdown.clone(),
-            TierIntervals::derived_from(Duration::from_millis(250)),
+            SamplingControl::new(Duration::from_millis(250), Thresholds::default()),
             SampleRequest::new(),
-            Thresholds::default(),
         )
         .expect("spawns");
 
@@ -744,6 +980,106 @@ mod tests {
         }
     }
 
+    /// The sampler has to follow a changed interval, not the one it was born with.
+    ///
+    /// This is the test that was missing while `:interval 2s` and §12's reload both
+    /// appeared to work: the state's copy changed, the header said `2s`, and the
+    /// thread went on sampling at the interval it was spawned with. Asserted by
+    /// *slowing* rather than speeding up, because a longer gap cannot be produced by
+    /// a lucky schedule.
+    #[test]
+    fn the_sampler_follows_an_interval_changed_while_it_runs() {
+        let (sender, receiver) = event_channel::<()>();
+        let shutdown = Shutdown::new();
+        let mut workers = Workers::new();
+        let control = SamplingControl::new(Duration::from_millis(20), Thresholds::default());
+
+        spawn_sampler_thread(
+            &mut workers,
+            FakeCollector::new(Scenario::default()),
+            sender,
+            shutdown.clone(),
+            control.clone(),
+            SampleRequest::new(),
+        )
+        .expect("spawns");
+
+        // Fast to begin with: several snapshots inside a window that a 400ms interval
+        // could not fill.
+        let mut fast = 0u32;
+        let deadline = Instant::now() + Duration::from_millis(600);
+        while Instant::now() < deadline {
+            if let Ok(Event::Snapshot(_)) = receiver.recv_timeout(Duration::from_millis(200)) {
+                fast += 1;
+            }
+        }
+        assert!(
+            fast >= 4,
+            "expected a fast stream to begin with, got {fast}"
+        );
+
+        control.set_interval(Duration::from_millis(400));
+        // Drain whatever was already in flight under the old interval, so the count
+        // below cannot include a sample that was scheduled before the change.
+        while receiver.try_recv().is_ok() {}
+        std::thread::sleep(Duration::from_millis(450));
+        while receiver.try_recv().is_ok() {}
+
+        let mut slow = 0u32;
+        let deadline = Instant::now() + Duration::from_millis(600);
+        while Instant::now() < deadline {
+            if let Ok(Event::Snapshot(_)) = receiver.recv_timeout(Duration::from_millis(200)) {
+                slow += 1;
+            }
+        }
+        shutdown.trigger();
+        workers.join_all();
+
+        assert!(
+            slow < fast,
+            "the sampler kept its original pace after the interval changed: \
+             {fast} samples before, {slow} after"
+        );
+        assert!(
+            slow <= 3,
+            "a 400ms interval cannot produce {slow} samples in 600ms"
+        );
+    }
+
+    /// A changed policy reaches the engine, and a poisoned lock is reported.
+    #[test]
+    fn the_sampling_control_carries_a_new_pressure_policy() {
+        let control = SamplingControl::new(Duration::from_millis(250), Thresholds::default());
+        assert_eq!(control.thresholds(), Some(Thresholds::default()));
+
+        let stricter = Thresholds {
+            cpu_watch_percent: 12.0,
+            ..Thresholds::default()
+        };
+        assert!(control.set_thresholds(stricter));
+        assert_eq!(
+            control.thresholds().map(|policy| policy.cpu_watch_percent),
+            Some(12.0)
+        );
+
+        // Cloning shares the cell, which is the whole point: the UI thread writes and
+        // the sampler reads.
+        let other = control.clone();
+        assert_eq!(
+            other.thresholds().map(|policy| policy.cpu_watch_percent),
+            Some(12.0)
+        );
+    }
+
+    /// A zero interval would make the sampler a busy loop (§16.1).
+    #[test]
+    fn the_sampling_control_refuses_a_zero_interval() {
+        let control = SamplingControl::new(Duration::ZERO, Thresholds::default());
+        assert_eq!(control.interval(), Duration::from_millis(1));
+        control.set_interval(Duration::ZERO);
+        assert_eq!(control.interval(), Duration::from_millis(1));
+    }
+
     #[test]
     fn a_recoverable_collector_error_does_not_stop_the_sampler() {
         let (sender, receiver) = event_channel::<()>();
@@ -759,9 +1095,8 @@ mod tests {
             FakeCollector::new(scenario),
             sender,
             shutdown.clone(),
-            TierIntervals::derived_from(Duration::from_millis(250)),
+            SamplingControl::new(Duration::from_millis(250), Thresholds::default()),
             SampleRequest::new(),
-            Thresholds::default(),
         )
         .expect("spawns");
 

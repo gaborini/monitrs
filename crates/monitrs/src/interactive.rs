@@ -8,7 +8,11 @@
 //!
 //! The order of operations is not arbitrary. §14.3 and §10.3 between them fix it:
 //!
-//! 1. Configuration and logging, before anything can want to report a problem.
+//! 1. Configuration, before anything can want to report a problem. Logging is
+//!    already running: `main` installs it for every subcommand and closes it after
+//!    this function returns, which is how the log guard still outlives the restored
+//!    terminal (§14.2). Problems it hit that could not be printed arrive here as
+//!    `log_notices`.
 //! 2. The panic hook, before the terminal is touched, so a panic during setup
 //!    still restores.
 //! 3. The terminal guard, which owns the modes.
@@ -23,7 +27,7 @@
 use std::process::ExitCode;
 use std::time::{Duration, Instant};
 
-use monitrs_collectors::{CommonCollector, TierIntervals};
+use monitrs_collectors::platform_collector;
 use monitrs_core::model::Severity;
 use monitrs_core::process::{ProcessSort, ProcessSortKey, SortDirection};
 use monitrs_tui::action::{Effect, ViewId};
@@ -45,11 +49,10 @@ use ratatui::layout::Rect;
 
 use crate::cli::Cli;
 use crate::config::{self, Config};
-use crate::logging::{self, LogSettings};
 use crate::runtime::{
-    DetailRequest, SampleRequest, Shutdown, Workers, detail_channel, drain_to_newest_snapshot,
-    event_channel, spawn_detail_worker, spawn_input_thread, spawn_sampler_thread,
-    spawn_tick_thread,
+    DetailRequest, SampleRequest, SamplingControl, Shutdown, Workers, detail_channel,
+    drain_to_newest_snapshot, event_channel, spawn_detail_worker, spawn_input_thread,
+    spawn_sampler_thread, spawn_tick_thread,
 };
 use crate::signals;
 
@@ -67,7 +70,12 @@ type ConfigEvent = Result<Box<Config>, String>;
 const LOOP_POLL: Duration = Duration::from_millis(200);
 
 /// Runs the interactive interface.
-pub(crate) fn run(cli: &Cli) -> color_eyre::Result<ExitCode> {
+///
+/// `log_notices` are the logging problems `main` could not print because it had
+/// nowhere better to put them; they become in-UI notices below. The debug log
+/// itself is owned by `main`, which closes it *after* this function has restored
+/// the terminal (§14.2).
+pub(crate) fn run(cli: &Cli, log_notices: Vec<String>) -> color_eyre::Result<ExitCode> {
     // --- 1. configuration -------------------------------------------------
     let loaded = config::load(cli.config.config.as_deref(), cli.config.no_config)?;
     let source_path = loaded.source.path().map(std::path::Path::to_path_buf);
@@ -86,23 +94,24 @@ pub(crate) fn run(cli: &Cli) -> color_eyre::Result<ExitCode> {
         return Err(color_eyre::eyre::eyre!(message));
     }
 
-    // --- 2. logging, before anything wants to report ----------------------
-    let log_settings = match &cli.config.debug_log {
-        Some(path) => LogSettings::to_file(path.clone()),
-        None => LogSettings::disabled(),
-    };
-    let startup = logging::install(&log_settings);
-    let mut startup_notices = logging::report_problems(&startup.problems);
+    // --- 2. what could not be reported before there was a UI ---------------
+    // Logging problems first, then configuration warnings, which is the order they
+    // happened in.
+    let mut startup_notices = log_notices;
     startup_notices.extend(loaded.warnings);
 
     // --- 3. the collector -------------------------------------------------
     // Two instances: `process_detail` takes `&mut self`, and §10.3 requires that a
     // slow detail read cannot delay sampling. Each keeps its own rate baselines,
     // which is why a collector must be long-lived (§9.1).
-    let sampler_source = CommonCollector::new()?;
-    let detail_source = CommonCollector::new()?;
+    //
+    // `platform_collector` rather than `CommonCollector`: §9.2 enriches the
+    // baseline natively by default, and naming the baseline here is exactly how a
+    // build ends up quietly reporting a refused read as `0`.
+    let sampler_source = platform_collector()?;
+    let detail_source = platform_collector()?;
 
-    let keymap = build_keymap(&settings)
+    let app_settings = settings_to_app(&settings, cli.color_was_explicit())
         .map_err(|error| color_eyre::eyre::eyre!("the configured keymap is unusable: {error}"))?;
 
     // --- 4. the terminal --------------------------------------------------
@@ -126,24 +135,9 @@ pub(crate) fn run(cli: &Cli) -> color_eyre::Result<ExitCode> {
         } else {
             ViewId::Overview
         },
-        sort: sort_from(&settings),
-        tree_mode: settings.processes.tree,
-        filter: settings.processes.filter.clone(),
-        only_user: None,
-        hide_kernel_threads: !settings.display.show_kernel_threads,
-        display: DisplaySettings {
-            theme: ThemeId::from_name(&settings.display.theme).unwrap_or_default(),
-            glyph_mode: settings.display.glyphs.into(),
-            color_mode: settings.display.color.into(),
-            color_explicit: cli.color_was_explicit(),
-            byte_units: settings.display.units.into(),
-        },
         env: TerminalEnv::from_process(),
-        history: history_config(&settings),
-        sample_interval: settings.sampling.interval,
         config_path: source_path,
-        keymap,
-        sequence_timeout: monitrs_tui::keymap::DEFAULT_SEQUENCE_TIMEOUT,
+        ..app_settings
     });
 
     for message in startup_notices {
@@ -164,14 +158,16 @@ pub(crate) fn run(cli: &Cli) -> color_eyre::Result<ExitCode> {
         shutdown.clone(),
         DEFAULT_TICK_INTERVAL,
     )?;
+    // The one piece of worker configuration that is not fixed at spawn: §6.3's
+    // `interval` command and §12's reload both change it while the sampler runs.
+    let sampling = SamplingControl::new(settings.sampling.interval, thresholds_from(&settings));
     spawn_sampler_thread(
         &mut workers,
         sampler_source,
         sender.clone(),
         shutdown.clone(),
-        TierIntervals::derived_from(settings.sampling.interval),
+        sampling.clone(),
         forced.clone(),
-        thresholds_from(&settings),
     )?;
     spawn_detail_worker(
         &mut workers,
@@ -187,8 +183,11 @@ pub(crate) fn run(cli: &Cli) -> color_eyre::Result<ExitCode> {
         detail_tx,
         forced,
         shutdown: shutdown.clone(),
+        mouse_at_startup: settings.display.mouse,
+        color_explicit: cli.color_was_explicit(),
         settings,
         sender,
+        sampling: sampling.clone(),
     };
     let mut dirty = true;
 
@@ -232,6 +231,14 @@ pub(crate) fn run(cli: &Cli) -> color_eyre::Result<ExitCode> {
                 shutdown.trigger();
             }
         }
+        // The reducer owns the sample interval — it is the thing that clamps a typed
+        // value into range (§6.3) — so the sampler is told about it here rather than
+        // through an effect. Comparing instead of storing unconditionally keeps this
+        // to a single atomic load on the overwhelmingly common path where nothing
+        // changed.
+        if sampling.interval() != state.sample_interval() {
+            sampling.set_interval(state.sample_interval());
+        }
         // Any state change is worth a frame; the reducer's own redraw requests are
         // a hint about *urgency*, not about correctness.
         dirty = true;
@@ -249,11 +256,10 @@ pub(crate) fn run(cli: &Cli) -> color_eyre::Result<ExitCode> {
     drop(terminal);
     let restore = guard.restore();
     let stuck = workers.join_all();
-    if let Some(log) = startup.log {
-        // Dropped after the screen is restored: tracing-appender's guard can print
-        // on a timed-out flush, and that must not land on the alternate screen.
-        log.shutdown();
-    }
+    // The debug log is *not* closed here. `main` owns it and drops it after this
+    // function returns, which keeps the guarantee that mattered: tracing-appender's
+    // guard can print on a timed-out flush, and by then the screen is the user's
+    // again (§14.2).
 
     if let Err(error) = restore {
         return Err(color_eyre::eyre::eyre!(
@@ -285,6 +291,20 @@ struct EffectContext {
     shutdown: Shutdown,
     settings: Config,
     sender: crate::runtime::EventSender<ConfigEvent>,
+    /// The sampler's live settings, so a reload reaches the thread and not only the
+    /// screen.
+    sampling: SamplingControl,
+    /// Whether the terminal's mouse capture was on when the session started.
+    ///
+    /// Kept because `display.mouse` is the one setting a reload genuinely cannot
+    /// apply — it is a terminal mode the guard set once (§14.3) — and saying so
+    /// needs the old value to compare against.
+    mouse_at_startup: bool,
+    /// Whether `--color` was given on the command line (§5.2).
+    ///
+    /// Carried so a reload cannot quietly demote an explicit command-line choice to
+    /// whatever the file and the environment happen to say.
+    color_explicit: bool,
 }
 
 /// Performs one effect.
@@ -344,13 +364,91 @@ fn execute(effect: &Effect, state: &mut AppState, ctx: &mut EffectContext) -> Fl
         }
 
         Effect::ReloadConfig => {
-            let outcome = reload(&ctx.settings, state);
-            match outcome {
+            match reload(&ctx.settings, state) {
                 Ok(reloaded) => {
-                    ctx.settings = *reloaded.clone();
-                    let _ = ctx.sender.send(Event::ConfigReloaded(Ok(reloaded)));
+                    // Applied in three places, because the settings live in three:
+                    // the runtime's own copy, the reducer's state, and the sampler
+                    // thread. Missing any one of them is what made `:reload` report
+                    // success and change nothing.
+                    // Translated *before* anything is adopted, so an unusable keymap
+                    // in the candidate leaves the running configuration alone (§12).
+                    let translated = match settings_to_app(&reloaded.config, ctx.color_explicit) {
+                        Ok(translated) => translated,
+                        Err(error) => {
+                            state.push_notice(Notice::new(
+                                NoticeKind::Config,
+                                Severity::Watch,
+                                format!(
+                                    "the reloaded keymap is unusable, so the running \
+                                     configuration is unchanged: {error}"
+                                ),
+                            ));
+                            let _ = ctx
+                                .sender
+                                .send(Event::ConfigReloaded(Err(error.to_string())));
+                            return Flow::Continue;
+                        }
+                    };
+                    ctx.settings = *reloaded.config.clone();
+                    let history_rebuilt = state.reconfigure(&translated);
+                    ctx.sampling.set_interval(ctx.settings.sampling.interval);
+                    let policy_applied =
+                        ctx.sampling.set_thresholds(thresholds_from(&ctx.settings));
+
+                    for warning in reloaded.warnings {
+                        state.push_notice(Notice::new(
+                            NoticeKind::Config,
+                            Severity::Watch,
+                            warning,
+                        ));
+                    }
+                    if history_rebuilt {
+                        state.push_notice(Notice::new(
+                            NoticeKind::Config,
+                            Severity::Watch,
+                            "the history settings changed, so retained samples were discarded"
+                                .to_owned(),
+                        ));
+                    }
+                    if !policy_applied {
+                        state.push_notice(Notice::new(
+                            NoticeKind::Config,
+                            Severity::Critical,
+                            "the pressure thresholds could not be handed to the sampler;                              it is still using the previous ones"
+                                .to_owned(),
+                        ));
+                    }
+
+                    let mut restart = non_reloadable(ctx.mouse_at_startup, &ctx.settings);
+                    restart.extend(reloaded.non_reloadable.iter().map(|key| (*key).to_owned()));
+                    let (severity, message) = if restart.is_empty() {
+                        (Severity::Info, "reloaded the configuration".to_owned())
+                    } else {
+                        (
+                            Severity::Watch,
+                            format!(
+                                "reloaded the configuration; these need a restart to take                                  effect: {}",
+                                restart.join(", ")
+                            ),
+                        )
+                    };
+                    state.push_notice(Notice::new(NoticeKind::Config, severity, message));
+                    let _ = ctx.sender.send(Event::ConfigReloaded(Ok(reloaded.config)));
                 }
                 Err(message) => {
+                    // Reported here rather than left to the reducer: §10.1 keeps the
+                    // configuration type out of `monitrs-tui`, so the reducer receives
+                    // an opaque payload it can only redraw for. Saying the running
+                    // configuration is untouched is the half a user needs — a refused
+                    // reload is not a broken monitrs (§14.1), so this is a watch and
+                    // not a critical.
+                    state.push_notice(Notice::new(
+                        NoticeKind::Config,
+                        Severity::Watch,
+                        format!(
+                            "could not reload the configuration, so the running one is                              unchanged: {message}"
+                        ),
+                    ));
                     let _ = ctx.sender.send(Event::ConfigReloaded(Err(message)));
                 }
             }
@@ -399,26 +497,95 @@ fn execute(effect: &Effect, state: &mut AppState, ctx: &mut EffectContext) -> Fl
 }
 
 /// Re-reads the configuration file, validating the whole candidate first (§12).
-fn reload(current: &Config, state: &AppState) -> Result<Box<Config>, String> {
+/// The reducer's view of a configuration.
+///
+/// One translation from [`Config`] to [`AppSettings`], used both to build the state
+/// at startup and to hand a reloaded configuration to
+/// [`AppState::reconfigure`]. Two copies of this mapping would be two chances for a
+/// reload to apply a setting differently from the way startup applied it — and the
+/// reload copy is the one that would go untested.
+///
+/// The fields it leaves at their defaults are the ones that are facts about the
+/// session rather than settings: `started_at`, `size`, `view`, `env` and
+/// `config_path`. The caller fills those in at startup and `reconfigure` ignores
+/// them on reload.
+///
+/// `color_explicit` is threaded through because §5.2 makes `--color` on the command
+/// line outrank both the file and the environment; a reload must not quietly hand
+/// colour control back to `NO_COLOR`.
+fn settings_to_app(settings: &Config, color_explicit: bool) -> Result<AppSettings, KeymapError> {
+    Ok(AppSettings {
+        sort: sort_from(settings),
+        tree_mode: settings.processes.tree,
+        filter: settings.processes.filter.clone(),
+        only_user: None,
+        hide_kernel_threads: !settings.display.show_kernel_threads,
+        display: DisplaySettings {
+            theme: ThemeId::from_name(&settings.display.theme).unwrap_or_default(),
+            glyph_mode: settings.display.glyphs.into(),
+            color_mode: settings.display.color.into(),
+            color_explicit,
+            byte_units: settings.display.units.into(),
+        },
+        history: history_config(settings),
+        sample_interval: settings.sampling.interval,
+        // Propagated rather than defaulted: falling back to the built-in keymap here
+        // would take away the working bindings the user currently has, on the
+        // strength of a file they have just broken. §12's atomic reload means an
+        // unusable keymap invalidates the whole candidate.
+        keymap: build_keymap(settings)?,
+        sequence_timeout: monitrs_tui::keymap::DEFAULT_SEQUENCE_TIMEOUT,
+        ..AppSettings::default()
+    })
+}
+
+/// What a successful reload produced.
+///
+/// Separate from [`config::ReloadOutcome`] only in that the configuration is boxed
+/// for the event payload; the fields it carries are the ones §12 requires to reach
+/// the user — the parse warnings, and the keys that changed but cannot take effect.
+struct Reloaded {
+    config: Box<Config>,
+    non_reloadable: Vec<&'static str>,
+    warnings: Vec<String>,
+}
+
+/// Validates the configuration file against the running configuration (§12).
+///
+/// Returns `Ok` for anything that can be adopted, *including* a candidate whose
+/// non-reloadable keys changed. That case used to come back as `Err`, which meant
+/// the running configuration was left alone while the message said "reloaded" —
+/// the one outcome §12 rules out, since a reload that appears to succeed and
+/// changed nothing is indistinguishable from a bug. Adopting the reloadable part
+/// and naming the rest is what "identified and explained" means.
+fn reload(current: &Config, state: &AppState) -> Result<Reloaded, String> {
     let Some(path) = state.config_path() else {
         return Err(
             "no configuration file to reload; monitrs is using built-in defaults".to_owned(),
         );
     };
     match config::reload(current, path) {
-        Ok(outcome) => {
-            if outcome.non_reloadable.is_empty() {
-                Ok(Box::new(outcome.config))
-            } else {
-                // Applied anyway, but the user is told which parts will not take
-                // effect until restart — §12 forbids silently dropping them.
-                Err(format!(
-                    "reloaded, but these need a restart: {}",
-                    outcome.non_reloadable.join(", ")
-                ))
-            }
-        }
+        Ok(outcome) => Ok(Reloaded {
+            config: Box::new(outcome.config),
+            non_reloadable: outcome.non_reloadable,
+            warnings: outcome.warnings,
+        }),
         Err(error) => Err(error.to_string()),
+    }
+}
+
+/// Settings that this *session* cannot adopt, whatever the file now says.
+///
+/// Only one, and it needs the session rather than the file to detect: mouse capture
+/// is a terminal mode [`TerminalGuard`] set once at startup (§14.3), so the
+/// comparison is against what the terminal is actually in — not against the
+/// previous file, which a second reload would already have caught up with and
+/// stopped reporting.
+fn non_reloadable(mouse_at_startup: bool, settings: &Config) -> Vec<String> {
+    if settings.display.mouse == mouse_at_startup {
+        Vec::new()
+    } else {
+        vec!["display.mouse".to_owned()]
     }
 }
 
@@ -674,11 +841,127 @@ fn collect_overrides(settings: &Config) -> Vec<(&'static str, Vec<monitrs_tui::k
 mod tests {
     use super::*;
 
+    use monitrs_core::units::ByteUnits;
+
+    use crate::config::UnitsSetting;
+
     fn config_with_sort(sort: &str, descending: bool) -> Config {
         let mut settings = Config::default();
         settings.processes.sort = sort.to_owned();
         settings.processes.descending = descending;
         settings
+    }
+
+    /// A state built the way `run` builds it, for the reload tests.
+    fn state_from(settings: &Config) -> AppState {
+        let app = settings_to_app(settings, false).expect("the default keymap is usable");
+        AppState::new(AppSettings {
+            started_at: Instant::now(),
+            size: (160, 48),
+            env: TerminalEnv::empty(),
+            config_path: Some(std::path::PathBuf::from("/nonexistent/monitrs.toml")),
+            ..app
+        })
+    }
+
+    /// A reload has to reach the state, not only the runtime's own copy.
+    ///
+    /// The bug this pins: `Effect::ReloadConfig` stored the new configuration in the
+    /// runtime and sent an event the reducer could only redraw for, so every
+    /// reloadable setting — the theme, the units, the ordering, the interval —
+    /// changed everywhere except on the screen.
+    #[test]
+    fn a_reloaded_configuration_reaches_the_running_state() {
+        let mut settings = Config::default();
+        let mut state = state_from(&settings);
+        assert_eq!(state.display().theme, ThemeId::DefaultDark);
+        assert_eq!(state.sample_interval(), Duration::from_secs(1));
+        assert_eq!(state.sort().key, ProcessSortKey::Cpu);
+
+        // Presentation and ordering only, so the history ring is not involved.
+        settings.display.theme = "high-contrast".to_owned();
+        settings.display.units = UnitsSetting::Si;
+        settings.processes.sort = "memory".to_owned();
+        settings.processes.filter = "postgres".to_owned();
+
+        let translated = settings_to_app(&settings, false).expect("still usable");
+        let history_rebuilt = state.reconfigure(&translated);
+
+        assert_eq!(state.display().theme, ThemeId::HighContrast);
+        assert_eq!(state.display().byte_units, ByteUnits::Si);
+        assert_eq!(state.sort().key, ProcessSortKey::Memory);
+        assert_eq!(state.filter_text(), "postgres");
+        assert!(
+            !history_rebuilt,
+            "changing the theme must not cost the user their retained samples"
+        );
+    }
+
+    /// Changing the history settings is the one reload that costs the user data.
+    ///
+    /// Both the span and the *interval* do it: the ring's slot count is derived from
+    /// the interval, so `interval = "2s"` reshapes it as surely as a new span does.
+    /// That is worth a notice rather than a silent loss of the Time Lens (§8.5).
+    #[test]
+    fn a_reload_that_reshapes_the_history_ring_says_so() {
+        for change in [
+            |settings: &mut Config| settings.sampling.history = Duration::from_secs(600),
+            |settings: &mut Config| settings.sampling.interval = Duration::from_millis(2_000),
+        ] {
+            let mut settings = Config::default();
+            let mut state = state_from(&settings);
+            change(&mut settings);
+            let translated = settings_to_app(&settings, false).expect("usable");
+            assert!(
+                state.reconfigure(&translated),
+                "a reshaped ring discards retained samples, and the caller has to be \
+                 able to say so"
+            );
+        }
+
+        // And the interval reaches the state, which is what the sampler is then told.
+        let mut settings = Config::default();
+        let mut state = state_from(&settings);
+        settings.sampling.interval = Duration::from_millis(2_000);
+        let translated = settings_to_app(&settings, false).expect("usable");
+        let _ = state.reconfigure(&translated);
+        assert_eq!(state.sample_interval(), Duration::from_millis(2_000));
+    }
+
+    /// The one setting a running session genuinely cannot adopt (§14.3).
+    #[test]
+    fn mouse_capture_is_reported_against_the_session_not_the_previous_file() {
+        let mut settings = Config::default();
+        settings.display.mouse = true;
+        assert!(
+            non_reloadable(true, &settings).is_empty(),
+            "unchanged from startup, so there is nothing to report"
+        );
+
+        settings.display.mouse = false;
+        assert_eq!(
+            non_reloadable(true, &settings),
+            vec!["display.mouse".to_owned()],
+            "the terminal is still in the mode the guard set, so say so"
+        );
+        // And it keeps saying so. Comparing against the previous *file* would stop
+        // reporting it after the first reload, while the terminal mode stayed wrong.
+        assert_eq!(non_reloadable(true, &settings).len(), 1);
+    }
+
+    /// An unusable keymap invalidates the whole candidate (§12's atomic reload).
+    ///
+    /// A *conflict* is the unusable case: an unparseable chord is skipped with a
+    /// warning by `build_keymap`, so it never reaches here.
+    #[test]
+    fn a_reload_whose_keymap_conflicts_translates_to_an_error() {
+        let mut settings = Config::default();
+        settings.keys.quit = Some(vec!["/".to_owned()]);
+        assert!(
+            settings_to_app(&settings, false).is_err(),
+            "a conflicting binding must not be swapped for the built-in keymap, which \
+             would take away the bindings the user still has"
+        );
     }
 
     #[test]

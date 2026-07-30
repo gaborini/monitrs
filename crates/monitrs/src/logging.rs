@@ -5,9 +5,17 @@
 //! **Nothing may reach stdout or stderr while the alternate screen is active.**
 //! One stray line lands on top of a rendered frame and stays there until the next
 //! full redraw, and a log line printed during a panic can scroll the panic report
-//! away. So this module has exactly two possible sinks: a file, or nothing at all.
-//! There is no stderr fallback, no `stdout.and(file)` tee, and no "just this once"
-//! print. Code that genuinely needs to talk to the user before the UI is up goes
+//! away.
+//!
+//! That rule is about the *screen*, not about files, and only one of monitrs'
+//! execution paths ever takes the screen. So the permitted sinks are a property of
+//! the path being run, and the caller has to name it: [`Sinks::FileOnly`] for the
+//! interactive runtime, [`Sinks::FileAndStderr`] for a one-shot subcommand such as
+//! `monitrs snapshot`, which never enters the alternate screen and whose user is
+//! standing at a shell prompt watching for exactly these lines. stdout is never a
+//! sink on either path — the snapshot subcommand writes its export there, and a
+//! log line in the middle of a JSON document corrupts a different thing just as
+//! effectively. Code that needs to talk to the user before the UI is up goes
 //! through [`report_problems`], which consults
 //! [`monitrs_tui::terminal::alternate_screen_active`] first.
 //!
@@ -15,9 +23,10 @@
 //!
 //! Nothing. §14.2 says *default to no file log*, so with no `--debug-log` and no
 //! configured path this module installs no subscriber whatsoever — every
-//! `tracing` macro in the workspace compiles to a cheap no-op dispatch and no
-//! file is created. That is also why every `tracing::debug!` elsewhere in the
-//! workspace is safe: with no subscriber installed there is nowhere for it to go.
+//! `tracing` macro in the workspace compiles to a cheap no-op dispatch, no file is
+//! created, and the stderr mirror does not exist either. That is also why every
+//! `tracing::debug!` elsewhere in the workspace is safe: with no subscriber
+//! installed there is nowhere for it to go.
 //!
 //! # Privacy (§14.2, §15.2)
 //!
@@ -61,9 +70,11 @@
 //! user's again by then. [`DebugLog::shutdown`] exists to make the order explicit
 //! at the call site instead of depending on the order of local variables.
 
-// Consumed by the assembled interactive runtime, which lands in a later slice;
-// the tests below exercise every item. Scoped to non-test builds so a genuinely
-// unused item still shows up while the tests are running.
+// A few items here are reachable only from the tests below: the size and filter
+// builders exist for the configuration hook §14.2 describes, and
+// `DebugLog::dropped_lines` for §7.5's report of our own losses. Scoped to
+// non-test builds so a genuinely unused item still shows up while the tests are
+// running.
 #![cfg_attr(not(test), allow(dead_code))]
 
 use std::fs::{File, OpenOptions};
@@ -71,6 +82,7 @@ use std::io::{self, IsTerminal as _, Write};
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
+use monitrs_collectors::DueTiers;
 use monitrs_core::model::{ProcessSnapshot, Tier};
 use tracing_appender::non_blocking::{ErrorCounter, NonBlocking, NonBlockingBuilder, WorkerGuard};
 use tracing_subscriber::EnvFilter;
@@ -131,6 +143,32 @@ const STANDARD_STREAM_PATHS: [&str; 8] = [
     "/proc/self/fd/2",
 ];
 
+/// Which sinks a log is allowed to write to.
+///
+/// The distinction is not a preference, it is §14.2's rule expressed as a type: a
+/// log that mirrors to stderr while the alternate screen is active would draw over
+/// the interface, so the interactive path must not be able to ask for one by
+/// accident. Making the caller name the surface is what keeps that decision
+/// visible at the call site instead of buried in a boolean.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub(crate) enum Sinks {
+    /// The file and nothing else. The only safe choice once a UI owns the screen.
+    #[default]
+    FileOnly,
+    /// The file and stderr, for a path that never enters the alternate screen.
+    ///
+    /// stdout is deliberately absent: `monitrs snapshot` writes its export there.
+    FileAndStderr,
+}
+
+impl Sinks {
+    /// Whether stderr receives a copy of every recorded line.
+    #[must_use]
+    pub(crate) const fn mirrors_stderr(self) -> bool {
+        matches!(self, Self::FileAndStderr)
+    }
+}
+
 /// Where the debug log goes and how large it may grow.
 ///
 /// `path` is `None` for the default, which is *no log at all* (§14.2). The
@@ -145,15 +183,21 @@ pub(crate) struct LogSettings {
     pub(crate) max_bytes: u64,
     /// Filter directives, overriding [`DEFAULT_DIRECTIVES`] and [`FILTER_ENV`].
     pub(crate) directives: Option<String>,
+    /// Which sinks the recorded lines may reach.
+    pub(crate) sinks: Sinks,
 }
 
 impl Default for LogSettings {
     /// No log, which is what §14.2 requires of a default configuration.
+    ///
+    /// The default sink set is the restrictive one, so a caller that forgets to
+    /// think about the alternate screen cannot accidentally print over it.
     fn default() -> Self {
         Self {
             path: None,
             max_bytes: DEFAULT_MAX_BYTES,
             directives: None,
+            sinks: Sinks::FileOnly,
         }
     }
 }
@@ -174,6 +218,13 @@ impl LogSettings {
         }
     }
 
+    /// These settings, restricted to the given sinks.
+    #[must_use]
+    pub(crate) const fn with_sinks(mut self, sinks: Sinks) -> Self {
+        self.sinks = sinks;
+        self
+    }
+
     /// These settings with a different size cap.
     #[must_use]
     pub(crate) fn with_max_bytes(mut self, max_bytes: u64) -> Self {
@@ -192,6 +243,21 @@ impl LogSettings {
     #[must_use]
     pub(crate) fn is_enabled(&self) -> bool {
         self.path.is_some()
+    }
+}
+
+/// The settings implied by `--debug-log` on a given execution path.
+///
+/// The one place that turns the flag into settings, so `--debug-log` cannot mean
+/// one thing to the interactive runtime and something else — or nothing at all — to
+/// a subcommand. `None` is the documented default of no log whatsoever (§14.2), and
+/// it stays that way regardless of `sinks`: a path that *may* print is still not a
+/// path that logs unasked.
+#[must_use]
+pub(crate) fn settings_for(debug_log: Option<&Path>, sinks: Sinks) -> LogSettings {
+    match debug_log {
+        Some(path) => LogSettings::to_file(path).with_sinks(sinks),
+        None => LogSettings::disabled(),
     }
 }
 
@@ -461,6 +527,7 @@ pub(crate) fn names_a_standard_stream(path: &Path) -> bool {
 pub(crate) struct DebugLog {
     path: PathBuf,
     max_bytes: u64,
+    sinks: Sinks,
     dropped: ErrorCounter,
     guard: Option<WorkerGuard>,
 }
@@ -476,6 +543,15 @@ impl DebugLog {
     #[must_use]
     pub(crate) const fn max_bytes(&self) -> u64 {
         self.max_bytes
+    }
+
+    /// Whether every recorded line is also going to stderr.
+    ///
+    /// Recorded in the log's own opening line, so a file someone sends in a bug
+    /// report says whether its contents were also on their screen.
+    #[must_use]
+    pub(crate) const fn mirrors_stderr(&self) -> bool {
+        self.sinks.mirrors_stderr()
     }
 
     /// How many log lines the bounded queue had to drop.
@@ -549,13 +625,14 @@ fn build(
 
     let (filter, problems) = build_filter(settings.directives.as_deref(), environment);
     let dropped = writer.error_counter();
-    let subscriber = subscriber_for(writer, filter);
+    let subscriber = subscriber_for(writer, filter, settings.sinks);
 
     Ok((
         subscriber,
         DebugLog {
             path,
             max_bytes,
+            sinks: settings.sinks,
             dropped,
             guard: Some(guard),
         },
@@ -563,25 +640,46 @@ fn build(
     ))
 }
 
-/// The subscriber layout: one filter, one file sink, no ANSI.
+/// The subscriber layout: one filter, one file sink, optionally a stderr mirror.
 ///
 /// `with_ansi(false)` is not cosmetic. Escape sequences in a log file make it
 /// unreadable in a bug report, and a file that is later `cat`-ed into a terminal
-/// would replay colour changes.
+/// would replay colour changes. The mirror is colourless for the same reason a
+/// pipe should be: its output is as likely to be redirected into a file as read.
+///
+/// Both layers format the *same* event, which is what makes the privacy rules
+/// sink-independent: redaction happens at the call site (see [`log_process`]), so
+/// there is nothing in the event for a second sink to reveal.
 fn subscriber_for(
     writer: NonBlocking,
     filter: EnvFilter,
+    sinks: Sinks,
 ) -> impl tracing::Subscriber + Send + Sync + 'static {
-    tracing_subscriber::registry().with(filter).with(
+    // A blocking writer, unlike the file sink. Justified because the mirror only
+    // exists on paths with no render loop and no sampler to distort (§16.2), and
+    // because a mirror that dropped lines while the file kept them would make the
+    // two disagree in exactly the situation someone is reading both.
+    let mirror = sinks.mirrors_stderr().then(|| {
         tracing_subscriber::fmt::layer()
             .with_ansi(false)
             .with_target(true)
             .with_level(true)
-            // Which thread produced a line is most of the value of this log:
-            // §10.3's four threads each have their own failure modes.
             .with_thread_names(true)
-            .with_writer(writer),
-    )
+            .with_writer(io::stderr)
+    });
+    tracing_subscriber::registry()
+        .with(filter)
+        .with(
+            tracing_subscriber::fmt::layer()
+                .with_ansi(false)
+                .with_target(true)
+                .with_level(true)
+                // Which thread produced a line is most of the value of this log:
+                // §10.3's four threads each have their own failure modes.
+                .with_thread_names(true)
+                .with_writer(writer),
+        )
+        .with(mirror)
 }
 
 /// Resolves the filter, preferring an explicit setting over the environment.
@@ -648,8 +746,10 @@ pub(crate) fn install(settings: &LogSettings) -> LogStartup {
                 };
             }
             tracing::info!(
+                target: TARGET_LOGGING,
                 path = %log.path().display(),
                 max_bytes = log.max_bytes(),
+                stderr_mirror = log.mirrors_stderr(),
                 "debug log started; command lines are redacted and environment values are never logged"
             );
             LogStartup {
@@ -702,7 +802,11 @@ pub(crate) fn report_problems(problems: &[String]) -> Vec<String> {
         }
         ProblemDestination::Deferred => {
             for problem in problems {
-                tracing::warn!(%problem, "logging problem could not be printed");
+                tracing::warn!(
+                    target: TARGET_LOGGING,
+                    %problem,
+                    "logging problem could not be printed"
+                );
             }
             problems.to_vec()
         }
@@ -714,9 +818,54 @@ fn millis(duration: Duration) -> u64 {
     u64::try_from(duration.as_millis()).unwrap_or(u64::MAX)
 }
 
+/// The filter target of the collection lines §14.2 asks for.
+///
+/// Every recorder below names its target explicitly rather than inheriting
+/// `tracing`'s default, which is the *module path of the macro call* — that is,
+/// `logging`, wherever the work actually happened. Two reasons, and the second one
+/// bites:
+///
+/// * A reader filtering on `monitrs::collection` wants collections, not "lines that
+///   happen to be emitted from the logging module".
+/// * The default target carries the crate name of whatever is being linked.
+///   `tests/soak.rs` compiles this module into a test binary by path, where the
+///   default target becomes `soak::logging` and [`DEFAULT_DIRECTIVES`]' `monitrs`
+///   entry stops matching — so the same code would log in the binary and log
+///   nothing there. An explicit target is the same string in every build.
+const TARGET_COLLECTION: &str = "monitrs::collection";
+
+/// The filter target of the sample-channel accounting lines.
+const TARGET_CHANNEL: &str = "monitrs::channel";
+
+/// The filter target of the per-process lines.
+const TARGET_PROCESS: &str = "monitrs::process";
+
+/// The filter target of the log's own lifecycle and problems.
+const TARGET_LOGGING: &str = "monitrs::logging";
+
+/// Which tier one sampling pass should be recorded under, if any.
+///
+/// §8.6 deliberately collects every due tier in a single pass so that the snapshot
+/// is internally consistent, which leaves one measured duration covering two or
+/// three tiers' work. Attributing it to the *coarsest* tier present is what keeps
+/// the numbers in the log comparable: a fast-only pass and a pass that also re-read
+/// filesystem capacity and the device list are different kinds of work, and
+/// averaging them under one label would hide a regression in either.
+///
+/// `None` when nothing was due, because then no collection happened and there is no
+/// duration to attribute. The sampler never asks in that case; returning a tier
+/// anyway would put an invented measurement in the log.
+#[must_use]
+pub(crate) fn tier_for_pass(due: DueTiers) -> Option<Tier> {
+    [Tier::Slow, Tier::Medium, Tier::Fast]
+        .into_iter()
+        .find(|tier| due.contains(*tier))
+}
+
 /// Records one completed collection (§14.2: collector duration at debug level).
 pub(crate) fn log_collection(tier: Tier, duration: Duration, processes: usize) {
     tracing::debug!(
+        target: TARGET_COLLECTION,
         tier = tier.label(),
         duration_ms = millis(duration),
         processes,
@@ -735,6 +884,7 @@ pub(crate) fn log_collection_failure(
     error: &dyn std::fmt::Display,
 ) {
     tracing::debug!(
+        target: TARGET_COLLECTION,
         tier = tier.label(),
         duration_ms = millis(duration),
         %error,
@@ -746,6 +896,7 @@ pub(crate) fn log_collection_failure(
 /// level).
 pub(crate) fn log_channel(dropped: u64, coalesced: u64, lag: Duration) {
     tracing::debug!(
+        target: TARGET_CHANNEL,
         dropped,
         coalesced,
         lag_ms = millis(lag),
@@ -768,6 +919,7 @@ pub(crate) fn log_channel(dropped: u64, coalesced: u64, lag: Duration) {
 /// for hours and is the file people attach to a bug report without reading it.
 pub(crate) fn log_process(context: &'static str, process: &ProcessSnapshot) {
     tracing::debug!(
+        target: TARGET_PROCESS,
         pid = process.identity.pid,
         start_key = process.identity.start_key,
         name = %process.name,
@@ -775,6 +927,24 @@ pub(crate) fn log_process(context: &'static str, process: &ProcessSnapshot) {
         context,
         "process"
     );
+}
+
+/// Builds a file-backed subscriber for a test, without installing it globally.
+///
+/// A process may install exactly one global subscriber, so a test that wants to
+/// read back what was written cannot go through [`install`] — it would have to be
+/// the first test to run. `tracing::subscriber::with_default` is the alternative,
+/// and this is how a test outside this module gets something to hand it.
+///
+/// Test-only on purpose: production code must go through [`install`], which is
+/// where §14.2's refusals and the "never fatal" contract live.
+#[cfg(test)]
+pub(crate) fn subscriber_for_test(
+    settings: &LogSettings,
+) -> (impl tracing::Subscriber + Send + Sync + 'static, DebugLog) {
+    let (subscriber, log, problems) = build(settings, None).expect("the test log must open");
+    assert!(problems.is_empty(), "{problems:?}");
+    (subscriber, log)
 }
 
 #[cfg(test)]
@@ -834,8 +1004,7 @@ mod tests {
     /// subscriber, so every test would have to be the first one to run.
     fn logged_to_file(settings: &LogSettings, body: impl FnOnce()) -> String {
         let path = settings.path.clone().expect("a path");
-        let (subscriber, log, problems) = build(settings, None).expect("the log opens");
-        assert!(problems.is_empty(), "{problems:?}");
+        let (subscriber, log) = subscriber_for_test(settings);
         tracing::subscriber::with_default(subscriber, body);
         // Dropping the log joins the writer thread, so the file is complete.
         drop(log);
@@ -850,6 +1019,88 @@ mod tests {
         let startup = install(&settings);
         assert!(!startup.is_logging());
         assert!(startup.problems.is_empty());
+    }
+
+    #[test]
+    fn a_path_that_may_print_still_logs_nothing_unless_a_log_was_asked_for() {
+        // The permission to mirror to stderr is not a reason to start logging:
+        // §14.2's default is no log at all, on every path.
+        let settings = settings_for(None, Sinks::FileAndStderr);
+        assert_eq!(settings, LogSettings::disabled());
+        assert!(!settings.is_enabled());
+        let startup = install(&settings);
+        assert!(!startup.is_logging(), "no log means no sink at all");
+        assert!(startup.problems.is_empty());
+    }
+
+    #[test]
+    fn the_flag_turns_into_the_same_file_settings_on_every_path() {
+        let path = Path::new("/tmp/monitrs-settings-for.log");
+        let interactive = settings_for(Some(path), Sinks::FileOnly);
+        let one_shot = settings_for(Some(path), Sinks::FileAndStderr);
+
+        assert_eq!(interactive.path.as_deref(), Some(path));
+        assert_eq!(one_shot.path.as_deref(), Some(path));
+        assert_eq!(interactive.max_bytes, one_shot.max_bytes);
+        assert!(
+            !interactive.sinks.mirrors_stderr(),
+            "§14.2: the interactive path must never print"
+        );
+        assert!(one_shot.sinks.mirrors_stderr());
+        assert_eq!(
+            LogSettings::default().sinks,
+            Sinks::FileOnly,
+            "the restrictive sink set has to be the default"
+        );
+    }
+
+    #[test]
+    fn a_running_log_reports_which_sinks_it_ended_up_with() {
+        // Written into the log's own opening line, so a file in a bug report says
+        // whether its contents were also on the reporter's screen.
+        let dir = TempDir::new("sink-report");
+        let (mirrored, mirrored_log) = subscriber_for_test(
+            &LogSettings::to_file(dir.file("mirrored.log")).with_sinks(Sinks::FileAndStderr),
+        );
+        assert!(mirrored_log.mirrors_stderr());
+        drop(mirrored);
+        mirrored_log.shutdown();
+
+        let (quiet, quiet_log) = subscriber_for_test(&LogSettings::to_file(dir.file("quiet.log")));
+        assert!(
+            !quiet_log.mirrors_stderr(),
+            "§14.2: the default must stay the silent one"
+        );
+        drop(quiet);
+        quiet_log.shutdown();
+    }
+
+    #[test]
+    fn a_log_that_could_not_be_opened_is_reported_and_nothing_starts() {
+        // §14.2: failing to open the log must not stop monitrs, and it must not
+        // leave a half-live log behind either.
+        let dir = TempDir::new("mirror-failed");
+        let settings = settings_for(Some(&dir.0), Sinks::FileAndStderr);
+        let startup = install(&settings);
+        assert!(!startup.is_logging(), "a directory is not a log file");
+        assert_eq!(startup.problems.len(), 1, "{:?}", startup.problems);
+    }
+
+    #[test]
+    fn a_mirrored_log_still_redacts_the_command_in_the_file() {
+        // The mirror is a second sink for the *same* event, so redaction cannot
+        // depend on which sinks are enabled. Pinned rather than assumed.
+        let dir = TempDir::new("mirror-redaction");
+        let settings = LogSettings::to_file(dir.file("monitrs.log"))
+            .with_sinks(Sinks::FileAndStderr)
+            // One filter serves both layers, so this test necessarily puts its one
+            // line on the test runner's stderr as well. That is the behaviour under
+            // test; there is no way to enable the mirror and see nothing from it.
+            .with_directives("monitrs=debug");
+        let process = process_with_command("psql postgres://admin:hunter2@db.internal/prod");
+        let contents = logged_to_file(&settings, || log_process("selection", &process));
+        assert!(contents.contains("command=\"psql\""), "{contents}");
+        assert!(!contents.contains("hunter2"), "{contents}");
     }
 
     #[test]
@@ -908,6 +1159,35 @@ mod tests {
         assert!(contents.contains("dropped=3"), "{contents}");
         assert!(contents.contains("coalesced=11"), "{contents}");
         assert!(contents.contains("lag_ms=1400"), "{contents}");
+    }
+
+    #[test]
+    fn a_pass_is_attributed_to_the_coarsest_tier_it_refreshed() {
+        use monitrs_collectors::{TierIntervals, TierScheduler};
+        use std::time::Instant;
+
+        assert_eq!(
+            tier_for_pass(DueTiers::ALL),
+            Some(Tier::Slow),
+            "the first pass refreshes everything, and the slow tier is what made it cost"
+        );
+        assert_eq!(
+            tier_for_pass(DueTiers::NONE),
+            None,
+            "nothing was collected, so there is no duration to attribute"
+        );
+
+        // The ordinary case, taken from the real scheduler rather than assembled by
+        // hand: once every tier has run, only the fast one comes due again.
+        let mut scheduler = TierScheduler::new(TierIntervals {
+            fast: Duration::from_millis(1),
+            medium: Duration::from_secs(600),
+            slow: Duration::from_secs(600),
+        });
+        let start = Instant::now();
+        scheduler.mark_completed(DueTiers::ALL, start);
+        let due = scheduler.due_at(start + Duration::from_millis(50));
+        assert_eq!(tier_for_pass(due), Some(Tier::Fast));
     }
 
     #[test]
@@ -1106,6 +1386,58 @@ mod tests {
             error.to_string().contains("debug log"),
             "the message must say what it is about: {error}"
         );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_character_device_is_refused_because_a_device_is_where_the_display_lives() {
+        // `/dev/null` is the harmless member of the class and exists everywhere;
+        // `/dev/tty` is the dangerous one and is refused by name as well.
+        let error = BoundedLogFile::open(Path::new("/dev/null"), DEFAULT_MAX_BYTES)
+            .expect_err("a device is not a log file");
+        assert!(
+            matches!(
+                error,
+                LogError::NotARegularFile {
+                    kind: "character device",
+                    ..
+                }
+            ),
+            "{error}"
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_named_pipe_is_refused_without_waiting_for_a_reader() {
+        // The refusal has to happen *before* the open, because opening a FIFO with no
+        // reader blocks indefinitely and monitrs would hang with nothing on screen to
+        // explain why. So this test asserts two things at once: that the answer is a
+        // refusal, and that it arrives at all. The work is done on a spawned thread so
+        // that a regression fails the test instead of hanging CI forever.
+        let dir = TempDir::new("fifo-sink");
+        let path = dir.file("monitrs.fifo");
+        let made = std::process::Command::new("mkfifo")
+            .arg(&path)
+            .status()
+            .map(|status| status.success())
+            .unwrap_or(false);
+        assert!(
+            made,
+            "mkfifo is POSIX and both v1 targets have it; without it this rule is untested"
+        );
+
+        let (tx, rx) = std::sync::mpsc::channel();
+        let probe = path.clone();
+        std::thread::spawn(move || {
+            let outcome = BoundedLogFile::open(&probe, DEFAULT_MAX_BYTES).map(|_| ());
+            let _ = tx.send(outcome.err().map(|error| error.to_string()));
+        });
+        let answered = rx
+            .recv_timeout(Duration::from_secs(10))
+            .expect("§14.2: opening a FIFO must not block startup");
+        let message = answered.expect("a named pipe cannot hold the debug log");
+        assert!(message.contains("named pipe"), "{message}");
     }
 
     #[test]
