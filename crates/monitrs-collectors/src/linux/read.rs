@@ -689,11 +689,11 @@ pub struct LinuxSources {
     pub pressure_io: Option<SourceBytes>,
     /// Per-interface `/sys` attributes, medium tier.
     pub interfaces: Option<Vec<InterfaceSources>>,
-    /// Per-power-supply `/sys` attributes, medium tier.
+    /// Per-power-supply `/sys` attributes, read with the sensor group (§8.6).
     ///
     /// `Some(empty)` and `None` are different answers: the first is a kernel that
     /// exports the class and lists nothing under it, the second is a tick on which
-    /// the medium tier was not due.
+    /// the sensor group was not due.
     pub power_supplies: Option<Vec<PowerSupplySources>>,
     /// cgroup limits.
     pub cgroup: CgroupSources,
@@ -764,9 +764,13 @@ pub fn collect_sources(root: &ProcRoot, request: &SourceRequest) -> LinuxSources
                 })
                 .collect(),
         );
-        // §8.6 puts the battery on the medium tier. A pack's charge moves in whole
-        // percentage points over minutes, so a one-second read would be sixteen
-        // attribute opens per tick to watch a number that does not change (§16.1).
+    }
+
+    if request.tiers.sensors() {
+        // §8.6 groups the battery with the temperatures, and that group has its own
+        // cadence rather than the medium tier's. A pack's charge moves in whole
+        // percentage points over minutes, so even five seconds was sixteen attribute
+        // opens to watch a number that had not changed (§16.1).
         sources.power_supplies = Some(
             root.list_power_supplies()
                 .unwrap_or_default()
@@ -1043,7 +1047,7 @@ mod tests {
         let supplies = sources
             .power_supplies
             .as_ref()
-            .expect("medium tier was due");
+            .expect("the sensor group was due");
         let battery = supplies
             .iter()
             .find(|supply| &*supply.name == "BAT0")
@@ -1058,6 +1062,46 @@ mod tests {
             battery.time_to_empty.as_ref().err(),
             Some(&ReadFailure::Missing)
         );
+    }
+
+    #[test]
+    fn the_power_supply_read_follows_the_sensor_group_not_the_medium_tier() {
+        // §8.6 groups the battery with the temperatures, and that group has its own
+        // cadence: 30 s while nobody is looking at it. A medium tick must therefore
+        // read the interface attributes and leave the sixteen battery attributes
+        // alone, and `None` is "not read this tick" rather than "no battery" (§9.1).
+        let root = tree();
+        let medium = collect_sources(
+            &root,
+            &SourceRequest {
+                tiers: DueTiers::fast_and_medium(),
+                pids: Vec::new(),
+                include_process_cgroups: false,
+            },
+        );
+        assert!(
+            medium.interfaces.is_some(),
+            "the interface attributes stay on the medium tier"
+        );
+        assert!(
+            medium.power_supplies.is_none(),
+            "a medium tick must not read the battery any more"
+        );
+
+        // And the sensor group on its own reads the battery without dragging the
+        // rest of the medium tier along with it.
+        let sensors = collect_sources(
+            &root,
+            &SourceRequest {
+                tiers: DueTiers::NONE.with_sensors(),
+                pids: Vec::new(),
+                include_process_cgroups: false,
+            },
+        );
+        assert_eq!(sensors.power_supplies.as_ref().map(Vec::len), Some(3));
+        assert!(sensors.interfaces.is_none());
+        assert!(sensors.loadavg.is_none());
+        assert!(sensors.stat.is_none());
     }
 
     #[test]

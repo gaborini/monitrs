@@ -118,6 +118,9 @@ pub struct LinuxEnrichment {
     cached_boot_time_secs: Option<u64>,
     cached_links: HashMap<DeviceKey, LinkFacts>,
     cached_battery: MetricState<BatterySnapshot>,
+    /// When `cached_battery` was actually measured, so a carried-over reading can
+    /// state its age (§4). `None` until the sensor group has read it once.
+    battery_read_at: Option<Instant>,
     cached_environment: MetricState<HostEnvironment>,
     cached_memory_limit: MetricState<u64>,
     cached_cpu_quota: MetricState<CpuQuota>,
@@ -182,6 +185,7 @@ impl LinuxEnrichment {
             // looked: claiming "this machine has no battery" before reading
             // `/sys/class/power_supply` would be a fact asserted without evidence.
             cached_battery: MetricState::WarmingUp,
+            battery_read_at: None,
             cached_environment: MetricState::WarmingUp,
             cached_memory_limit: MetricState::WarmingUp,
             cached_cpu_quota: MetricState::WarmingUp,
@@ -255,7 +259,7 @@ impl LinuxEnrichment {
         self.apply_disks(sources, snapshot, tick);
         self.apply_networks(sources, snapshot, tick);
         self.apply_pressure(sources, snapshot);
-        self.apply_battery(sources, snapshot);
+        self.apply_battery(sources, snapshot, tick);
         self.apply_processes(sources, snapshot, tick);
 
         if sources.processes_truncated {
@@ -830,25 +834,52 @@ impl LinuxEnrichment {
     ///
     /// The baseline leaves `sensors.battery` [`MetricState::Unsupported`] on every
     /// tick, so the cached reading has to be written back on every tick too — not
-    /// only on the medium ones. §9.1 forbids re-reading for that, which is exactly
-    /// what the cache is for.
+    /// only on the ones the sensor group was due. §9.1 forbids re-reading for that,
+    /// which is exactly what the cache is for. What the write-back publishes on a
+    /// tick that did not read is the same value marked stale with the real gap since
+    /// it was measured, so no frame presents a carried charge as a measured one (§4).
     ///
     /// **A machine with no battery is the case this method exists to get right.** A
     /// server, a container, a CI runner and a desktop all reach the same two lines:
     /// the class directory lists no system battery, and the metric stays
     /// [`MetricState::Unsupported`] — a fact about the hardware, not a failed read,
-    /// not 0%, and not an omitted field (§4, §26).
-    fn apply_battery(&mut self, sources: &LinuxSources, snapshot: &mut SystemSnapshot) {
+    /// not 0%, and not an omitted field (§4, §26). Staleness cannot change that:
+    /// only a value that was once measured can go stale.
+    fn apply_battery(
+        &mut self,
+        sources: &LinuxSources,
+        snapshot: &mut SystemSnapshot,
+        tick: &SampleTick,
+    ) {
         if let Some(supplies) = sources.power_supplies.as_ref() {
+            // `Some` *is* the read: the sensor group's gate in
+            // [`crate::linux::read::collect_sources`] is what decides whether these
+            // attributes were opened this tick, so this is where the read happened.
             self.cached_battery = self.read_battery(supplies);
+            self.battery_read_at = Some(tick.captured_at);
         }
-        snapshot.sensors.battery = self.cached_battery;
+        // Derived from the cached reading rather than from the value published below.
+        // The published one is stale-marked on a carried tick, and `is_available()`
+        // is false for it — deriving the capability from that would flip the battery
+        // to unsupported every few seconds, a capability flickering for a reason the
+        // reader cannot see (§4), which the Inspect screen would render as "this
+        // machine cannot report battery".
         snapshot.capabilities.battery = if self.cached_battery.is_available() {
             CapabilityState::Available
         } else if self.cached_battery.is_warming_up() {
             CapabilityState::Unknown
         } else {
             CapabilityState::Unsupported
+        };
+        // The real gap since the read, never `tick.elapsed` and never the sensor
+        // cadence, which is a target rather than a measurement (§8.1).
+        let age = self.battery_read_at.map_or(Duration::ZERO, |read_at| {
+            tick.captured_at.saturating_duration_since(read_at)
+        });
+        snapshot.sensors.battery = if age.is_zero() {
+            self.cached_battery
+        } else {
+            crate::common::retained_sensor(self.cached_battery, age)
         };
     }
 
@@ -1564,26 +1595,98 @@ mod tests {
     }
 
     #[test]
-    fn a_tick_that_did_not_read_the_battery_keeps_the_previous_reading() {
-        // §9.1: the medium tier runs every five seconds and the baseline blanks the
-        // field every tick, so the four fast ticks in between must not lose it.
+    fn a_tick_that_did_not_read_the_battery_keeps_the_previous_reading_and_marks_its_age() {
+        // §9.1: the sensor group reads the battery on its own cadence and the baseline
+        // blanks the field every tick, so the ticks in between must not lose it. §4:
+        // what they publish was not measured on this tick, so it carries its age.
         let start = Instant::now();
         let mut enrichment = LinuxEnrichment::new();
         let tick = SampleTick::first(start, SystemTime::UNIX_EPOCH);
         let mut first = baseline(start);
         enrichment.apply(&mut first, &sources(false), &tick);
-        assert!(first.sensors.battery.is_available());
+        let measured = first
+            .sensors
+            .battery
+            .fresh()
+            .copied()
+            .expect("the fixture laptop has a battery");
 
-        let mut fast_only = sources(false);
-        fast_only.power_supplies = None;
-        let later = start + Duration::from_secs(1);
-        let next = tick.advance(later, SystemTime::UNIX_EPOCH, DueTiers::ALL);
+        // Five seconds on, the medium tier is due and the sensor group is not, so
+        // `power_supplies` is `None` — not read rather than absent.
+        //
+        // `elapsed` is one second, not five: it is the measured interval since the
+        // previous fast tick, and an age taken from it rather than from the read time
+        // would be wrong by four seconds here (§8.1). Built by hand rather than with
+        // `advance` precisely so the two numbers differ.
+        let later = start + Duration::from_secs(5);
+        let mut carried = sources(false);
+        carried.power_supplies = None;
+        let next = SampleTick {
+            sequence: 1,
+            captured_at: later,
+            wall_time: SystemTime::UNIX_EPOCH,
+            elapsed: Duration::from_secs(1),
+            due: DueTiers::fast_and_medium(),
+        };
         let mut second = baseline(later);
-        enrichment.apply(&mut second, &fast_only, &next);
+        enrichment.apply(&mut second, &carried, &next);
+
+        let (value, age) = second
+            .sensors
+            .battery
+            .displayable()
+            .expect("the reading is kept rather than blanked");
         assert_eq!(
-            second.sensors.battery.fresh().map(|battery| battery.charge),
-            first.sensors.battery.fresh().map(|battery| battery.charge)
+            value.charge, measured.charge,
+            "the same reading, not a new one"
         );
+        assert_eq!(
+            age,
+            Duration::from_secs(5),
+            "the age is the real gap since the read, never the tick interval (§8.1)"
+        );
+        assert!(
+            second.sensors.battery.fresh().is_none(),
+            "a carried reading must not present itself as measured (§4)"
+        );
+        // Derived from the cached reading rather than from the stale-marked one: a
+        // capability that flipped to unsupported on every carried tick would render
+        // as "this machine cannot report battery" every few seconds (§4).
+        assert_eq!(
+            second.capabilities.battery,
+            CapabilityState::Available,
+            "the battery capability changed because a reading was carried"
+        );
+    }
+
+    #[test]
+    fn a_machine_with_no_battery_never_claims_a_stale_one() {
+        // Every server, container and CI runner takes this path on every tick the
+        // sensor group is not due. `Unsupported` with an age would claim a
+        // measurement that never happened (§4, §26).
+        let start = Instant::now();
+        let mut enrichment = LinuxEnrichment::new();
+        let tick = SampleTick::first(start, SystemTime::UNIX_EPOCH);
+        let mut desktop = sources(false);
+        desktop.power_supplies = Some(vec![power_supply("AC", ok(fx::POWER_TYPE_MAINS))]);
+        let mut first = baseline(start);
+        enrichment.apply(&mut first, &desktop, &tick);
+        assert!(first.sensors.battery.is_unsupported());
+
+        let mut carried = sources(false);
+        carried.power_supplies = None;
+        let later = start + Duration::from_secs(30);
+        let next = tick.advance(later, SystemTime::UNIX_EPOCH, DueTiers::fast_and_medium());
+        let mut second = baseline(later);
+        enrichment.apply(&mut second, &carried, &next);
+
+        assert!(
+            second.sensors.battery.is_unsupported(),
+            "a machine with no battery must keep saying so"
+        );
+        assert!(second.sensors.battery.displayable().is_none());
+        assert_eq!(second.sensors.battery.placeholder(), Some("n/a"));
+        assert_eq!(second.capabilities.battery, CapabilityState::Unsupported);
     }
 
     #[test]
