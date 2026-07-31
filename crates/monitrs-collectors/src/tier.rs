@@ -70,6 +70,14 @@ pub struct DueTiers {
     fast: bool,
     medium: bool,
     slow: bool,
+    /// Temperatures and battery, scheduled apart from the medium tier they used to
+    /// ride on.
+    ///
+    /// §8.6 groups sensors with the medium tier, and on macOS that put an 85 ms
+    /// `Components::refresh` into one sample in five — enough to fail §16.1's p95
+    /// idle budget on arithmetic alone. The read is unchanged; when it happens is
+    /// now a function of whether anyone is looking at it.
+    sensors: bool,
 }
 
 impl DueTiers {
@@ -78,6 +86,7 @@ impl DueTiers {
         fast: false,
         medium: false,
         slow: false,
+        sensors: false,
     };
 
     /// Every timed tier due, which is the state of the very first tick.
@@ -85,6 +94,7 @@ impl DueTiers {
         fast: true,
         medium: true,
         slow: true,
+        sensors: true,
     };
 
     /// Only the fast tier, which is what four ticks in five actually are.
@@ -105,6 +115,7 @@ impl DueTiers {
             fast: true,
             medium: false,
             slow: false,
+            sensors: false,
         }
     }
 
@@ -115,7 +126,19 @@ impl DueTiers {
             fast: true,
             medium: true,
             slow: false,
+            sensors: false,
         }
+    }
+
+    /// The same set with the sensor read added.
+    ///
+    /// For measurement: the most expensive tick a machine actually performs is a
+    /// timed tier *plus* the sensors, and a benchmark that could not construct it
+    /// would understate the collector's worst case (§16.3).
+    #[must_use]
+    pub const fn with_sensors(mut self) -> Self {
+        self.sensors = true;
+        self
     }
 
     /// Whether a specific tier is due. The on-demand tier is never "due".
@@ -129,10 +152,19 @@ impl DueTiers {
         }
     }
 
+    /// Whether the sensor group is due.
+    ///
+    /// Not part of [`Self::contains`]: `Tier` is §8.6's four timed tiers, and
+    /// sensors are a group whose tier changes with what is on screen.
+    #[must_use]
+    pub const fn sensors(&self) -> bool {
+        self.sensors
+    }
+
     /// Whether anything at all is due.
     #[must_use]
     pub const fn any(&self) -> bool {
-        self.fast || self.medium || self.slow
+        self.fast || self.medium || self.slow || self.sensors
     }
 }
 
@@ -143,6 +175,9 @@ pub struct TierScheduler {
     last_fast: Option<Instant>,
     last_medium: Option<Instant>,
     last_slow: Option<Instant>,
+    last_sensors: Option<Instant>,
+    /// Whether a screen showing a sensor reading is visible.
+    sensor_interest: bool,
 }
 
 impl TierScheduler {
@@ -154,6 +189,8 @@ impl TierScheduler {
             last_fast: None,
             last_medium: None,
             last_slow: None,
+            last_sensors: None,
+            sensor_interest: false,
         }
     }
 
@@ -172,6 +209,30 @@ impl TierScheduler {
         self.intervals = intervals;
     }
 
+    /// The cadence sensors are read at: medium while someone is looking, slow
+    /// otherwise.
+    #[must_use]
+    pub const fn sensor_interval(&self) -> Duration {
+        if self.sensor_interest {
+            self.intervals.medium
+        } else {
+            self.intervals.slow
+        }
+    }
+
+    /// Records whether a sensor-bearing screen is visible.
+    ///
+    /// A rising edge clears the sensor deadline, so opening the Battery screen
+    /// reads sensors on the next pass instead of up to a medium interval later.
+    /// A falling edge changes nothing but the cadence: nobody needs a fresh
+    /// reading because they stopped looking at one.
+    pub const fn set_sensor_interest(&mut self, interested: bool) {
+        if interested && !self.sensor_interest {
+            self.last_sensors = None;
+        }
+        self.sensor_interest = interested;
+    }
+
     /// Which tiers are due at `now`, without recording that they ran.
     #[must_use]
     pub fn due_at(&self, now: Instant) -> DueTiers {
@@ -179,6 +240,7 @@ impl TierScheduler {
             fast: Self::is_due(self.last_fast, self.intervals.fast, now),
             medium: Self::is_due(self.last_medium, self.intervals.medium, now),
             slow: Self::is_due(self.last_slow, self.intervals.slow, now),
+            sensors: Self::is_due(self.last_sensors, self.sensor_interval(), now),
         }
     }
 
@@ -196,6 +258,9 @@ impl TierScheduler {
         if due.slow {
             self.last_slow = Some(now);
         }
+        if due.sensors {
+            self.last_sensors = Some(now);
+        }
     }
 
     /// How long until the soonest tier is due, for the sampler's sleep.
@@ -209,6 +274,7 @@ impl TierScheduler {
             Self::remaining(self.last_fast, self.intervals.fast, now),
             Self::remaining(self.last_medium, self.intervals.medium, now),
             Self::remaining(self.last_slow, self.intervals.slow, now),
+            Self::remaining(self.last_sensors, self.sensor_interval(), now),
         ]
         .into_iter()
         .min()
@@ -346,6 +412,7 @@ mod tests {
                 fast: true,
                 medium: false,
                 slow: false,
+                sensors: false,
             },
             start,
         );
@@ -428,5 +495,126 @@ mod tests {
             scheduler.due_at(at_400ms).contains(Tier::Fast),
             "a shorter interval must take effect against the existing timestamp"
         );
+    }
+
+    #[test]
+    fn sensors_are_read_on_the_slow_cadence_while_nobody_is_looking_at_them() {
+        let start = Instant::now();
+        let mut scheduler = scheduler();
+        assert!(
+            scheduler.due_at(start).sensors(),
+            "the first tick reads sensors, or the first frame has no temperature"
+        );
+        scheduler.mark_completed(DueTiers::ALL, start);
+
+        // The medium tier comes and goes without touching the sensors: that 5-second
+        // cadence is what put an 85 ms read into one sample in five, which is the
+        // whole reason for this group (§16.1).
+        let at_five = start + Duration::from_secs(5);
+        assert!(scheduler.due_at(at_five).contains(Tier::Medium));
+        assert!(!scheduler.due_at(at_five).sensors());
+
+        let at_thirty = start + Duration::from_secs(30);
+        assert!(scheduler.due_at(at_thirty).sensors());
+    }
+
+    #[test]
+    fn interest_moves_sensors_to_the_medium_cadence() {
+        let start = Instant::now();
+        let mut scheduler = scheduler();
+        scheduler.mark_completed(DueTiers::ALL, start);
+
+        scheduler.set_sensor_interest(true);
+        assert_eq!(scheduler.sensor_interval(), Duration::from_secs(5));
+
+        let at_five = start + Duration::from_secs(5);
+        assert!(
+            scheduler.due_at(at_five).sensors(),
+            "while the reader is watching a sensor, 5 seconds is the promise"
+        );
+    }
+
+    #[test]
+    fn taking_an_interest_makes_sensors_due_at_once_rather_than_at_the_next_deadline() {
+        let start = Instant::now();
+        let mut scheduler = scheduler();
+        scheduler.mark_completed(DueTiers::ALL, start);
+
+        // One second in, the reader opens the Battery screen. Waiting four more
+        // seconds for the medium deadline would show them a stale number on the
+        // screen whose entire subject is that number.
+        let at_one = start + Duration::from_secs(1);
+        scheduler.set_sensor_interest(true);
+        assert!(scheduler.due_at(at_one).sensors());
+    }
+
+    #[test]
+    fn losing_interest_does_not_force_a_read_and_returns_to_the_slow_cadence() {
+        let start = Instant::now();
+        let mut scheduler = scheduler();
+        scheduler.set_sensor_interest(true);
+        scheduler.mark_completed(DueTiers::ALL, start);
+
+        scheduler.set_sensor_interest(false);
+        assert_eq!(scheduler.sensor_interval(), Duration::from_secs(30));
+        let at_six = start + Duration::from_secs(6);
+        assert!(
+            !scheduler.due_at(at_six).sensors(),
+            "leaving the screen is not a reason to read anything"
+        );
+    }
+
+    #[test]
+    fn repeated_interest_does_not_re_trigger_an_immediate_read() {
+        let start = Instant::now();
+        let mut scheduler = scheduler();
+        scheduler.set_sensor_interest(true);
+        scheduler.mark_completed(DueTiers::ALL, start);
+
+        // Only the edge counts. A reducer that re-emits the same interest — or a
+        // config reload that re-applies it — must not turn the medium cadence into
+        // "every tick".
+        scheduler.set_sensor_interest(true);
+        let at_one = start + Duration::from_secs(1);
+        assert!(!scheduler.due_at(at_one).sensors());
+    }
+
+    #[test]
+    fn the_sensor_deadline_is_part_of_the_samplers_sleep() {
+        let start = Instant::now();
+        // fast is deliberately longer than medium here (unlike real §8.5 configs):
+        // marking `DueTiers::ALL` completed at `start` and asserting at `start`
+        // makes every tier's `remaining` exactly its own configured interval, so a
+        // fast interval below the asserted 50s would make fast (not sensors) the
+        // minimum and the test would no longer be testing what its name claims.
+        let mut scheduler = TierScheduler::new(TierIntervals {
+            fast: Duration::from_secs(60),
+            medium: Duration::from_secs(50),
+            slow: Duration::from_secs(300),
+        });
+        scheduler.mark_completed(DueTiers::ALL, start);
+        scheduler.set_sensor_interest(true);
+        scheduler.mark_completed(DueTiers::ALL, start);
+
+        // Sensors are the soonest thing due, so the sleep is theirs. A sleep that
+        // ignored this group would read them late by up to a fast interval.
+        assert_eq!(
+            scheduler.time_until_next(start),
+            Duration::from_secs(50),
+            "the sensor deadline must bound the sleep like any other tier"
+        );
+    }
+
+    #[test]
+    fn the_named_tier_sets_say_whether_sensors_are_included() {
+        assert!(DueTiers::ALL.sensors());
+        assert!(!DueTiers::NONE.sensors());
+        assert!(!DueTiers::fast_only().sensors());
+        assert!(
+            !DueTiers::fast_and_medium().sensors(),
+            "the every-fifth tick no longer carries the sensor read"
+        );
+        assert!(DueTiers::fast_and_medium().with_sensors().sensors());
+        assert!(DueTiers::NONE.with_sensors().any());
     }
 }
