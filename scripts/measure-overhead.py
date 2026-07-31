@@ -17,6 +17,18 @@ The first ten seconds are discarded, because startup work is not idle.
 The pty is drained throughout. Without that the program blocks on a full buffer and
 the script measures a stalled process rather than an idle one.
 
+Set `MONITRS_SCREEN_KEY` to a single keystroke to switch away from the Overview
+screen before measuring, and leave it in place for the whole run — for example, to
+measure with the Battery screen visible (§8.6's sensor group runs on a 5-second
+cadence rather than 30 while that screen is up):
+
+    MONITRS_SCREEN_KEY=7 python3 scripts/measure-overhead.py
+
+The key is written into the pty a second after start-up, comfortably inside the
+discarded warm-up window, so the requested screen is the one idling for the entire
+measured duration. Unset, the script measures the Overview screen, untouched, which
+is its default and the row §16.1's idle budget is about.
+
 Exits non-zero if any budget is missed, and prints which. Note that the result
 depends heavily on the machine: the cost is dominated by per-process and per-device
 OS reads, so a host with a thousand processes costs several times what §16.1's
@@ -38,6 +50,10 @@ BINARY = os.environ.get("MONITRS_BINARY", "target/release/monitrs")
 COLUMNS, LINES = 160, 48
 WARMUP_SECONDS = 10
 MEASURE_SECONDS = 60
+# Unset: measure the Overview screen, untouched. Set (e.g. "7" for Battery): send
+# that keystroke once, shortly after start-up, so the requested screen is the one
+# idling for the whole measurement.
+SCREEN_KEY = os.environ.get("MONITRS_SCREEN_KEY")
 
 
 def ps_sample(pid):
@@ -86,7 +102,16 @@ def main():
     try:
         deadline = time.monotonic() + WARMUP_SECONDS + MEASURE_SECONDS
         measure_from = time.monotonic() + WARMUP_SECONDS
+        screen_key_sent = SCREEN_KEY is None
+        screen_key_at = time.monotonic() + 1
         while time.monotonic() < deadline:
+            # Sent once, a second in: late enough that the app is reading its
+            # input, early enough that it lands well before `measure_from` — so
+            # the requested screen, not the Overview default, is what idles for
+            # the entire measured window.
+            if not screen_key_sent and time.monotonic() >= screen_key_at:
+                os.write(primary, SCREEN_KEY.encode())
+                screen_key_sent = True
             # The pty has to be read or the app blocks on a full buffer, which would
             # measure a stalled process rather than an idle one.
             ready, _, _ = select.select([primary], [], [], 0.25)
@@ -152,6 +177,7 @@ def main():
         return 1
 
     text = drained.decode("utf-8", "replace")
+    print(f"screen: {SCREEN_KEY!r} (unset = Overview, the default)")
     print(f"samples: {len(cpu)} over {MEASURE_SECONDS}s idle, after {WARMUP_SECONDS}s warm-up")
     print(f"exit code: {child.returncode}")
     print(f"alternate screen entered: {'?1049h' in text}, left: {'?1049l' in text}")

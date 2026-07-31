@@ -82,13 +82,26 @@ enough that measuring them every second would itself distort the measurement.
 | Tier | Default | Contents |
 |---|---|---|
 | Fast | 1 s | CPU, memory, process summary, network counters, disk counters |
-| Medium | 5 s | filesystem capacity, static device state, temperatures, battery |
+| Medium | 5 s | filesystem capacity, static device state |
 | Slow | 30 s | users, static system metadata, device/interface lists, cgroup metadata |
 | On demand | — | selected-process detail, ancestry, open descriptors with their paths, socket counts, mount/device mapping |
 
 Filesystem capacity is in the medium tier specifically because a `statfs` on a
 stalled NFS mount can block for seconds, and the fast tier must not be able to
 stall.
+
+Temperatures and battery are not on any of the four tiers above. They are their
+own **sensor group**, scheduled apart from the medium tier they used to ride on:
+`TierScheduler` gives it the medium interval (5 s by default) while a
+sensor-bearing screen is visible and the slow interval (30 s) otherwise, rather
+than a fixed cadence of its own. The reason is cost, not taste — the read is one
+call, `Components::refresh` for temperatures alongside the battery, that costs
+about 85 ms on macOS regardless of how many components exist, so putting it on
+the same 5-second schedule as everything else was expensive enough to fail
+§16.1's idle p95 budget outright; see `benchmarks.md`. Between reads the last
+value is carried forward and shown as `MetricState::Stale { value, age }`, so the
+header's temperature can be up to thirty seconds old and says so rather than
+silently holding a number nobody re-measured.
 
 The on-demand tier exists because §2.4's process context is expensive per
 process: reading a working directory, counting file descriptors, and walking an

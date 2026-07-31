@@ -245,12 +245,50 @@ collector would be measuring the thing with itself.
 |---|---|---|
 | ordinary frame render below 16 ms at 160×48 | median 200 µs, p95 353 µs, max 410 µs | pass, by a factor of 45 |
 | input-to-visible-response below 50 ms | median 417 µs, p95 486 µs | pass, by a factor of 100 |
-| sample collection below 200 ms p95 | fast-only tick (4 in 5): median 8–16 ms, p95 15–21 ms. Fast+medium (every 5th): median 110–121 ms, p95 121–161 ms | pass |
+| sample collection below 200 ms p95 | fast-only tick (4 in 5): median 8–16 ms, p95 15–21 ms. Fast+medium (every 5th, sensors excluded — they no longer share this tier, see below): median 32–36 ms, p95 38–41 ms | pass |
 | resident memory below 50 MiB | median 24.5–26.7 MiB, peak 27.2 MiB | pass |
 | no unbounded file-descriptor growth | flat at 3 over a 30-minute soak with the real collector | pass over half an hour; the 12-hour run is still owed |
-| idle self CPU median below 1%, p95 below 2% | median **0.5–1.1%** over three runs, p95 **6–11%** | median met; **p95 fails** |
+| idle self CPU median below 1%, p95 below 2% | Overview visible (the row the budget is about): median **0.60–0.85%**, p95 **4.30–9.50%** over three 60 s runs | median met; **p95 fails** |
+| the same, with the Battery screen visible | median **1.20–1.70%**, p95 **6.00–8.30%** over three 60 s runs | worse on both counts — see below |
 | no unbounded memory growth over 12 hours | 30 minutes: 30.2 MiB → 28.5 MiB resident, retained history bounded, 0 snapshots dropped | evidence, not the gate — see [`soak-testing.md`](soak-testing.md#runs-on-record) |
 | no redraw busy loop | not measured as such | — |
+
+### Why there are two idle rows
+
+§16.1 budgets *idle* self CPU, and idle — the Overview screen, untouched, for the
+same 60-second window as every other run here — is the first row. Moving the
+sensor group off the medium tier onto its own 30-second cadence (§8.6) was meant to
+remove the one call that dominated the old p95: an 85 ms `Components::refresh`
+landing in one sample in five. It does what it was built to do — the median fell
+further, from 0.5–1.1% to **0.60–0.85%**, and a read that now lands in one sample
+in thirty instead of one in five is real progress — but the 95th percentile is
+still over budget: **4.30–9.50%** against 2%. Better than the pre-release 6–11%,
+not a pass.
+
+Reading the collector's own per-tick-shape numbers (the sample-collection row
+above, `cargo test -p monitrs --release --test capture -- --ignored --nocapture`,
+984–994 processes across two runs) says why. The medium tier's *other* work —
+`Disks::refresh(true)`, the filesystem-capacity read (§8.6) — was always there and
+always cost the same ~25 ms; it was invisible in the old p95 only because the 85 ms
+sensor read shared
+its schedule and was six times larger. With sensors moved off that schedule, a
+fast-plus-medium tick still measures 32–36 ms median against a 9 ms fast-only
+tick — 3.2–3.6% of one core for the second it lands in, on one sample in five,
+which is already enough to fail a 2% p95 on arithmetic alone. Moving the sensor
+read did not remove the architectural cause of the p95 miss; it changed which read
+is now responsible for it. That is a different finding than the one Tasks 1–6 set
+out to produce, and it is reported rather than reasoned around — see
+[Where the idle CPU goes](#where-the-idle-cpu-goes) below for the fuller account.
+
+The second row is the Battery screen, where the sensor group returns to five
+seconds because the reader is looking at the thing it measures. It adds the 85 ms
+read back on top of the medium tier's own cost, on the same schedule, and both
+figures move accordingly: median **1.20–1.70%**, p95 **6.00–8.30%** — worse than
+the Overview row on both counts. That is the price of the reading a reader asked
+for, quoted here rather than left for someone to discover. It does not change the
+gate: §16.1's budget is about *idle*, and idle is the Overview row above — the one
+this release was built to bring under budget, and which the measurement above says
+it has not yet done.
 
 The workload matters and is not the reference one: §16.1 specifies 8 logical CPUs
 and 200 processes, and this machine has 12 CPUs and about a thousand processes — so
@@ -279,7 +317,7 @@ components and 21 interfaces:
 | `Disks::refresh(false)` | 34 ms wall, ~21 ms of it our own CPU | ~~fast~~ — **fixed**, see below |
 | `Disks::refresh_specifics(io_usage)` | ~1 ms CPU | fast |
 | `Disks::refresh(true)` | 25 ms | medium |
-| `Components::refresh` (temperatures) | 85 ms | medium |
+| `Components::refresh` (temperatures) | 85 ms | ~~medium~~ — **sensors**, its own 30 s / 5 s cadence, see below |
 | `Users::refresh` | 30 ms | slow |
 | `Networks::refresh` | 0.85 ms | fast |
 | global CPU + memory | 0.09 ms | fast |
@@ -289,11 +327,25 @@ measures **8–16 ms** for one — the native walk, the per-process counters, an
 I/O counters — and the measured idle median fell from 3.7–5.1% to **0.5–1.1%**, meeting
 the 1% budget.
 
-What remains is the p95, at 6–11% against a 2% budget, and it is the medium tier: the
-85 ms `Components::refresh` for temperatures, which §8.6 puts on a 5-second schedule.
-Averaged that is 1.7% of a core, but it arrives as one spike in the second it lands, and
-a p95 taken once a second sees the spike. Nothing has been measured about whether that
-read can be made cheaper, so it is the next thing to look at rather than a conclusion.
+That was the whole story before this release. §8.6 put `Components::refresh` on the
+same 5-second medium tier as `Disks::refresh(true)`, and the 85 ms sensor read — six
+times the disk read's own 25 ms — dominated the arithmetic: one spike in the second
+it landed, one sample in five, and a p95 taken once a second saw it every time.
+Moving the sensor group to its own 30-second cadence (5 seconds only while the
+Battery screen is visible, §8.6) was the fix this release made, and it worked as
+designed: the sensor spike now lands in one sample in thirty rather than one in
+five, and the idle median fell further, to 0.60–0.85%.
+
+**The p95 still fails: 4.30–9.50% against a 2% budget, and now it is
+`Disks::refresh(true)`.** That 25 ms medium-tier read never went anywhere — it was
+simply too small to matter next to the sensor read sharing its schedule. On its
+own, at the same 5-second cadence, it is still enough: the collector's own
+per-tick-shape numbers (§ sample collection, above) show a fast-plus-medium tick at
+32–36 ms against a 9 ms fast-only one, which is 3.2–3.6% of a core for the second it
+lands in — over budget by itself, on one sample in five. Nothing has been measured
+about whether *that* read can be made cheaper, and it is now the next thing to look
+at. Moving the sensor read fixed the read this release targeted; it did not, on its
+own, bring the idle p95 under §16.1's budget.
 
 Two things follow, and neither is a micro-optimisation:
 
@@ -342,8 +394,9 @@ Two things follow, and neither is a micro-optimisation:
 
 The honest statement is the one in the table, row by row: four budgets pass outright, the
 descriptor budget passes over half an hour rather than the twelve the gate asks for, the
-idle-CPU **median** now passes and its **p95** does not — 6–11% against 2%, arriving as the
-medium tier's 85 ms `Components::refresh` once every five seconds — and two rows have no
+idle-CPU **median** now passes and its **p95** does not — 4.30–9.50% against 2%, arriving
+now as the medium tier's 25 ms `Disks::refresh(true)` once every five seconds rather than
+the 85 ms sensor read this release moved off that schedule — and two rows have no
 measurement to pass or fail. The reason for the p95 is measured rather than guessed, and
 whether that read can be made cheaper is the open question, not which read it is.
 
@@ -372,8 +425,9 @@ about 240× less than reading all 25 through the list.
 sensor on the machine, not reading a temperature: a component that already knows which
 service it is can be refreshed for a few hundred microseconds instead of tens of
 milliseconds. A scheduler that keeps a handle to the one component the header shows,
-rather than calling `Components::refresh` for the whole list every five seconds, has
-that p95 spike to gain back.
+rather than calling `Components::refresh` for the whole list on every sensor-tier tick
+— every 30 seconds idle, every 5 seconds while the Battery screen is visible (§8.6) —
+has that spike to gain back on whichever cadence it lands on.
 
 ## What is not measured yet
 

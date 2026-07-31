@@ -73,8 +73,8 @@ The table below is what to expect. `-` means the platform has no such concept,
 | Interface link speed | usually | often not | Without it, no utilization percentage is shown |
 | Per-process network | no | no | Out of scope for v1 |
 | Linux PSI | yes (4.20+) | - | The best memory and I/O pressure signal available |
-| Temperatures | hwmon | partial | Absent on most servers and many VMs |
-| Battery presence, charge, state | yes | yes | Absent on desktops, servers, VMs and containers |
+| Temperatures | hwmon | partial | Absent on most servers and many VMs. Read every 30 s, 5 s while the Battery screen is open; carried over and aged between reads — see "What monitrs reads" below |
+| Battery presence, charge, state | yes | yes | Absent on desktops, servers, VMs and containers. Same 30 s / 5 s cadence as temperatures |
 | Battery time remaining | driver-dependent | yes | Only where the platform publishes an estimate; never derived |
 | Battery cycle count | usually | - | macOS needs undocumented registry properties (§9.3) |
 | Battery design vs full capacity | usually | - | Same; this is the figure that shows wear |
@@ -126,9 +126,21 @@ Read-only, on the tier indicated:
 | `/proc/pressure/{cpu,memory,io}` | fast | PSI |
 | `/sys/fs/cgroup/**` | slow | cgroup limits |
 | `/sys/class/net/*` | slow | link state, speed, interface type |
-| `/sys/class/hwmon/**` | medium | temperatures |
-| `/sys/class/power_supply/*/` — `type`, `scope`, `status`, `capacity`, `cycle_count`, `energy_full{,_design}`, `charge_full{,_design}`, `voltage_min_design`, `power_now`, `current_now`, `voltage_now`, `temp`, `time_to_{empty,full}_now` | medium | battery |
+| `/sys/class/hwmon/**` | sensors\* | temperatures |
+| `/sys/class/power_supply/*/` — `type`, `scope`, `status`, `capacity`, `cycle_count`, `energy_full{,_design}`, `charge_full{,_design}`, `voltage_min_design`, `power_now`, `current_now`, `voltage_now`, `temp`, `time_to_{empty,full}_now` | sensors\* | battery |
 | `/etc/passwd` (via libc) | slow | resolving uid to user name |
+
+\* Temperatures and battery are not on any of the four tiers above; they are their
+own **sensor group**, riding on the medium tier's interval (5 s by default) while a
+sensor-bearing screen is visible and on the slow tier's interval (30 s) otherwise,
+rather than a fixed cadence of its own. Between reads, the last value is carried
+forward and shown aged rather than dropped — the Battery screen's own fields and
+the header's single temperature can be up to 30 seconds old, and say so
+(`Stale { value, age }`, rendered as e.g. `temp 62.0C ~00:28`). The cadence split
+exists because the read itself is not cheap: on macOS,
+`Components::refresh` for temperatures costs about 85 ms regardless of how many
+sensors exist, which on a plain 5-second schedule was enough to fail §16.1's idle
+CPU p95 budget — see `benchmarks.md`.
 
 Plus one syscall that is not a file read: `statfs(2)` on each mount point, on the
 medium tier, for the inode counts. Nothing under `/proc` reports `f_files`, so

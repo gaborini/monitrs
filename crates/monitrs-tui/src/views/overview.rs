@@ -23,10 +23,12 @@
 //!   kept ([`Radar::with_severe_first`]), platform-impossible ones are dropped
 //!   ([`Radar::hide_unsupported`], which §4 permits when space is scarce), and the
 //!   panel's trailing label says how many of how many are on screen.
-//! * **The sensors row is drawn only when a sensor answered.** It costs a radar
-//!   signal, and trading a measured pressure state for a row that says `n/a` would
-//!   be the wrong trade (§4 hides an unsupported optional panel rather than
-//!   reserving space for it).
+//! * **There is no separate sensors row.** §7.1's optional temperature and battery
+//!   summary lives in the header's meter notes instead, at every band that draws
+//!   this screen (see `draw_pressure`'s own comment, below) — a radar row would
+//!   cost a §2.3 pressure signal to repeat a reading the header already shows, and
+//!   the header can carry a carried-over, aged reading (`~00:28`) that a radar
+//!   row's `n/a`/available split cannot.
 //! * **The I/O plot is self-scaling, so the panel states its ceiling.** A byte
 //!   rate has no natural 100%, and a plot drawn against an unstated scale is not a
 //!   measurement — so the peak goes in the panel's trailing label where changing

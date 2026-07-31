@@ -245,8 +245,12 @@ The three absences are different and the screen distinguishes them:
 * **`n/a`** — this machine has no battery. On Linux, `/sys/class/power_supply`
   contains no entry whose `type` is `Battery`; on macOS, `IOPowerSources` lists no
   internal battery.
-* **`warming up`** — the battery is read on the medium (5 s) tier and the first
-  reading has not landed yet. It arrives within seconds.
+* **`warming up`** — the battery shares the sensor group's schedule with
+  temperatures: every 30 seconds ordinarily, tightening to every 5 seconds while
+  this Battery screen is the one open. Opening the screen clears the deadline, so
+  the first reading lands on the very next tick rather than up to 30 seconds
+  later. Once it has landed, a reading between ticks is shown carried over and
+  aged (`Stale { value, age }`) rather than dropped back to `warming up`.
 * **`permission denied`** — a power source is present but unreadable at this
   privilege level. Rare; worth reporting if you see it.
 
