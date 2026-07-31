@@ -142,8 +142,12 @@ old, and say so (`Stale { value, age }`, rendered as e.g. `temp 62.0C ~00:28`).
 The cadence split exists because the read itself is not cheap: on macOS,
 `Components::refresh` for temperatures costs about 85 ms regardless of how many
 sensors exist, which on a plain 5-second schedule was enough to fail §16.1's idle
-CPU p95 budget — and, measured after the split, still fails it, for a smaller and
-not yet identified reason — see `benchmarks.md`.
+CPU p95 budget. Measured after the split it still fails, and the reason is now
+identified rather than open: that 85 ms turns out to be almost all blocked wait
+rather than own-process CPU, and what remains over budget is the medium tier's
+*other* work — the two filesystem-capacity reads below, at 13.2–35.0 ms of CPU per
+tick against a whole-tick budget of roughly 16 ms. Which of the two carries it has
+not been separated. See `benchmarks.md`.
 
 Plus one syscall that is not a file read: `statfs(2)` on each mount point, on the
 medium tier, for the inode counts. Nothing under `/proc` reports `f_files`, so

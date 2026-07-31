@@ -350,16 +350,19 @@ workload, so read them as a hard case rather than a flattering one:
 |---|---|
 | frame render below 16 ms at 160×48 | median 200 µs, p95 353 µs |
 | input-to-visible-response below 50 ms | median 417 µs, p95 486 µs |
-| sample collection below 200 ms p95 | p95 15–21 ms for the ordinary tick; 121–161 ms for the every-fifth one |
+| sample collection below 200 ms p95 | p95 12.63 ms for the ordinary fast-only tick (four in five), 40.90 ms when the medium tier joins it (every fifth), 134.78 ms for the every-thirtieth tick that also reads sensors |
 | resident memory below 50 MiB | median 24.5–26.7 MiB, peak 27.2 MiB |
 | no unbounded growth | 30-minute soak: resident size fell, descriptors flat, nothing dropped |
-| idle self CPU below 1% median, 2% p95 | median 0.5–1.1% — met; **p95 6–11% — fails** |
+| idle self CPU below 1% median, 2% p95 | median 0.60–0.85% — met; **p95 4.30–9.50% — fails** |
 
-The last row is the honest one. monitrs' own computation is about 35 µs per tick;
-the cost is OS reads, and on this host the process table and the disk counters cost
-29 ms and 34 ms respectively every second. `docs/benchmarks.md` breaks it down read
-by read and says what would close it. A twelve-hour soak has not been run, and no
-soak has been run on Linux.
+The last row is the honest one, and where the cost sits is now measured rather than
+guessed. monitrs' own computation is about 35 µs per tick; the rest is OS reads. The
+process table and the disk counters used to cost 29 ms and 34 ms of it every second and
+no longer do — both were fixed. What remains is the medium tier's filesystem-capacity
+work, at **13.2–35.0 ms of CPU per tick** against a whole-tick budget of roughly 16 ms;
+which of its two reads carries that is not yet separated. `docs/benchmarks.md` breaks it
+down read by read and says what would close it. A twelve-hour soak has not been run, and
+no soak has been run on Linux.
 
 Two component results worth knowing: history seeking is constant time regardless of
 how far back you scrub, and the sampling loop is bound by OS reads rather than by

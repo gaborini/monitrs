@@ -341,13 +341,14 @@ proportion to its span; both are clamped to supported ranges and any clamp is
 reported rather than applied silently.
 
 Both are measured now, and one of them **misses half its budget**: on a 12-core Mac with
-about a thousand processes, monitrs costs a median 0.5–1.1% of one core at rest against a
-1% target — which passes — but a p95 of 6–11% against 2%, which does not. Resident memory
-sits at 24.5–26.7 MiB against 50 MiB and a frame renders in 200 µs against 16 ms. If your machine runs many processes, expect the CPU figure
-rather than the budget:
+about a thousand processes, monitrs costs a median 0.60–0.85% of one core at rest against
+a 1% target — which passes — but a p95 of 4.30–9.50% against 2%, which does not. Resident
+memory sits at 24.5–26.7 MiB against 50 MiB and a frame renders in 200 µs against 16 ms.
+If your machine runs many processes, expect the CPU figure rather than the budget:
 [`benchmarks.md`](benchmarks.md#where-the-idle-cpu-goes) breaks the cost down read by
-read — most of it is the OS handing over the process table and the disk counters, not
-anything monitrs computes.
+read — none of it is anything monitrs computes, and the part still over budget is the
+medium tier's filesystem-capacity work, at 13.2–35.0 ms of CPU per tick against a
+whole-tick budget of roughly 16 ms.
 
 `scripts/measure-overhead.py` takes the same measurement on your machine, from
 outside the process, if you want to compare.

@@ -101,8 +101,13 @@ than a fixed cadence of its own. The reason is cost, not taste — the read is o
 call, `Components::refresh` for temperatures alongside the battery, that costs
 about 85 ms on macOS regardless of how many components exist, so putting it on
 the same 5-second schedule as everything else was expensive enough to fail
-§16.1's idle p95 budget outright — and, measured after the fix, still fails it,
-just for a smaller and not yet identified reason; see `benchmarks.md`. Between
+§16.1's idle p95 budget outright. Measured after the fix it still fails, and the
+reason is now identified: that 85 ms is almost all blocked wait rather than CPU,
+so moving it improved the stopwatch and barely moved the meter the budget uses.
+What remains over budget is the medium tier's *other* work — its two
+filesystem-capacity reads, 13.2–35.0 ms of CPU per tick against a whole-tick
+budget of roughly 16 ms; which of the two carries it is not yet separated. See
+`benchmarks.md`. Between
 reads the last value is carried forward and shown as `MetricState::Stale {
 value, age }`, so the header's temperature can be up to thirty seconds old and
 says so rather than silently holding a number nobody re-measured.
@@ -291,17 +296,19 @@ the process count the budgets assume, and per-process OS reads are where the cos
 
 | Budget | Target | Measured (1000 processes, not the reference workload) |
 |---|---|---|
-| Idle self CPU | median < 1%, p95 < 2% | median 0.5–1.1% — met; **p95 6–11% — fails** |
+| Idle self CPU | median < 1%, p95 < 2% | median 0.60–0.85% — met; **p95 4.30–9.50% — fails** |
 | Resident memory | < 50 MiB in the default configuration | median 24.5–26.7 MiB, peak 27.2 MiB |
 | Input to visible response | < 50 ms when no collector result is needed | median 417 µs, p95 486 µs |
 | Frame render at 160×48 | < 16 ms | median 200 µs, p95 353 µs |
-| Sample collection at 200 processes | < 200 ms p95 | p95 15–21 ms for a fast-only tick at 1000 processes; 121–161 ms when the medium tier joins |
+| Sample collection at 200 processes | < 200 ms p95 | at 1000 processes: p95 12.63 ms for a fast-only tick, 40.90 ms when the medium tier joins every fifth, 134.78 ms for the every-thirtieth tick that also reads sensors |
 | 12-hour run | no unbounded memory or file-descriptor growth | 30 minutes: no growth. The 12-hour run is still owed |
 | Redraw | no busy loop | not measured as such |
 
 The idle-CPU failure is not in monitrs' own computation, which is about 35 µs per
-tick — three orders of magnitude below the OS reads that surround it. `benchmarks.md`
-locates it read by read and states what would close it.
+tick — three orders of magnitude below the OS reads that surround it. It is the medium
+tier: 13.2–35.0 ms of CPU per tick beyond a fast-only one, positive in 15 of 15 runs,
+against a whole-tick budget of roughly 16 ms. `benchmarks.md` locates it read by read,
+says which part is still unattributed, and states what would close it.
 
 Under high load — 10,000 processes, or a stalled `/proc` — the required behaviour
 is: input stays responsive, snapshots coalesce, collector lag is *displayed*,

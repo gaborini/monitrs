@@ -433,8 +433,11 @@ absolute number.
 **1. The medium tier's cost is real CPU, and it is large.** A fast-plus-medium tick's CPU
 is **92–99%** of its wall-clock in all nine runs that measured both, so for *this* read
 class the stopwatch was telling the truth. The CPU it spends beyond a fast-only tick ranged
-**13.2 to 35.0 ms, median 23.4 ms** over the fifteen runs — from **82% of the whole 16 ms
-budget at the low end to more than twice it at the high end**. Task 7 was right to retract
+**13.2 to 35.0 ms, median 23.4 ms** over the fifteen runs, and was **positive in 15 of 15**
+— from **82% of the whole 16 ms budget at the low end to more than twice it at the high
+end**. Fifteen out of fifteen is what makes this a measurement rather than a run of noise,
+and it is the difference between this claim and the one Task 7 retracted for the same read
+class. Task 7 was right to retract
 an attribution it could not support, and the attribution now measured happens to be the one
 it retracted — the difference being that this time it is measured on the meter the budget
 uses.
@@ -443,8 +446,9 @@ The medium tier's work is two filesystem-capacity reads: `Disks::refresh(true)` 
 `CommonCollector::refresh_medium` (per-mount `CFURL` capacity, plus building
 `cached_filesystems`) and `filesystem::read_inode_usage`'s `getfsstat` in the macOS
 layer. **How that CPU splits between the two is not measured here** — this instrument
-times a tier, not a call. "The medium tier costs tens of milliseconds of CPU" is the
-measured claim; any split between its two reads is not.
+times a tier, not a call, and the two were never separated. "The medium tier costs tens of
+milliseconds of CPU" is the measured claim; any split between its two reads is not, and
+separating them is the first thing to do before moving either.
 
 **2. The sensor read costs almost no own-process CPU. Its 85 ms is overwhelmingly wait.**
 Two independent pieces of evidence, and the second is the load-bearing one.
@@ -583,22 +587,14 @@ five. The idle median barely moved, though — 0.5–1.1% to 0.60–0.85%, overl
 and ["What a tick costs in CPU"](#what-a-tick-costs-in-cpu) explains why: the 85 ms below
 is wall-clock, and the read costs almost no CPU.
 
-**The p95 still fails: 4.30–9.50% against a 2% budget, and the cause is not yet
-established.** The medium tier's other read, `Disks::refresh(true)`, never went
-anywhere, and is the obvious next suspect now that the much larger sensor read
-has moved off its shared schedule — but the only number measured for it is
-wall-clock (`Instant::elapsed()` around the whole tick, via `capture.rs`), and
-this section already knows wall-clock and CPU do not track for a `CFURL`
-capacity query (see "Two things follow", just below). Attributing the p95 miss
-to that read would be inferring a CPU cost from a wall-clock one — exactly the
-mistake this file's own prior measurement made for the same read class. See
-["Why there are two idle rows"](#why-there-are-two-idle-rows) above for the
-fuller account, including the structural argument that does not depend on
-identifying the read: this instrument's real ~0.81 s sampling interval means the
-budget is closer to 16 ms of CPU per tick than 20, and a fast-only tick alone
-already costs 9.26 ms of it. Moving the sensor read fixed the read this release
-targeted; it did not, on its own, bring the idle p95 under §16.1's budget, and
-what remains to be brought under it is not yet identified.
+**The p95 still fails: 4.30–9.50% against a 2% budget, and the remaining cause is
+the medium tier — measured, not suspected.** That measurement, the instrument behind
+it and its limits are in ["What a tick costs in CPU"](#what-a-tick-costs-in-cpu) and
+are not repeated here; the short form is that the tier's CPU increment over a
+fast-only tick is 13.2–35.0 ms against a whole-tick budget of roughly 16 ms, and that
+which of the tier's *two* filesystem-capacity reads carries it is the part still open,
+because they were never measured apart. Moving the sensor read fixed the read this
+release targeted; it did not, on its own, bring the idle p95 under §16.1's budget.
 
 Two things follow, and neither is a micro-optimisation:
 

@@ -29,12 +29,16 @@ is what a user actually reads. What is still owed:
   reported turned out to be the harness measuring two thread wake-ups rather than
   monitrs; see [`soak-testing.md`](soak-testing.md).)
 * **The idle self-CPU budget of §16.1 is half met.** Measured on a 12-core Mac with
-  about a thousand processes: median **0.5–1.1%** against a 1% budget, which passes, and
-  p95 **6–11%** against 2%, which does not. (This list previously quoted 1.3–2.7% and
-  11–15%, which were the figures from partway through the fix and were already superseded
-  in [`benchmarks.md`](benchmarks.md) when they were written here.)
-  The other five measurable budgets pass — frame render, input latency, collection
-  p95, resident memory, descriptor growth — and
+  about a thousand processes: median **0.60–0.85%** against a 1% budget, which passes, and
+  p95 **4.30–9.50%** against 2%, which does not. The remaining cost is measured rather
+  than suspected: the medium tier's two filesystem-capacity reads cost **13.2–35.0 ms of
+  CPU per tick**, positive in 15 of 15 runs, against a whole-tick budget of roughly 16 ms.
+  Which of the two carries it has not been separated. (This list previously quoted
+  1.3–2.7% and 11–15%, and then 0.5–1.1% and 6–11%; both were superseded in
+  [`benchmarks.md`](benchmarks.md) before this list was next read.)
+  Four of the other five measurable budgets pass outright — frame render, input latency,
+  collection p95, resident memory — and descriptor growth passes **over half an hour
+  only**; §16.1 asks for twelve, and that run is still owed.
   [`benchmarks.md`](benchmarks.md#the-161-end-to-end-budgets) has the numbers, the
   per-read breakdown showing where the time goes, and what it would take to fix.
   This is the one item on this list that is a *product* problem rather than a
@@ -610,10 +614,14 @@ owes, carried into each release's *Known limitations* rather than resolved by ti
       checksum verified against the downloaded files, and every archive carrying a build
       attestation that `gh attestation verify` accepts.
 - [ ] **default settings remain below the memory and CPU budgets on the reference
-      workload.** Frame time, input latency, collection p95, resident memory,
-      descriptor growth **and the idle-CPU median** are measured and pass. The
-      **idle-CPU p95 does not**: 6–11% against a 2% budget, which is the medium
-      tier's 85 ms temperature read arriving as one spike every five seconds. Nothing
+      workload.** Frame time, input latency, collection p95, resident memory **and the
+      idle-CPU median** are measured and pass; descriptor growth passes over half an
+      hour, and §16.1's twelve-hour run is still owed. The **idle-CPU p95 does not
+      pass**: 4.30–9.50% against a 2% budget. The cause is the medium tier's two
+      filesystem-capacity reads, at 13.2–35.0 ms of CPU per tick against a whole-tick
+      budget of roughly 16 ms — *not* the 85 ms temperature read this list previously
+      named, which turns out to be almost all blocked wait and to cost a few
+      milliseconds of CPU at most. Nothing
       has been measured on §16.1's actual reference workload (8 CPUs, 200 processes),
       where the per-process costs would be about five times smaller. Numbers,
       breakdown and the commands that produce them are in
