@@ -750,18 +750,53 @@ fn measure_the_sample_collection_budget_per_tick_shape() {
         ("every tier (every 30th, and the first)", DueTiers::ALL),
     ] {
         let mut samples = Vec::new();
+        let mut thread_cpu = Vec::new();
+        let mut process_cpu = Vec::new();
         for _ in 0..15 {
             std::thread::sleep(Duration::from_millis(250));
             tick = tick.advance(Instant::now(), SystemTime::now(), due);
+            // Process before thread going in and thread before process coming out, so
+            // the thread window is strictly inside the process window and neither
+            // reading pays for taking the other.
+            let process_before = monitrs_collectors::selfstat::process_cpu_time();
+            let cpu_before = monitrs_collectors::selfstat::thread_cpu_time();
             let at = Instant::now();
             let snapshot = collector.sample(&tick).expect("a live sample");
-            samples.push(at.elapsed());
+            let wall = at.elapsed();
+            let cpu = monitrs_collectors::selfstat::thread_cpu_time();
+            let process = monitrs_collectors::selfstat::process_cpu_time();
+            samples.push(wall);
+            // A tick's CPU cost is what §16.1's idle budget is actually about; its
+            // wall-clock cost is what a stopwatch sees. For a read that blocks —
+            // `getfsstat`, a `CFURL` capacity query — those are different numbers,
+            // and quoting the one for the other is a mistake `docs/benchmarks.md`
+            // records this project making once already. All three are printed so
+            // nobody has to infer any of them from another.
+            if let (Some(before), Some(after)) = (cpu_before.fresh(), cpu.fresh()) {
+                thread_cpu.push(after.saturating_sub(*before));
+            }
+            // The process figure is what catches a call that pushes its work onto a
+            // framework's own thread: the thread clock charges that call nothing,
+            // and on the sensor tick the gap is real.
+            if let (Some(before), Some(after)) = (process_before.fresh(), process.fresh()) {
+                process_cpu.push(after.saturating_sub(*before));
+            }
             processes = snapshot.process_count();
         }
         samples.sort_unstable();
         let median = samples[samples.len() / 2];
         let p95 = samples[samples.len() * 95 / 100];
-        println!("collection, {label}: median {median:?}, p95 {p95:?}");
+        // The CPU figures are reported, never asserted. §16.1's collection budget is
+        // a wall-clock budget and this measurement does not redefine it; the CPU
+        // columns exist to attribute the *idle self-CPU* budget's cost, which is a
+        // different row of that table and is measured by a different instrument
+        // (`scripts/measure-overhead.py`, from outside the process).
+        println!(
+            "collection, {label}: median {median:?}, p95 {p95:?}, \
+             thread {}, process {}",
+            summarise_cpu(&mut thread_cpu),
+            summarise_cpu(&mut process_cpu)
+        );
         check_budget(
             &format!("collection p95, {label}"),
             p95,
@@ -769,4 +804,18 @@ fn measure_the_sample_collection_budget_per_tick_shape() {
         );
     }
     println!("  measured against {processes} processes");
+}
+
+/// A median and p95 for one CPU-time series, or an honest absence.
+///
+/// Absence rather than a zero, for §26's reason: a build with no CPU clock has not
+/// measured a cheap tick, it has not measured a tick at all.
+fn summarise_cpu(samples: &mut [Duration]) -> String {
+    if samples.is_empty() {
+        return "CPU not measured on this build".to_string();
+    }
+    samples.sort_unstable();
+    let median = samples[samples.len() / 2];
+    let p95 = samples[samples.len() * 95 / 100];
+    format!("CPU median {median:?}, CPU p95 {p95:?}")
 }

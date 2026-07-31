@@ -245,7 +245,7 @@ collector would be measuring the thing with itself.
 |---|---|---|
 | ordinary frame render below 16 ms at 160×48 | median 200 µs, p95 353 µs, max 410 µs | pass, by a factor of 45 |
 | input-to-visible-response below 50 ms | median 417 µs, p95 486 µs | pass, by a factor of 100 |
-| sample collection below 200 ms p95 | one clean run, 984 processes: fast-only (4 in 5): median 9.26 ms, p95 12.63 ms. Fast+medium (every 5th, sensors excluded — they no longer share this tier, see below): median 36.14 ms, p95 40.90 ms. Every tier (every 30th, and the first, sensors included): median 124.21 ms, p95 134.78 ms | pass |
+| sample collection below 200 ms p95 | one clean run, 984 processes: fast-only (4 in 5): median 9.26 ms, p95 12.63 ms. Fast+medium (every 5th, sensors excluded — they no longer share this tier, see below): median 36.14 ms, p95 40.90 ms. Every tier (every 30th, and the first, sensors included): median 124.21 ms, p95 134.78 ms. These are wall-clock; for what each tick shape costs in **CPU**, which is a different and in one case very different number, see ["What a tick costs in CPU"](#what-a-tick-costs-in-cpu) | pass |
 | resident memory below 50 MiB | median 24.5–26.7 MiB, peak 27.2 MiB | pass |
 | no unbounded file-descriptor growth | flat at 3 over a 30-minute soak with the real collector | pass over half an hour; the 12-hour run is still owed |
 | idle self CPU median below 1%, p95 below 2% | Overview visible (the row the budget is about): median **0.60–0.85%**, p95 **4.30–9.50%** over three 60 s runs | median met; **p95 fails** |
@@ -259,49 +259,53 @@ collector would be measuring the thing with itself.
 same 60-second window as every other run here — is the first row. Moving the
 sensor group off the medium tier onto its own 30-second cadence (§8.6) was meant to
 remove the one call that dominated the old p95: an 85 ms `Components::refresh`
-landing in one sample in five. It does what it was built to do — the median fell
-further, from 0.5–1.1% to **0.60–0.85%**, and a read that now lands in one sample
-in thirty instead of one in five is real progress — but the 95th percentile is
-still over budget: **4.30–9.50%** against 2%. Better than the pre-release 6–11%,
-not a pass.
+landing in one sample in five. It does what it was built to do on a stopwatch — the
+median fell further, from 0.5–1.1% to **0.60–0.85%**, and a read that now lands in
+one sample in thirty instead of one in five is real progress — but the 95th
+percentile is still over budget: **4.30–9.50%** against 2%. Better than the
+pre-release 6–11%, not a pass.
 
-**What is not yet established is why, and that matters more than a tidy answer
-would.** `scripts/measure-overhead.py` samples about every 0.81 s, not once a
+**Why is now measured, and the answer is not the one this section originally
+guessed.** `scripts/measure-overhead.py` samples about every 0.81 s, not once a
 second — 74 samples over a 60-second window — so the 2% p95 budget this
 instrument actually checks is closer to "2% of ~810 ms," roughly **16 ms of CPU
-per tick**, not 20. A fast-only tick already costs 9.26 ms median (12.63 ms p95)
-on this workload (the clean `capture.rs` run in the row above): most of that
-16 ms is spent before any medium-tier or sensor work is added at all. That is a
-real, structural constraint, and it follows from the instrument itself rather
-than from attributing the remaining cost to any one read — it says the lever
-available *without* knowing which read is responsible is *moving* work off the
-tick the p95 measures, the way Tasks 1–6 moved the sensor read, rather than
-trying to make whatever remains cheaper. There may be very little headroom left
-in the budget for that.
+per tick**, not 20. A fast-only tick already costs 8.3–17.9 ms of *CPU* on this
+workload (["What a tick costs in CPU"](#what-a-tick-costs-in-cpu)): most or all of
+that 16 ms is spent before any medium-tier or sensor work is added at all. That is a
+real, structural constraint, and it says the lever is *moving* work off the tick the
+p95 measures, the way Tasks 1–6 moved the sensor read, rather than trying to make
+whatever remains cheaper. There is very little headroom left in the budget for that.
 
-The obvious next suspect for what *is* still on that tick is the medium tier's
-other work, `Disks::refresh(true)` (the filesystem-capacity read, §8.6), which
-shares the fast-plus-medium tick with the now-departed sensor read and was
-always there. But the only number measured for it — the clean run above,
-984 processes, a fast-plus-medium tick at 36.14 ms median against the 9.26 ms
-fast-only figure — is `Instant::elapsed()` around the whole tick
-(`crates/monitrs/tests/capture.rs`): **wall-clock time, not CPU time**, and this
-document already knows the two do not track for this exact read class. The
-["Where the idle CPU goes"](#where-the-idle-cpu-goes) section below records that
-a `CFURL` capacity query "blocks without burning much CPU," and that wall-clock
-and CPU for this read "look nothing like each other on the meter §16.1 actually
-budgets." The same caution applies here: the 36 ms may be mostly blocked wait,
-mostly real CPU, or a mixture, and naming `Disks::refresh(true)` as *the* cause
-would repeat, for the same read class, the mistake this file already once
-caught itself making. (For the record: an earlier draft of this section computed
-`36 ms ÷ 1000 ms ≈ 3.6%` and published it as the tick's CPU cost — wrong twice
-over, first to treat a wall-clock duration as CPU time at all, second to divide
-by 1000 ms rather than the ~810 ms this instrument actually samples at. Corrected
-for the real interval, `36 ms ÷ 810 ms ≈ 4.4%` sits closer to the observed
-4.30–9.50%, which might look like quiet support for the wall-clock-as-CPU
-reading; it is not — the 36 ms was never established to be CPU time in the first
-place, and a better-fitting number computed from an unproven assumption is still
-unproven.)
+What that section adds is which read to move, and it is not the one Tasks 1–6
+moved. The medium tier costs **13.2–35.0 ms of CPU** beyond a fast-only tick — at or
+above the whole 16 ms budget by itself — while the sensor read whose 85 ms motivated
+this release turns out to cost **almost no CPU at all**, because that 85 ms is
+blocked wait rather than computation. The improvement Tasks 1–6 delivered is real and
+measured; the reason it did not fix the p95 is that it moved the wrong read for this
+particular budget.
+
+The suspect that was named and then retracted was the medium tier's other work,
+`Disks::refresh(true)` (the filesystem-capacity read, §8.6), which shares the
+fast-plus-medium tick with the now-departed sensor read and was always there. It is
+worth recording how that went, because the process was right even where the guess
+was.
+
+An earlier draft named it from a wall-clock figure — a fast-plus-medium tick at
+36.14 ms median against 9.26 ms fast-only, `Instant::elapsed()` around the whole
+tick — and computed `36 ms ÷ 1000 ms ≈ 3.6%` as "the tick's CPU cost". That was
+wrong twice over: it treated a wall-clock duration as CPU time, and it divided by
+1000 ms rather than the ~810 ms this instrument samples at. It was retracted on the
+grounds that this file already knew wall-clock and CPU need not track for a
+filesystem-capacity read, so naming the read from a stopwatch would repeat a mistake
+the file had caught itself making once before.
+
+Measured on both clocks, the retracted attribution turns out to be **correct**: the
+medium tier really does cost 13.2–35.0 ms of CPU, and for *this* read wall-clock did
+predict CPU, to within a percent or two. The retraction was still the right call — an
+unproven number that happens to be right is not evidence, and the same reasoning
+applied to the sensor read (85 ms wall, ~0 ms CPU) would have been badly wrong in the
+other direction, as finding 2 above shows. The lesson kept is the one about the
+method, not about the disk read.
 
 There is a second loose end, and it does not fit the disk-read story either. A
 per-sample diagnostic trace taken during this investigation (45 one-second-ish
@@ -315,14 +319,13 @@ real one rather than a second genuine periodic cost. **That is a hypothesis, not
 a finding** — it has not been measured, and it is recorded here as the caveat it
 is rather than folded silently into a tidier story than the data supports.
 
-The honest state, then: the p95 still fails, the improvement from Tasks 1–6 is
-real and measured, and the cause of the remaining miss is not yet established.
-What would settle it is the medium tick's own CPU time, measured directly rather
-than inferred from a wall-clock duration. `crates/monitrs-collectors/src/selfstat.rs`
-already reads this process's own resident memory and descriptor count from
-outside the sampling path for exactly this kind of self-measurement; a CPU-time
-instrument built the same way, scoped to just the medium tier's work, is what is
-missing. Building it is not part of this round.
+The honest state, then: the p95 still fails, the improvement from Tasks 1–6 is real
+and measured but was aimed at a read that costs wall-clock rather than CPU, and the
+medium tier is now a **measured** cause of the remaining miss rather than a suspected
+one. Whether it is the whole cause is not settled — see the arithmetic at the end of
+["What a tick costs in CPU"](#what-a-tick-costs-in-cpu), which accounts for the lower
+part of the observed 4.30–9.50% band but not its top. Bringing the tick under budget
+is not part of this round; knowing what to move is now measured rather than guessed.
 
 The second row is the Battery screen, where the sensor group returns to five
 seconds because the reader is looking at the thing it measures. Its **median**
@@ -355,6 +358,132 @@ exist so that the tick a budget is about can actually be measured, and they are
 pinned against what `TierScheduler` really produces rather than against their own
 definitions.
 
+### What a tick costs in CPU
+
+Every collection figure above this line is wall-clock — `Instant::elapsed()` around
+`collector.sample()`. §16.1's idle budget is about **CPU**, and this file has already
+caught itself once quoting the one for the other on a filesystem-capacity read (see
+"Two things follow", below). So the tick is now measured on both clocks by the same
+test, from `crates/monitrs-collectors/src/selfstat.rs`:
+
+* `thread_cpu_time()` — `clock_gettime(CLOCK_THREAD_CPUTIME_ID)`, the calling
+  thread's own consumed CPU. Narrow on purpose: the difference across one
+  `collector.sample()` call on the test's thread can be *charged* to that call.
+* `process_cpu_time()` — `ru_utime + ru_stime` from `getrusage(RUSAGE_SELF)`, every
+  thread of the process. It exists because the thread clock's narrowness is also a
+  blind spot: work a call pushes onto a framework's own thread is real CPU the
+  thread clock charges it nothing for. The gap between the two is that work.
+
+```sh
+MONITRS_REFERENCE_MACHINE=1 cargo test -p monitrs --release --test capture -- \
+  --ignored --nocapture measure_the_sample_collection_budget_per_tick_shape
+```
+
+Reference machine, 15 samples per tick shape, 981–1007 processes, **fifteen runs**. The
+run below is the one whose medium-tier increment is the median of the fifteen, quoted in
+full so the three clocks can be compared on one tick:
+
+| Tick shape | Wall-clock median | Thread CPU median | Process CPU median | Process CPU as a share of wall |
+|---|---:|---:|---:|---:|
+| fast only (4 ticks in 5) | 18.42 ms | 17.89 ms | 17.90 ms | **97%** |
+| fast + medium (every 5th) | 41.73 ms | 41.24 ms | 41.25 ms | **99%** |
+| every tier (every 30th, sensors included) | 136.03 ms | 29.58 ms | 40.22 ms | **30%** |
+
+**Read the ratios, not the milliseconds.** The absolute figures move a great deal with
+what else is on the host — a fast-only tick's CPU median ranged 8.3–17.9 ms across the
+fifteen runs, because this is a developer's laptop with a browser open, not a bench rig.
+(Where the host's 1-minute load average was recorded during these runs it sat between 4.5
+and 8.7; the earliest runs were taken before it was being recorded, so the correlation with
+load is an observation about this data set, not a measured relationship.) The shares in the
+last column barely moved at all: **88–99% for fast-only, 92–99.7% for fast+medium, and
+21–31% for every tier, in all fifteen runs.** (The first two ranges are quoted from the
+thread figure, which those two shapes make indistinguishable from the process figure; the
+every-tier range is quoted from the process figure, which for that shape is the larger and
+therefore the fair one.)
+So the conclusions below rest on the ratios and on within-run differences, not on any
+single absolute number.
+
+**Three findings, and the second one is not what this release expected.**
+
+**1. The medium tier's cost is real CPU, and it is large.** A fast-plus-medium tick's CPU
+is 92–100% of its wall-clock in every run, so for *this* read class the stopwatch was
+telling the truth. The CPU it spends beyond a fast-only tick ranged **13.2 to 35.0 ms,
+median 23.4 ms** over the fifteen runs. Task 7 was right to retract an attribution it
+could not support, and the attribution now measured happens to be the one it retracted —
+the difference being that this time it is measured on the meter the budget uses.
+
+The medium tier's work is two filesystem-capacity reads: `Disks::refresh(true)` in
+`CommonCollector::refresh_medium` (per-mount `CFURL` capacity, plus building
+`cached_filesystems`) and `filesystem::read_inode_usage`'s `getfsstat` in the macOS
+layer. **How that CPU splits between the two is not measured here** — this instrument
+times a tier, not a call. "The medium tier costs tens of milliseconds of CPU" is the
+measured claim; any split between its two reads is not.
+
+**2. The sensor read costs almost no CPU. Its 85 ms is blocked wait.** On the every-tier
+tick, **86.3–98.2 ms of the tick is not CPU on any thread — 69–73% of it, in every one of
+the twelve runs that measured the process clock.** That is a *within-run* subtraction
+(this tick's wall minus this tick's own process CPU), so no drift between measurement
+blocks can produce it, and it brackets the 80.1–85.6 ms that
+`benches/sensor_cost.rs` measures for `Components::refresh` itself (see ["What a sensor
+read costs"](#what-a-sensor-read-costs)). The sensor read is an IPC wait, not computation.
+
+This corrects the account this file gave of its own release. The 85 ms
+`Components::refresh` was quoted as the figure that "dominated the arithmetic"; on a
+stopwatch it does, on the meter §16.1 budgets it is close to free. So **Tasks 1–6 moved a
+read that was never a significant CPU cost**, which is why the idle median barely moved
+(0.5–1.1% → 0.60–0.85%) and the p95 did not come under budget. The work was still worth
+doing — a 136 ms tick occupies the sampler thread whether or not it burns CPU, and §16.1
+budgets collection wall-clock too — but it was not the p95 lever, and this file said it
+was.
+
+*Where that CPU goes instead is not measured.* An IOKit HID enumeration is IPC to a system
+daemon, so the plausible answer is that it burns in another process — which §16.1's
+own-CPU budget would not count and a user would still pay for. **Hypothesis, not a
+finding**: nothing here measured another process.
+
+**3. A thread clock alone would have understated finding 2.** On the every-tier tick the
+process figure exceeds the thread figure by **5.9–10.6 ms** in every run that measured
+both; on the other two shapes the two agree to within **0.03 ms**. Something in the sensor
+path does several milliseconds of real work on a thread that is not the caller's, so the
+thread clock — whose narrowness is what makes findings 1 and 2 attributable — is also
+blind to it, and both readings are needed.
+
+An independent process-CPU source corroborates this: `pti_total_user + pti_total_system`
+from `PROC_PIDTASKINFO`, converted through the mach timebase, taken in three earlier runs
+in place of `getrusage`. It agreed with the thread clock to within 0.03 ms on the fast and
+fast-plus-medium shapes — just as `getrusage` does — and showed the same every-tier gap,
+7.3–8.3 ms. The two process sources were never sampled in the *same* run, so this is two
+methods independently reproducing the effect rather than a direct comparison between them.
+(That reading also has a trap worth recording: `proc_pidinfo`'s CPU totals are in mach
+absolute time units, not nanoseconds, so a first attempt read 41× too small — the same
+timebase correction `macos/process.rs` already documents.)
+
+#### What this says about the failing p95
+
+Task 7's arithmetic puts the whole tick at roughly **16 ms of CPU** for a 2% p95 on
+`scripts/measure-overhead.py`'s ~0.81 s sampling interval. Against that:
+
+* a fast-only tick costs 8.3–17.9 ms of CPU — **1.0–2.2%** of the interval on its own,
+  i.e. most or all of the budget before any medium-tier work exists;
+* the medium tier's *increment alone*, 13.2–35.0 ms, is at or above the entire budget;
+* a fast-plus-medium tick costs 21.5–50.5 ms of CPU, which at ~810 ms is **2.7–6.2%** —
+  against an observed idle p95 of 4.30–9.50%.
+
+The predicted 2.7–6.2% and the observed 4.30–9.50% overlap across most of both bands,
+and a fast-plus-medium tick is comfortably enough on its own to fail a 2% budget. It is
+still not established that it accounts for *all* of the observed range: the top of that
+band (9.50%) is above what these figures predict, `ps` reports `%cpu` as a decaying
+average which smears a burst across neighbouring samples, and the ~3 s periodicity noted
+in ["Why there are two idle rows"](#why-there-are-two-idle-rows) is still unexplained.
+**The medium tier is now a measured cause of the p95 miss; whether it is the only one is
+not settled.**
+
+What follows for the release is that the lever is the medium tier's
+filesystem-capacity work, on the same "move it, do not micro-optimise it" reasoning
+Tasks 1–6 used — and with the caveat those tasks earned: check the CPU cost of a read
+before moving it for CPU reasons, because on this platform a read's wall-clock time
+predicted its CPU time well for the disk reads and not at all for the sensors.
+
 ### Where the idle CPU goes
 
 Not into monitrs' own computation. A fast tick's pure computation is about 35 µs
@@ -367,8 +496,8 @@ components and 21 interfaces:
 | `sysinfo` process refresh | 29 ms | ~~fast~~ — **fixed**, see below |
 | `Disks::refresh(false)` | 34 ms wall, ~21 ms of it our own CPU | ~~fast~~ — **fixed**, see below |
 | `Disks::refresh_specifics(io_usage)` | ~1 ms CPU | fast |
-| `Disks::refresh(true)` | 25 ms (wall-clock — no CPU share was split out for this row, unlike the one above) | medium |
-| `Components::refresh` (temperatures) | 85 ms | ~~medium~~ — **sensors**, its own 30 s / 5 s cadence, see below |
+| `Disks::refresh(true)` | 25 ms wall-clock for the call; the medium **tier** it sits in is 93–99.7% CPU, so this is CPU rather than blocked wait — but the per-call CPU split against the tier's `getfsstat` is not measured (see ["What a tick costs in CPU"](#what-a-tick-costs-in-cpu)) | medium |
+| `Components::refresh` (temperatures) | 85 ms wall-clock, and **almost none of it CPU** — on the tick that carries this read, 86.3–98.2 ms of the tick is not CPU on any thread (same section) | ~~medium~~ — **sensors**, its own 30 s / 5 s cadence, see below |
 | `Users::refresh` | 30 ms | slow |
 | `Networks::refresh` | 0.85 ms | fast |
 | global CPU + memory | 0.09 ms | fast |
@@ -453,10 +582,12 @@ The honest statement is the one in the table, row by row: four budgets pass outr
 descriptor budget passes over half an hour rather than the twelve the gate asks for, the
 idle-CPU **median** now passes and its **p95** does not — 4.30–9.50% against 2%. The 85 ms
 sensor read this release moved off the shared schedule is ruled out as the cause, measured
-rather than assumed; what is responsible now is not yet established — `Disks::refresh(true)`
-is the leading suspect, but only its wall-clock cost has been measured, not its CPU cost —
-and two rows have no measurement to pass or fail. That the old cause is gone is measured;
-what the new one is remains an open question, stated as one rather than guessed at.
+rather than assumed — and now understood: it was never a CPU cost at all, only a
+wall-clock one (["What a tick costs in CPU"](#what-a-tick-costs-in-cpu)). What is
+responsible is the medium tier's filesystem-capacity work, at 13.2–35.0 ms of CPU per
+medium tick against a ~16 ms budget for the whole tick, measured on a thread and a
+process CPU clock rather than inferred from a stopwatch. Whether it is the *whole*
+cause is still open, and two rows have no measurement to pass or fail.
 
 ### What a sensor read costs
 
@@ -505,13 +636,21 @@ ten benchmarks is now complete; what is left is end-to-end.
   processes — rather than on this machine.
 * Whether anything constitutes a redraw busy loop, as opposed to the idle-redraw
   interval the reducer enforces.
-* **The medium tick's own CPU time.** The idle-CPU p95 still fails (see "Why
-  there are two idle rows"), and everything measured about the suspected cause
-  — `Disks::refresh(true)` — so far is wall-clock. `selfstat.rs` already
-  measures this process from outside the sampling path for memory and
-  descriptors; the same kind of instrument, scoped to CPU time around one tick's
-  medium-tier work, is what would turn the leading suspect into an established
-  cause.
+* **How the medium tier's CPU splits between its two reads.** The tier costs
+  13.2–35.0 ms of CPU (["What a tick costs in CPU"](#what-a-tick-costs-in-cpu)), but
+  that instrument times a *tier*, not a call, and the tier holds two
+  filesystem-capacity reads: `Disks::refresh(true)` and `read_inode_usage`'s
+  `getfsstat`. Which of the two dominates is not measured, and a fix aimed at the
+  wrong one would buy nothing.
+* **Where the sensor read's CPU actually goes.** The tick carrying it spends 86.3–98.2 ms
+  not running on any of our threads, so the work is happening somewhere else — plausibly in the
+  IOKit/HID system daemon it talks to. Nothing here measured another process, so that
+  is a hypothesis. It matters because CPU burned in a daemon on our behalf is invisible
+  to §16.1's own-CPU budget and still real for the user.
+* **Whether the medium tier accounts for the whole idle p95.** It is enough on its own
+  to fail the 2% budget, but the top of the observed 4.30–9.50% band is above what the
+  measured per-tick CPU predicts, and the ~3 s periodicity noted in "Why there are two
+  idle rows" is still unexplained.
 
 ## Reading these numbers
 
