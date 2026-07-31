@@ -1362,20 +1362,33 @@ mod tests {
             "a tick that read the sensors must publish them as measured"
         );
 
-        // A fast-only tick two seconds later: the same reading, now two seconds old
-        // and saying so.
-        let later = start + Duration::from_secs(2);
-        let fast = SampleTick {
+        // Two fast-only ticks, and deliberately unequal: the gap since the sensor read
+        // is five seconds while the last tick's own `elapsed` is three. A `sensors_for`
+        // that measured the age from `tick.elapsed` — which §8.1 forbids anywhere in
+        // this codebase — would report three, so this fixture is what makes the
+        // distinction visible rather than coincidental.
+        let mid = start + Duration::from_secs(2);
+        let second = SampleTick {
             sequence: 1,
-            captured_at: later,
+            captured_at: mid,
             wall_time: SystemTime::now(),
             elapsed: Duration::from_secs(2),
             due: DueTiers::fast_only(),
         };
-        let carried = collector.sample(&fast).expect("second sample");
+        let _ = collector.sample(&second).expect("second sample");
+
+        let later = start + Duration::from_secs(5);
+        let third = SampleTick {
+            sequence: 2,
+            captured_at: later,
+            wall_time: SystemTime::now(),
+            elapsed: Duration::from_secs(3),
+            due: DueTiers::fast_only(),
+        };
+        let carried = collector.sample(&third).expect("third sample");
         match (&sampled.sensors.temperatures, &carried.sensors.temperatures) {
             (MetricState::Available(_), MetricState::Stale { age, .. }) => {
-                assert_eq!(*age, Duration::from_secs(2));
+                assert_eq!(*age, Duration::from_secs(5));
             }
             (MetricState::Available(_), other) => {
                 panic!("a carried-over reading must be stale, got {other:?}");
