@@ -810,6 +810,14 @@ fn measure_the_sample_collection_budget_per_tick_shape() {
 ///
 /// Absence rather than a zero, for §26's reason: a build with no CPU clock has not
 /// measured a cheap tick, it has not measured a tick at all.
+///
+/// **The "p95" printed here is the maximum, not a percentile.** With the 15 samples
+/// this test takes, `samples[15 * 95 / 100]` is `samples[14]` — the last element of a
+/// sorted 15-element slice. That is how the wall-clock path above has always computed
+/// it and these columns match it deliberately rather than quietly using a different
+/// rule for the CPU figures; but it means a "CPU p95" in this output is a worst-of-15,
+/// and the medians are the figures to reason from. `docs/benchmarks.md` says the same
+/// beside the numbers it quotes.
 fn summarise_cpu(samples: &mut [Duration]) -> String {
     if samples.is_empty() {
         return "CPU not measured on this build".to_string();

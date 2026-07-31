@@ -624,6 +624,27 @@ mod tests {
         Some((resident, descriptors))
     }
 
+    /// Both CPU readings, or `None` on a build that compiled neither.
+    ///
+    /// The `expect`s are the whole point, and they mirror [`measured`]'s. Without them
+    /// every CPU test below opens with a `let Some(…) = … else { return }`, so if both
+    /// clocks regressed to `Unsupported` on Linux *and* macOS at once this suite would
+    /// stay entirely green while `capture.rs`'s tick-shape measurement quietly printed
+    /// "CPU not measured on this build". A test that only runs when the instrument is
+    /// absent is not a test of the instrument.
+    fn cpu_measured() -> Option<(Duration, Duration)> {
+        if !CPU_TIME_COMPILED {
+            return None;
+        }
+        let thread = *thread_cpu_time()
+            .fresh()
+            .expect("a build that compiled the CPU clock must produce a thread reading");
+        let process = *process_cpu_time()
+            .fresh()
+            .expect("a build that compiled the CPU clock must produce a process reading");
+        Some((thread, process))
+    }
+
     #[test]
     fn an_unsupported_build_says_so_rather_than_reporting_zero() {
         if SELF_MEASUREMENT_COMPILED {
@@ -759,13 +780,9 @@ mod tests {
 
     #[test]
     fn the_process_figure_is_never_below_this_threads_own() {
-        let Some(thread) = thread_cpu_time().fresh().copied() else {
+        let Some((thread, process)) = cpu_measured() else {
             return;
         };
-        let process = process_cpu_time()
-            .fresh()
-            .copied()
-            .expect("the same platform answered a moment ago");
         // The invariant that makes the pair readable: the process total contains
         // this thread's share, so it cannot be smaller. If it ever were, one of the
         // two is in the wrong unit — the failure mode that matters here, since
@@ -779,7 +796,7 @@ mod tests {
 
     #[test]
     fn process_cpu_time_advances_when_this_thread_burns_cpu() {
-        let Some(before) = process_cpu_time().fresh().copied() else {
+        let Some((_, before)) = cpu_measured() else {
             return;
         };
         // Spinning on this thread is CPU this process spent, so the process figure
@@ -803,10 +820,10 @@ mod tests {
 
     #[test]
     fn thread_cpu_time_advances_when_this_thread_burns_cpu() {
-        let before = thread_cpu_time();
-        let Some(before) = before.fresh().copied() else {
-            // A platform that cannot answer says so, and this test has nothing to
-            // prove there — the same shape `resident_bytes`'s tests use.
+        // A platform that cannot answer says so, and this test has nothing to prove
+        // there — the same shape `resident_bytes`'s tests use. A platform that *can*
+        // answer must, which is what `cpu_measured` asserts.
+        let Some((before, _)) = cpu_measured() else {
             return;
         };
         // Deliberately not a sleep: sleeping is precisely what this must NOT count.
@@ -828,7 +845,7 @@ mod tests {
 
     #[test]
     fn thread_cpu_time_does_not_count_sleeping() {
-        let Some(before) = thread_cpu_time().fresh().copied() else {
+        let Some((before, _)) = cpu_measured() else {
             return;
         };
         std::thread::sleep(Duration::from_millis(100));

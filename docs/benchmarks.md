@@ -259,11 +259,13 @@ collector would be measuring the thing with itself.
 same 60-second window as every other run here — is the first row. Moving the
 sensor group off the medium tier onto its own 30-second cadence (§8.6) was meant to
 remove the one call that dominated the old p95: an 85 ms `Components::refresh`
-landing in one sample in five. It does what it was built to do on a stopwatch — the
-median fell further, from 0.5–1.1% to **0.60–0.85%**, and a read that now lands in
-one sample in thirty instead of one in five is real progress — but the 95th
-percentile is still over budget: **4.30–9.50%** against 2%. Better than the
-pre-release 6–11%, not a pass.
+landing in one sample in five. It does what it was built to do on a stopwatch — a read
+that now lands in one sample in thirty instead of one in five is real progress — but
+the idle median **barely moved**, 0.5–1.1% to 0.60–0.85%, two ranges that overlap; and
+the 95th percentile is still over budget: **4.30–9.50%** against 2%. Better than the
+pre-release 6–11%, not a pass. Why the median barely moved is now understood, and it is
+finding 2 of ["What a tick costs in CPU"](#what-a-tick-costs-in-cpu): the read that was
+moved cost wall-clock, not CPU.
 
 **Why is now measured, and the answer is not the one this section originally
 guessed.** `scripts/measure-overhead.py` samples about every 0.81 s, not once a
@@ -274,13 +276,16 @@ workload (["What a tick costs in CPU"](#what-a-tick-costs-in-cpu)): most or all 
 that 16 ms is spent before any medium-tier or sensor work is added at all. That is a
 real, structural constraint, and it says the lever is *moving* work off the tick the
 p95 measures, the way Tasks 1–6 moved the sensor read, rather than trying to make
-whatever remains cheaper. There is very little headroom left in the budget for that.
+whatever remains cheaper. There may be very little headroom left in the budget for
+that — though this measurement is against ~1000 processes where §16.1's reference
+workload is 200, and the per-process walk is the largest part of a fast tick, so how much
+of the fast tick's 8.3–17.9 ms survives onto the reference workload is not measured.
 
 What that section adds is which read to move, and it is not the one Tasks 1–6
-moved. The medium tier costs **13.2–35.0 ms of CPU** beyond a fast-only tick — at or
-above the whole 16 ms budget by itself — while the sensor read whose 85 ms motivated
-this release turns out to cost **almost no CPU at all**, because that 85 ms is
-blocked wait rather than computation. The improvement Tasks 1–6 delivered is real and
+moved. The medium tier costs **13.2–35.0 ms of CPU** beyond a fast-only tick — from 82%
+of the whole 16 ms budget to more than twice it — while the sensor read whose 85 ms motivated
+this release turns out to cost **almost no own-process CPU at all**, bounded above at about
+4 ms, because that 85 ms is wait rather than computation. The improvement Tasks 1–6 delivered is real and
 measured; the reason it did not fix the p95 is that it moved the wrong read for this
 particular budget.
 
@@ -379,9 +384,14 @@ MONITRS_REFERENCE_MACHINE=1 cargo test -p monitrs --release --test capture -- \
   --ignored --nocapture measure_the_sample_collection_budget_per_tick_shape
 ```
 
-Reference machine, 15 samples per tick shape, 981–1007 processes, **fifteen runs**. The
-run below is the one whose medium-tier increment is the median of the fifteen, quoted in
-full so the three clocks can be compared on one tick:
+Reference machine, 15 samples per tick shape, 981–1007 processes, **fifteen runs**. Nine
+of the fifteen were taken with the instrument as shipped and are the dataset every
+wall-clock-dependent figure below is quoted from; the other six measured the thread clock
+only, and their thread-CPU medians are given at the end of this section so that the
+thread-CPU ranges are checkable too.
+
+The run below is the one whose medium-tier increment is the median of the fifteen, quoted
+in full so the three clocks can be compared on one tick:
 
 | Tick shape | Wall-clock median | Thread CPU median | Process CPU median | Process CPU as a share of wall |
 |---|---:|---:|---:|---:|
@@ -389,28 +399,45 @@ full so the three clocks can be compared on one tick:
 | fast + medium (every 5th) | 41.73 ms | 41.24 ms | 41.25 ms | **99%** |
 | every tier (every 30th, sensors included) | 136.03 ms | 29.58 ms | 40.22 ms | **30%** |
 
+> **The CPU column is not additive down the rows, and nobody should sum it.** Every-tier is
+> a strict superset of fast+medium — the tier dispatch in `CommonCollector::sample` and
+> `MacosCollector::sample` just adds calls, with no cache that a longer tick could satisfy
+> instead — yet its measured CPU is *lower* than fast+medium's in this run and in most
+> others: across the nine shipped-instrument runs, every-tier's thread CPU is below
+> fast+medium's in **9 of 9** (by 3.4–20.2 ms) and its process CPU in **6 of 9** (by up to
+> 14.3 ms). **This effect is not explained.** The tick shapes are measured in three
+> consecutive blocks, so block-to-block drift on a live host is the obvious candidate, but
+> a 9-of-9 sign is more consistent than drift alone would predict, and no mechanism has
+> been confirmed. Consequences, taken seriously below: a reader who subtracts these rows to
+> price the sensor tier will derive a *negative* cost, and the only safe use of the column
+> is a **one-sided bound** (see finding 2), never additive accounting.
+
 **Read the ratios, not the milliseconds.** The absolute figures move a great deal with
 what else is on the host — a fast-only tick's CPU median ranged 8.3–17.9 ms across the
 fifteen runs, because this is a developer's laptop with a browser open, not a bench rig.
 (Where the host's 1-minute load average was recorded during these runs it sat between 4.5
 and 8.7; the earliest runs were taken before it was being recorded, so the correlation with
-load is an observation about this data set, not a measured relationship.) The shares in the
-last column barely moved at all: **88–99% for fast-only, 92–99.7% for fast+medium, and
-21–31% for every tier, in all fifteen runs.** (The first two ranges are quoted from the
-thread figure, which those two shapes make indistinguishable from the process figure; the
-every-tier range is quoted from the process figure, which for that shape is the larger and
-therefore the fair one.)
-So the conclusions below rest on the ratios and on within-run differences, not on any
-single absolute number.
+load is an observation about this data set, not a measured relationship.) The CPU-to-wall
+shares moved far less, over the nine runs that measured wall-clock alongside CPU:
+**88–97% for fast-only, 92–99% for fast+medium, and 27–31% for every tier.** The first two
+are quoted from the thread figure and the third from the process figure — for the first two
+shapes the choice is immaterial, since the two clocks differ by 5.0–14.0 **µs** there, but
+for every-tier it is not: the thread share is 21–25% and the process share 27–31%, and the
+process figure is the one that counts a call's work wherever it ran. Quoting the thread
+share there would both understate the cost and contradict the 69–73% not-CPU figure below.
+The conclusions rest on these ratios and on within-run differences, not on any single
+absolute number.
 
 **Three findings, and the second one is not what this release expected.**
 
 **1. The medium tier's cost is real CPU, and it is large.** A fast-plus-medium tick's CPU
-is 92–100% of its wall-clock in every run, so for *this* read class the stopwatch was
-telling the truth. The CPU it spends beyond a fast-only tick ranged **13.2 to 35.0 ms,
-median 23.4 ms** over the fifteen runs. Task 7 was right to retract an attribution it
-could not support, and the attribution now measured happens to be the one it retracted —
-the difference being that this time it is measured on the meter the budget uses.
+is **92–99%** of its wall-clock in all nine runs that measured both, so for *this* read
+class the stopwatch was telling the truth. The CPU it spends beyond a fast-only tick ranged
+**13.2 to 35.0 ms, median 23.4 ms** over the fifteen runs — from **82% of the whole 16 ms
+budget at the low end to more than twice it at the high end**. Task 7 was right to retract
+an attribution it could not support, and the attribution now measured happens to be the one
+it retracted — the difference being that this time it is measured on the meter the budget
+uses.
 
 The medium tier's work is two filesystem-capacity reads: `Disks::refresh(true)` in
 `CommonCollector::refresh_medium` (per-mount `CFURL` capacity, plus building
@@ -419,13 +446,27 @@ layer. **How that CPU splits between the two is not measured here** — this ins
 times a tier, not a call. "The medium tier costs tens of milliseconds of CPU" is the
 measured claim; any split between its two reads is not.
 
-**2. The sensor read costs almost no CPU. Its 85 ms is blocked wait.** On the every-tier
-tick, **86.3–98.2 ms of the tick is not CPU on any thread — 69–73% of it, in every one of
-the twelve runs that measured the process clock.** That is a *within-run* subtraction
-(this tick's wall minus this tick's own process CPU), so no drift between measurement
-blocks can produce it, and it brackets the 80.1–85.6 ms that
-`benches/sensor_cost.rs` measures for `Components::refresh` itself (see ["What a sensor
-read costs"](#what-a-sensor-read-costs)). The sensor read is an IPC wait, not computation.
+**2. The sensor read costs almost no own-process CPU. Its 85 ms is overwhelmingly wait.**
+Two independent pieces of evidence, and the second is the load-bearing one.
+
+*The tick is mostly not running.* On the every-tier tick, **86.3–98.2 ms of the tick is not
+CPU on any thread — 68.9–73.2% of it, in all nine of the shipped-instrument runs.** That is
+a *within-run* subtraction (this tick's wall minus this tick's own process CPU), so
+block-to-block drift cannot manufacture it. It does **not** isolate the sensor read, though:
+this tick also carries the slow tier's `Users::refresh`, priced at 30 ms of wall-clock in
+the table below, and the arithmetic does not close in the tidy direction anyway — in the run
+quoted above, slow+sensors adds 94.3 ms of wall while the two reads inside it are documented
+at 30 + 85 = 115 ms. So this figure bounds *the tick*, not either read within it.
+
+*The increment is bounded above, and that is what settles it.* Adding the slow tier and the
+sensors to a fast-plus-medium tick changes its process CPU by **−14.3 to +3.6 ms** across
+the nine runs. CPU cannot be negative, so whatever the unexplained non-additivity above is
+doing, the observed increment is **bounded above by about 4 ms** — and hiding an 85 ms CPU
+cost inside it would require an ~80 ms downward artefact, which nothing here suggests and
+which drift could not produce nine times running. That bound holds however the tick's
+wall-clock divides between the two reads, which is why it survives the objection that this
+tick carries `Users::refresh` too: it bounds them *both*. The sensor read is a wait, not
+computation.
 
 This corrects the account this file gave of its own release. The 85 ms
 `Components::refresh` was quoted as the figure that "dominated the arithmetic"; on a
@@ -436,17 +477,27 @@ doing — a 136 ms tick occupies the sampler thread whether or not it burns CPU,
 budgets collection wall-clock too — but it was not the p95 lever, and this file said it
 was.
 
-*Where that CPU goes instead is not measured.* An IOKit HID enumeration is IPC to a system
-daemon, so the plausible answer is that it burns in another process — which §16.1's
-own-CPU budget would not count and a user would still pay for. **Hypothesis, not a
-finding**: nothing here measured another process.
+*Where the time goes instead is not measured.* `sysinfo` 0.39.6's arm64 component path
+reaches the sensors through `IOHIDServiceClientCopyEvent`, which is in-kernel
+IOHIDFamily/SMC rather than a userland daemon, so the candidates are time attributed to
+`kernel_task` and plain hardware latency waiting on the SMC — not a separate user process
+this program could be said to be driving. Either way it is outside §16.1's own-CPU budget
+and still real for the user. **Hypothesis, not a finding**: nothing here measured where the
+waiting time is spent.
 
 **3. A thread clock alone would have understated finding 2.** On the every-tier tick the
-process figure exceeds the thread figure by **5.9–10.6 ms** in every run that measured
-both; on the other two shapes the two agree to within **0.03 ms**. Something in the sensor
-path does several milliseconds of real work on a thread that is not the caller's, so the
-thread clock — whose narrowness is what makes findings 1 and 2 attributable — is also
-blind to it, and both readings are needed.
+process figure exceeds the thread figure by **5.9–10.6 ms** in all nine runs; on the other
+two shapes the two agree to within **5.0–14.0 µs**. Something in the sensor path does
+several milliseconds of real work on a thread that is not the caller's, so the thread clock
+— whose narrowness is what makes findings 1 and 2 attributable — is also blind to it, and
+both readings are needed.
+
+That microsecond-level agreement is itself the calibration that matters most for the other
+two findings. A per-thread CPU clock's most likely silent failure on Darwin is dropping
+kernel time; on a tick that makes on the order of a thousand `proc_pidinfo` calls, a clock
+that missed system time could not land within 14 µs of one that counts it. So the thread
+figure is not merely narrow, it is **complete** — which is what licenses charging the
+medium tier's 13.2–35.0 ms to the medium tier.
 
 An independent process-CPU source corroborates this: `pti_total_user + pti_total_system`
 from `PROC_PIDTASKINFO`, converted through the mach timebase, taken in three earlier runs
@@ -458,6 +509,19 @@ methods independently reproducing the effect rather than a direct comparison bet
 absolute time units, not nanoseconds, so a first attempt read 41× too small — the same
 timebase correction `macos/process.rs` already documents.)
 
+**The other six runs**, so that the thread-CPU ranges above can be checked rather than
+taken on trust. Thread-CPU medians only — these runs did not record wall-clock beside CPU,
+which is why every share and every not-CPU figure above is scoped to the nine that did.
+Fast-only / fast+medium / every-tier, in ms: `9.12 / 28.65 / 25.81`, `8.41 / 22.37 / 26.12`,
+`8.33 / 21.51 / 26.23`, `9.56 / 30.09 / 26.85`, `9.31 / 28.35 / 26.61`, `11.47 / 29.16 /
+26.86`. The last three are the `PROC_PIDTASKINFO` runs.
+
+One caveat about the shape of every figure here: with 15 samples per tick shape, the
+"p95" this test prints is `samples[15 * 95 / 100]` = `samples[14]`, i.e. **the maximum**.
+That is pre-existing in the wall-clock path and the CPU columns follow it for consistency,
+but a "CPU p95" in this test's output is a worst-of-15, not a percentile, and the medians
+are the figures to reason from.
+
 #### What this says about the failing p95
 
 Task 7's arithmetic puts the whole tick at roughly **16 ms of CPU** for a 2% p95 on
@@ -465,7 +529,8 @@ Task 7's arithmetic puts the whole tick at roughly **16 ms of CPU** for a 2% p95
 
 * a fast-only tick costs 8.3–17.9 ms of CPU — **1.0–2.2%** of the interval on its own,
   i.e. most or all of the budget before any medium-tier work exists;
-* the medium tier's *increment alone*, 13.2–35.0 ms, is at or above the entire budget;
+* the medium tier's *increment alone*, 13.2–35.0 ms, is 82% of the entire budget at its
+  low end and more than twice it at its high end;
 * a fast-plus-medium tick costs 21.5–50.5 ms of CPU, which at ~810 ms is **2.7–6.2%** —
   against an observed idle p95 of 4.30–9.50%.
 
@@ -496,8 +561,8 @@ components and 21 interfaces:
 | `sysinfo` process refresh | 29 ms | ~~fast~~ — **fixed**, see below |
 | `Disks::refresh(false)` | 34 ms wall, ~21 ms of it our own CPU | ~~fast~~ — **fixed**, see below |
 | `Disks::refresh_specifics(io_usage)` | ~1 ms CPU | fast |
-| `Disks::refresh(true)` | 25 ms wall-clock for the call; the medium **tier** it sits in is 93–99.7% CPU, so this is CPU rather than blocked wait — but the per-call CPU split against the tier's `getfsstat` is not measured (see ["What a tick costs in CPU"](#what-a-tick-costs-in-cpu)) | medium |
-| `Components::refresh` (temperatures) | 85 ms wall-clock, and **almost none of it CPU** — on the tick that carries this read, 86.3–98.2 ms of the tick is not CPU on any thread (same section) | ~~medium~~ — **sensors**, its own 30 s / 5 s cadence, see below |
+| `Disks::refresh(true)` | 25 ms wall-clock for the call; the medium **tier** it sits in is 92–99% CPU, so this is CPU rather than blocked wait — but the per-call CPU split against the tier's `getfsstat` is not measured (see ["What a tick costs in CPU"](#what-a-tick-costs-in-cpu)) | medium |
+| `Components::refresh` (temperatures) | 85 ms wall-clock, and **almost none of it own-process CPU**: adding this read and the slow tier together changes a tick's process CPU by −14.3 to +3.6 ms, so the two are bounded above by about 4 ms of CPU between them (same section) | ~~medium~~ — **sensors**, its own 30 s / 5 s cadence, see below |
 | `Users::refresh` | 30 ms | slow |
 | `Networks::refresh` | 0.85 ms | fast |
 | global CPU + memory | 0.09 ms | fast |
@@ -514,7 +579,9 @@ it landed, one sample in five, and a p95 taken once a second saw it every time.
 Moving the sensor group to its own 30-second cadence (5 seconds only while the
 Battery screen is visible, §8.6) was the fix this release made, and it worked as
 designed: the sensor spike now lands in one sample in thirty rather than one in
-five, and the idle median fell further, to 0.60–0.85%.
+five. The idle median barely moved, though — 0.5–1.1% to 0.60–0.85%, overlapping ranges —
+and ["What a tick costs in CPU"](#what-a-tick-costs-in-cpu) explains why: the 85 ms below
+is wall-clock, and the read costs almost no CPU.
 
 **The p95 still fails: 4.30–9.50% against a 2% budget, and the cause is not yet
 established.** The medium tier's other read, `Disks::refresh(true)`, never went
@@ -642,11 +709,13 @@ ten benchmarks is now complete; what is left is end-to-end.
   filesystem-capacity reads: `Disks::refresh(true)` and `read_inode_usage`'s
   `getfsstat`. Which of the two dominates is not measured, and a fix aimed at the
   wrong one would buy nothing.
-* **Where the sensor read's CPU actually goes.** The tick carrying it spends 86.3–98.2 ms
-  not running on any of our threads, so the work is happening somewhere else — plausibly in the
-  IOKit/HID system daemon it talks to. Nothing here measured another process, so that
-  is a hypothesis. It matters because CPU burned in a daemon on our behalf is invisible
-  to §16.1's own-CPU budget and still real for the user.
+* **Where the sensor read's 85 ms actually goes.** Its own-process CPU is bounded above at
+  about 4 ms, and the tick carrying it spends 86.3–98.2 ms not running on any of our threads,
+  so the time is going somewhere outside this process. `IOHIDServiceClientCopyEvent` is
+  in-kernel IOHIDFamily/SMC, so the candidates are time booked to `kernel_task` and plain
+  SMC latency rather than a userland daemon — but nothing here measured either, so it stays a
+  hypothesis. It matters because time the kernel spends on our behalf is invisible to §16.1's
+  own-CPU budget and still real for the user.
 * **Whether the medium tier accounts for the whole idle p95.** It is enough on its own
   to fail the 2% budget, but the top of the observed 4.30–9.50% band is above what the
   measured per-tick CPU predicts, and the ~3 s periodicity noted in "Why there are two
