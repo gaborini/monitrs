@@ -23,6 +23,21 @@
 //! and asserting that boundary is what makes "everything else continues" mean
 //! something rather than being vacuously true.
 //!
+//! # `Flow::Continue` alone is a weak guard, and the sweep below says so
+//!
+//! Because the wildcard *also* returns `Flow::Continue`, an assertion that only
+//! checks the return value cannot tell "the named arm ran" apart from "the arm
+//! was deleted and this fell through to the wildcard." For `Effect::RequestSample`
+//! and `Effect::SetSensorInterest`, a second, independent observable exists
+//! ([`runtime::SampleRequest::take`], [`runtime::SensorInterest::get`]) and is
+//! asserted below; for `Effect::FetchProcessDetail` the detail channel is that
+//! observable already. For `Effect::None`, `Effect::RequestRedraw`,
+//! `Effect::RingBell`, `Effect::ReloadConfig` and `Effect::ExportSnapshot` no
+//! equally cheap, local, non-side-effecting observable exists — asserting
+//! `Flow::Continue` for those five is smoke (it would not notice their arm
+//! being deleted), not a guard, and the test below says so at the point it
+//! checks them rather than leaving a reader to assume otherwise.
+//!
 //! [`Effect::SignalProcess`] and [`Effect::ReniceProcess`] are deliberately
 //! excluded from the sweep below: they act on a real process
 //! ([`Effect::touches_a_process`] is what the rest of the codebase uses to draw
@@ -83,40 +98,59 @@ mod interactive;
 
 use interactive::{EffectContext, Flow, execute};
 
-/// A context built the way `interactive::run` builds one, minus the workers.
+/// The fixtures `interactive::run` builds before the loop, minus the workers.
 ///
 /// `config_path: None` on the state (via [`AppState::default`]) keeps
 /// `Effect::ReloadConfig` on its immediate, file-free refusal path, and no live
 /// snapshot keeps `Effect::ExportSnapshot` on its "nothing to export yet" path —
 /// both deliberately, so this test touches no real file.
-#[allow(
-    clippy::type_complexity,
-    reason = "a plain tuple of test fixtures reads more clearly here than a named struct \
-              that exists for one helper"
-)]
-fn context() -> (
-    EffectContext,
-    crossbeam_channel::Receiver<runtime::DetailRequest>,
-    runtime::Shutdown,
-) {
-    let (detail_tx, detail_rx) = runtime::detail_channel();
-    let (sender, _events) = runtime::event_channel::<Result<Box<config::Config>, String>>();
-    // A separate handle to the same flag `ctx` gets, since `EffectContext`'s
-    // fields are private and a test outside `interactive.rs` has no other way
-    // to observe what `Effect::Shutdown` did to it.
-    let shutdown = runtime::Shutdown::new();
-    let ctx = EffectContext::new(
-        detail_tx,
-        runtime::SampleRequest::new(),
-        runtime::SensorInterest::new(),
-        shutdown.clone(),
-        config::Config::default(),
-        sender,
-        runtime::SamplingControl::new(Duration::from_secs(1), Thresholds::default()),
-        false,
-        false,
-    );
-    (ctx, detail_rx, shutdown)
+///
+/// A named struct rather than a tuple: `EffectContext`'s own fields are
+/// private, so the only way this test can observe what an effect did to
+/// `forced` or `sensor_interest` — rather than only what `execute` returned —
+/// is to keep a second handle to the same underlying flag, exactly as it
+/// already does for `shutdown`. Once there were three of those handles
+/// alongside the context and the channel, a tuple's positions stopped being
+/// easy to read at the call site.
+struct Fixture {
+    ctx: EffectContext,
+    detail_rx: crossbeam_channel::Receiver<runtime::DetailRequest>,
+    shutdown: runtime::Shutdown,
+    /// A second handle to the flag `Effect::RequestSample` sets, so the test
+    /// can tell "the arm ran" apart from "this fell through to the wildcard,
+    /// which also returns `Flow::Continue`."
+    forced: runtime::SampleRequest,
+    /// A second handle to the flag `Effect::SetSensorInterest` sets, for the
+    /// same reason.
+    sensor_interest: runtime::SensorInterest,
+}
+
+impl Fixture {
+    fn new() -> Self {
+        let (detail_tx, detail_rx) = runtime::detail_channel();
+        let (sender, _events) = runtime::event_channel::<Result<Box<config::Config>, String>>();
+        let shutdown = runtime::Shutdown::new();
+        let forced = runtime::SampleRequest::new();
+        let sensor_interest = runtime::SensorInterest::new();
+        let ctx = EffectContext::new(
+            detail_tx,
+            forced.clone(),
+            sensor_interest.clone(),
+            shutdown.clone(),
+            config::Config::default(),
+            sender,
+            runtime::SamplingControl::new(Duration::from_secs(1), Thresholds::default()),
+            false,
+            false,
+        );
+        Self {
+            ctx,
+            detail_rx,
+            shutdown,
+            forced,
+            sensor_interest,
+        }
+    }
 }
 
 fn identity() -> ProcessIdentity {
@@ -124,53 +158,91 @@ fn identity() -> ProcessIdentity {
 }
 
 /// Every effect the executor recognises, except [`Effect::Shutdown`] and the
-/// two that touch a real process, must continue the loop.
-///
-/// This is the arm's contract pinned by shape (§9b Step 4): the wildcard arm a
-/// non-exhaustive `Effect` now requires returns `Flow::Continue`, and this
-/// proves that is not a special case — it is what every recognised effect
-/// without a process to act on already does.
+/// two that touch a real process, must continue the loop — and, where a cheap
+/// independent observable exists, must actually have done the thing its arm is
+/// responsible for, not merely have returned `Flow::Continue` (see the module
+/// doc comment: the wildcard returns that too).
 #[test]
 fn every_effect_without_a_process_to_act_on_continues_the_loop() {
-    let (mut ctx, detail_rx, _shutdown) = context();
+    let mut fx = Fixture::new();
     let mut state = AppState::default();
 
-    let sweep = [
+    // --- smoke: `Flow::Continue` is all that is checked here ---------------
+    //
+    // No arm below has a side effect this test can observe more cheaply than
+    // "the loop kept going," so none of these five would notice its arm being
+    // deleted and falling through to the wildcard. `RingBell` writes to the
+    // real terminal bell; `ReloadConfig` and `ExportSnapshot` are exercised
+    // against their real branches (a missing config path, a missing live
+    // snapshot) in `interactive.rs`'s own unit tests and in
+    // `crates/monitrs/tests/integration.rs`. This loop only proves they do not
+    // panic and do not stop the loop.
+    for effect in [
         Effect::None,
         Effect::RequestRedraw,
-        Effect::RequestSample,
-        Effect::SetSensorInterest(true),
-        Effect::SetSensorInterest(false),
-        Effect::FetchProcessDetail(identity()),
         Effect::RingBell,
         Effect::ReloadConfig,
         Effect::ExportSnapshot(PathBuf::from(
             "/nonexistent/effect-executor-test/should-not-be-written.json",
         )),
-    ];
-
-    for effect in &sweep {
+    ] {
         assert_eq!(
-            execute(effect, &mut state, &mut ctx),
+            execute(&effect, &mut state, &mut fx.ctx),
             Flow::Continue,
             "{effect:?} must continue the loop"
         );
     }
-
-    // `FetchProcessDetail` really did queue the request rather than doing
-    // nothing: the "no side effect" framing above is about *acting on a
-    // process*, not about doing literally nothing.
-    assert_eq!(
-        detail_rx.try_recv(),
-        Ok(runtime::DetailRequest::Fetch(identity())),
-        "the detail worker's queue must have received the request"
-    );
-
     // `ExportSnapshot` took the "nothing to export yet" branch rather than
     // writing: there is no live snapshot in a freshly built `AppState`.
     assert!(
         !PathBuf::from("/nonexistent/effect-executor-test/should-not-be-written.json").exists(),
         "§10.5: the reducer's effect must not have written anything without a live sample"
+    );
+
+    // --- guards: the arm's side effect is checked independently of `Flow` --
+
+    assert_eq!(
+        execute(&Effect::RequestSample, &mut state, &mut fx.ctx),
+        Flow::Continue
+    );
+    assert!(
+        fx.forced.take(),
+        "Effect::RequestSample must set the forced-sample flag, not just continue"
+    );
+
+    assert_eq!(
+        execute(&Effect::SetSensorInterest(true), &mut state, &mut fx.ctx),
+        Flow::Continue
+    );
+    assert!(
+        fx.sensor_interest.get(),
+        "Effect::SetSensorInterest(true) must set the sensor-interest flag, not just continue"
+    );
+
+    assert_eq!(
+        execute(&Effect::SetSensorInterest(false), &mut state, &mut fx.ctx),
+        Flow::Continue
+    );
+    assert!(
+        !fx.sensor_interest.get(),
+        "Effect::SetSensorInterest(false) must clear the sensor-interest flag, not just continue"
+    );
+
+    assert_eq!(
+        execute(
+            &Effect::FetchProcessDetail(identity()),
+            &mut state,
+            &mut fx.ctx
+        ),
+        Flow::Continue
+    );
+    // `FetchProcessDetail` really did queue the request rather than doing
+    // nothing: the wildcard arm never touches this channel, so a deleted
+    // `FetchProcessDetail` arm would leave it empty.
+    assert_eq!(
+        fx.detail_rx.try_recv(),
+        Ok(runtime::DetailRequest::Fetch(identity())),
+        "the detail worker's queue must have received the request"
     );
 }
 
@@ -180,9 +252,12 @@ fn every_effect_without_a_process_to_act_on_continues_the_loop() {
 /// returned `Flow::Continue` unconditionally, the sweep would still pass.
 #[test]
 fn shutdown_is_the_only_effect_that_stops_the_loop() {
-    let (mut ctx, _detail_rx, shutdown) = context();
+    let mut fx = Fixture::new();
     let mut state = AppState::default();
 
-    assert_eq!(execute(&Effect::Shutdown, &mut state, &mut ctx), Flow::Stop);
-    assert!(shutdown.is_triggered());
+    assert_eq!(
+        execute(&Effect::Shutdown, &mut state, &mut fx.ctx),
+        Flow::Stop
+    );
+    assert!(fx.shutdown.is_triggered());
 }
