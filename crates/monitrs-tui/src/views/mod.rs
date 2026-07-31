@@ -1587,7 +1587,11 @@ mod tests {
             .status
             .expect("an 80x24 frame or larger always has a footer");
         (status.x..status.x.saturating_add(status.width))
-            .filter_map(|x| buffer.cell((x, status.y)).map(|cell| cell.symbol().to_owned()))
+            .filter_map(|x| {
+                buffer
+                    .cell((x, status.y))
+                    .map(|cell| cell.symbol().to_owned())
+            })
             .collect()
     }
 
