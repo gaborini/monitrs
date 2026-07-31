@@ -526,10 +526,18 @@ mod tests {
 
         scheduler.set_sensor_interest(true);
         assert_eq!(scheduler.sensor_interval(), Duration::from_secs(5));
+        // The rising edge's immediate read happens here, so `last_sensors` is no
+        // longer `None` for the assertions below: without this, both would pass
+        // regardless of what `sensor_interval()` returns, because `is_due(None, ..)`
+        // is always true.
+        scheduler.mark_completed(DueTiers::ALL, start);
 
-        let at_five = start + Duration::from_secs(5);
         assert!(
-            scheduler.due_at(at_five).sensors(),
+            !scheduler.due_at(start + Duration::from_secs(4)).sensors(),
+            "the medium cadence is 5 seconds, not sooner"
+        );
+        assert!(
+            scheduler.due_at(start + Duration::from_secs(5)).sensors(),
             "while the reader is watching a sensor, 5 seconds is the promise"
         );
     }
@@ -582,26 +590,31 @@ mod tests {
     #[test]
     fn the_sensor_deadline_is_part_of_the_samplers_sleep() {
         let start = Instant::now();
-        // fast is deliberately longer than medium here (unlike real §8.5 configs):
-        // marking `DueTiers::ALL` completed at `start` and asserting at `start`
-        // makes every tier's `remaining` exactly its own configured interval, so a
-        // fast interval below the asserted 50s would make fast (not sensors) the
-        // minimum and the test would no longer be testing what its name claims.
+        // While interest is on, `sensor_interval()` equals `intervals.medium`, so
+        // sensors can only be the *unique* minimum if `last_sensors` is older than
+        // `last_medium` — sharing a timestamp would make them tie, and dropping
+        // the sensors line from `time_until_next` would then leave the answer
+        // unchanged. So fast and medium are advanced to `at_twenty` while sensors
+        // are deliberately left at `start`, 20s further behind.
         let mut scheduler = TierScheduler::new(TierIntervals {
-            fast: Duration::from_secs(60),
+            fast: Duration::from_secs(40),
             medium: Duration::from_secs(50),
             slow: Duration::from_secs(300),
         });
-        scheduler.mark_completed(DueTiers::ALL, start);
         scheduler.set_sensor_interest(true);
         scheduler.mark_completed(DueTiers::ALL, start);
 
-        // Sensors are the soonest thing due, so the sleep is theirs. A sleep that
-        // ignored this group would read them late by up to a fast interval.
+        let at_twenty = start + Duration::from_secs(20);
+        scheduler.mark_completed(DueTiers::fast_and_medium(), at_twenty); // sensors not re-read
+
+        // Remaining at `at_twenty`: fast 40s, medium 50s, slow 280s, sensors
+        // 50s - 20s = 30s. Only the sensor term explains 30s; drop it and
+        // `time_until_next` returns fast's 40s instead, sleeping 10s past the
+        // point sensors are actually due.
         assert_eq!(
-            scheduler.time_until_next(start),
-            Duration::from_secs(50),
-            "the sensor deadline must bound the sleep like any other tier"
+            scheduler.time_until_next(at_twenty),
+            Duration::from_secs(30),
+            "only the sensor deadline explains this number"
         );
     }
 
