@@ -959,6 +959,42 @@ fn the_battery_screen_on_a_machine_with_no_battery() {
 }
 
 #[test]
+fn the_battery_screen_with_a_retained_reading() {
+    // The fixture the 1.0.0 review found missing, and the reason the defect it found
+    // could live for a release cycle: both metrics on this screen are read on the sensor
+    // cadence rather than every tick, so `Stale` is the *idle* case on a real host — and
+    // yet no snapshot in the suite had ever rendered one, because `FakeCollector::sensors`
+    // never routed through the scenario's ageing rule.
+    //
+    // What this pins is §4's rule and the design document's A2: a retained value may be
+    // shown only alongside its age. Each panel states that age once, in its own trailing
+    // label, and the fields below it carry the mark. `TEMP`, `POWER`, `CYCLES` and
+    // `TO EMPTY` are the four that were undated — they are the inner struct's own
+    // `Available` fields, unwrapped out of a `Stale` envelope, so nothing about them
+    // looked wrong in isolation.
+    let state = Fixture::new((140, 38), ViewId::Battery)
+        .with_scenario(Scenario {
+            stale_from: Some(6),
+            ..Scenario::default()
+        })
+        .build();
+    let text = text_of(&frame(&state, ascii()));
+    // Both panels date themselves, and the header segment beside them does too.
+    assert!(
+        text.contains("82% discharging ~"),
+        "the pack's own panel label is undated:\n{text}"
+    );
+    assert!(
+        text.contains("2 sensors ~"),
+        "the sensor list's panel label is undated:\n{text}"
+    );
+    // The figures are still there — a retained reading is shown, not dropped.
+    assert!(text.contains("12.4 W"), "{text}");
+    assert!(text.contains("62.5C"), "{text}");
+    insta::assert_snapshot!(text);
+}
+
+#[test]
 fn the_battery_screen_while_charging() {
     // Charging inverts the estimate's meaning, and an unlabelled `49m` would be read
     // as time-to-empty by anyone who glanced at the discharging screen first.

@@ -562,8 +562,8 @@ fn memory_note_segments(snapshot: &SystemSnapshot, units: ByteUnits) -> Vec<Stri
     if let Some(text) = cgroup_limit_text(snapshot, units) {
         segments.push(text);
     }
-    if let Some((battery, _)) = snapshot.sensors.battery.displayable() {
-        segments.push(battery_text(battery));
+    if let Some(display) = battery_display(&snapshot.sensors) {
+        segments.push(display.annotated());
     }
     segments
 }
@@ -659,6 +659,21 @@ fn temperature_display(sensors: &SensorSnapshot) -> Option<MetricDisplay> {
 /// `bat 82%-`, where the trailing character is the charge state's own cue (§5.2).
 fn battery_text(battery: &BatterySnapshot) -> String {
     format!("bat {}{}", battery.charge, battery.state.symbol())
+}
+
+/// The pack summary as a display, so a retained one carries its age.
+///
+/// [`temperature_display`]'s counterpart, and here for the same reason: the battery moved
+/// onto the sensor cadence with the temperatures, so at idle the header's `bat 82%-` is a
+/// value that was measured up to thirty seconds ago. Reading it out of the envelope and
+/// discarding the age presented it as a reading taken this tick (§4, and the design
+/// document's A2).
+fn battery_display(sensors: &SensorSnapshot) -> Option<MetricDisplay> {
+    sensors
+        .battery
+        .displayable()
+        .is_some()
+        .then(|| states::describe(&sensors.battery, battery_text))
 }
 
 /// The load average as one display, so its availability travels with its text.
@@ -776,8 +791,8 @@ fn summary_segments(
     if let Some(display) = temperature_display(&snapshot.sensors) {
         segments.push((display.annotated(), Token::Muted));
     }
-    if let Some((battery, _)) = snapshot.sensors.battery.displayable() {
-        segments.push((battery_text(battery), Token::Muted));
+    if let Some(display) = battery_display(&snapshot.sensors) {
+        segments.push((display.annotated(), Token::Muted));
     }
     segments
 }
