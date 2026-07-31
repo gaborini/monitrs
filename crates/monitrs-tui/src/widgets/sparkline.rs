@@ -33,6 +33,7 @@ use ratatui::widgets::Widget;
 
 use crate::layout::Align;
 use crate::theme::Token;
+use crate::widgets::painter::join_fitting;
 use crate::widgets::{Painter, Presentation, RowBuilder};
 
 /// The fixed ceiling a percentage graph is drawn against, so frames compare.
@@ -251,7 +252,8 @@ pub struct SparklineCaret<'a> {
     offset_from_newest: usize,
     label: Option<&'a str>,
     label_width: Option<u16>,
-    note: Option<&'a str>,
+    /// The note's segments, highest priority first (§2.5, §5.4).
+    note_segments: &'a [String],
 }
 
 impl<'a> SparklineCaret<'a> {
@@ -268,7 +270,7 @@ impl<'a> SparklineCaret<'a> {
             offset_from_newest,
             label: None,
             label_width: None,
-            note: None,
+            note_segments: &[],
         }
     }
 
@@ -287,10 +289,23 @@ impl<'a> SparklineCaret<'a> {
         self
     }
 
-    /// Sets the text beside the caret, such as `-00:37 selected`.
+    /// Sets the text beside the caret, from segments in priority order —
+    /// `["-00:37 selected"]`, or several, such as a wall clock followed by a
+    /// comparison and then the offset (§2.5).
+    ///
+    /// A single already-joined string used to be enough, but this row can only
+    /// place the note on *one* side of the caret glyph, and which side that is
+    /// — and how much room it has — is not known until [`Self::row`] resolves
+    /// [`Self::caret_x`]. Fitting the note against the row's total width
+    /// instead of the side it actually lands on either overflowed that side or,
+    /// since a note that does not fit is dropped whole rather than truncated,
+    /// vanished outright — for most scrub depths, not just extreme ones.
+    /// Taking segments instead lets [`Self::row`] degrade the note in the
+    /// caller's priority order against the real, single-sided room, keeping as
+    /// much of it as actually fits rather than all of it or none.
     #[must_use]
-    pub const fn with_note(mut self, note: &'a str) -> Self {
-        self.note = Some(note);
+    pub const fn with_note_segments(mut self, segments: &'a [String]) -> Self {
+        self.note_segments = segments;
         self
     }
 
@@ -326,6 +341,14 @@ impl<'a> SparklineCaret<'a> {
     }
 
     /// The row as an assembled builder.
+    ///
+    /// The note is fit *here*, against whichever side of the caret it actually
+    /// lands on, rather than by the caller against the row's total width: this
+    /// is the one place that knows [`Self::caret_x`] and therefore the real,
+    /// single-sided room (§2.5, §5.4). `join_fitting` then keeps as many
+    /// segments, in the caller's priority order, as that side holds — never a
+    /// partial segment, so a delta can vanish from the row but never read as a
+    /// smaller one.
     #[must_use]
     pub fn row(&self, width: u16) -> RowBuilder {
         let mut row = RowBuilder::new(width, self.presentation.glyphs());
@@ -333,31 +356,32 @@ impl<'a> SparklineCaret<'a> {
             return row;
         }
         let Some(caret_x) = self.caret_x(width) else {
-            // Nowhere to point: show the note alone rather than a misplaced caret.
-            if let Some(note) = self.note {
-                row.push(note, self.presentation.style(Token::Muted));
+            // Nowhere to point: the whole row is free for the note.
+            let note = join_fitting(self.note_segments, usize::from(width));
+            if !note.is_empty() {
+                row.push(&note, self.presentation.style(Token::Muted));
             }
             return row;
         };
         let caret_style = self.presentation.style(Token::Accent);
         let note_style = self.presentation.style(Token::Muted);
-        let note = self.note.filter(|note| !note.is_empty());
-        let note_width = note.map_or(0, |note| {
-            u16::try_from(display_width(note)).unwrap_or(u16::MAX)
-        });
-        // The note goes to the right of the caret where there is room, and to its
-        // left otherwise. A caret parked near "now" is at the right-hand edge, so
-        // insisting on one side would lose the note exactly when the Time Lens is
-        // closest to live (§2.1).
-        // One cell for the caret, one for the gap, the rest for the note.
+        // One cell for the caret, one for the gap, the rest for the note on
+        // whichever side ends up holding it.
         let room_right = width.saturating_sub(caret_x).saturating_sub(2);
-
-        if let Some(note) = note
-            && note_width > room_right
-            && caret_x >= note_width.saturating_add(1)
-        {
-            row.pad_to(caret_x.saturating_sub(note_width).saturating_sub(1));
-            row.push(note, note_style);
+        let room_left = caret_x.saturating_sub(1);
+        let right_note = join_fitting(self.note_segments, usize::from(room_right));
+        let left_note = join_fitting(self.note_segments, usize::from(room_left));
+        // The note goes to the right of the caret where there is room, and to
+        // its left only when the left side keeps strictly more of it — a caret
+        // parked near "now" is at the right-hand edge, so defaulting to the
+        // right is what keeps the note where the Time Lens is closest to live
+        // (§2.1) from losing it to a tie-break the other way.
+        if display_width(&left_note) > display_width(&right_note) {
+            if !left_note.is_empty() {
+                let note_width = u16::try_from(display_width(&left_note)).unwrap_or(u16::MAX);
+                row.pad_to(caret_x.saturating_sub(note_width).saturating_sub(1));
+                row.push(&left_note, note_style);
+            }
             row.pad_to(caret_x);
             row.push("^", caret_style);
             return row;
@@ -365,11 +389,9 @@ impl<'a> SparklineCaret<'a> {
 
         row.pad_to(caret_x);
         row.push("^", caret_style);
-        if let Some(note) = note
-            && note_width <= room_right
-        {
+        if !right_note.is_empty() {
             row.pad(1);
-            row.push(note, note_style);
+            row.push(&right_note, note_style);
         }
         row
     }
@@ -688,9 +710,10 @@ mod tests {
     fn the_caret_row_matches_the_form_in_the_mockup() {
         // §5.5: `        ^ -00:37 selected`.
         let samples = series(&[1.0; 30]);
+        let note = ["-00:37 selected".to_owned()];
         let line = SparklineCaret::new(ascii(), &samples, 20)
             .with_label("CPU")
-            .with_note("-00:37 selected")
+            .with_note_segments(&note)
             .line(30);
         assert_eq!(display_width(&line), 30);
         assert!(line.contains("^ -00:37 selected"), "{line:?}");
@@ -702,9 +725,10 @@ mod tests {
         // Parked one sample back from live, the caret is at the right-hand edge and
         // there is no room to its right; the note must survive anyway (§2.1).
         let samples = series(&[1.0; 30]);
+        let note = ["-00:01 selected".to_owned()];
         let line = SparklineCaret::new(ascii(), &samples, 1)
             .with_label("CPU")
-            .with_note("-00:01 selected")
+            .with_note_segments(&note)
             .line(30);
         assert_eq!(display_width(&line), 30);
         assert!(line.contains("-00:01 selected ^"), "{line:?}");
@@ -714,8 +738,9 @@ mod tests {
     #[test]
     fn a_row_too_narrow_for_the_note_keeps_the_caret() {
         let samples = series(&[1.0; 8]);
+        let note = ["-00:00 selected".to_owned()];
         let line = SparklineCaret::new(ascii(), &samples, 0)
-            .with_note("-00:00 selected")
+            .with_note_segments(&note)
             .line(6);
         assert_eq!(display_width(&line), 6);
         assert!(line.contains('^'), "{line:?}");
@@ -724,9 +749,10 @@ mod tests {
     #[test]
     fn a_caret_beyond_the_plot_shows_the_note_alone_rather_than_a_wrong_cell() {
         let samples = series(&[1.0; 4]);
+        let note = ["out of range".to_owned()];
         let caret = SparklineCaret::new(ascii(), &samples, 500)
             .with_label("CPU")
-            .with_note("out of range");
+            .with_note_segments(&note);
         assert_eq!(caret.caret_x(20), None);
         let line = caret.line(20);
         assert!(!line.contains('^'), "{line:?}");
@@ -736,11 +762,12 @@ mod tests {
     #[test]
     fn the_caret_row_occupies_exactly_its_width_at_every_size() {
         let samples = series(&[1.0; 40]);
+        let note = ["-00:37 selected".to_owned()];
         for offset in [0usize, 1, 7, 39, 40, 1_000] {
             for width in 0..=60u16 {
                 let line = SparklineCaret::new(ascii(), &samples, offset)
                     .with_label("CPU")
-                    .with_note("-00:37 selected")
+                    .with_note_segments(&note)
                     .line(width);
                 assert_eq!(
                     display_width(&line),

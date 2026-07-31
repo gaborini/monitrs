@@ -81,6 +81,7 @@ use crate::action::{Action, ViewId};
 use crate::app::AppState;
 use crate::layout::{Breakpoint, Layout, unusable_notice};
 use crate::theme::Token;
+use crate::widgets::painter::{SEGMENT_GAP, join_fitting};
 use crate::widgets::states::{self, MetricDisplay};
 use crate::widgets::{Meter, Painter, Panel, Presentation, RowBuilder};
 
@@ -94,9 +95,6 @@ const HEADER_LABEL_WIDTH: u16 = 4;
 /// reserved from geometry, never from the note's current length).
 const HEADER_NOTE_RESERVE: u16 = HEADER_LABEL_WIDTH + 1 + 4 + 6;
 
-/// Cells between two segments of a one-line summary or hint strip.
-const SEGMENT_GAP: usize = 2;
-
 /// Cells kept clear at the right-hand end of a panel's top rule, matching the
 /// `--- 218 total ---+` form of §5.5.
 const RULE_TAIL: u16 = 3;
@@ -106,13 +104,6 @@ const RULE_TAIL: u16 = 3;
 /// Below this, a notice would be reduced to a word and a marker, which reads as
 /// noise rather than as a message; the Inspect screen shows the full log instead.
 const MIN_NOTICE_WIDTH: u16 = 12;
-
-/// Cells the caret glyph itself and the gap beside it keep from the note.
-///
-/// Matches [`crate::widgets::sparkline::SparklineCaret`]'s own reservation —
-/// "one cell for the caret, one for the gap, the rest for the note" — so
-/// [`caret_note`]'s budget describes the same row the widget will place it in.
-const CARET_NOTE_RESERVE: u16 = 2;
 
 /// Borders for a panel whose bottom edge is the next panel's top rule.
 ///
@@ -1152,30 +1143,6 @@ pub(crate) fn scroll_offset(selected: Option<usize>, visible: usize, total: usiz
         .min(max_scroll)
 }
 
-/// Joins `segments` with two spaces while the total stays inside `budget`.
-///
-/// Segments are considered in order and a segment that does not fit ends the
-/// line, rather than being skipped in favour of a shorter one behind it: the
-/// order *is* the priority, and a strip whose fields reordered themselves as
-/// values changed would be unreadable (§5.4).
-pub(crate) fn join_fitting(segments: &[String], budget: usize) -> String {
-    let mut out = String::new();
-    let mut used = 0usize;
-    for segment in segments {
-        let width = display_width(segment);
-        let gap = if out.is_empty() { 0 } else { SEGMENT_GAP };
-        if used + gap + width > budget {
-            break;
-        }
-        for _ in 0..gap {
-            out.push(' ');
-        }
-        out.push_str(segment);
-        used += gap + width;
-    }
-    out
-}
-
 /// A row builder for `width` cells in `presentation`'s glyph mode.
 pub(crate) fn row_builder(presentation: Presentation<'_>, width: u16) -> RowBuilder {
     RowBuilder::new(width, presentation.glyphs())
@@ -1316,18 +1283,22 @@ pub(crate) fn selected_sample_offset(state: &AppState) -> Option<usize> {
     usize::try_from(newest.saturating_sub(selected)).ok()
 }
 
-/// The caret's note: what the selected sample means, in priority order —
-/// `22:14:07Z  cpu prev +41 points  30s +54 points  -00:37 selected` (§2.5),
-/// or as much of that as `width` has room for.
+/// The caret's note, as segments in priority order — the sample's wall clock,
+/// then how it compares to its baselines (§2.5), then the relative offset —
+/// for [`SparklineCaret::with_note_segments`] to fit as many of as its own
+/// row has room for.
 ///
-/// This used to be a fixed `-00:37 selected 22:14:07Z` — *when* the selection
-/// was, not what it means. §2.5 asks for the selected sample to be compared
-/// against the previous one and against roughly 30 seconds ago, and this is
-/// where that reaches the interface: [`HistoryView::comparisons`] has existed
-/// since 0.1.0 with nothing calling it.
+/// This used to return one already-joined string, sized against the row's
+/// total width. That was wrong: [`SparklineCaret::row`] can only place the
+/// note in a single contiguous run on *one* side of the caret glyph, and a
+/// caret parked mid-plot splits the row roughly in half, leaving each side
+/// far less room than the row's full width suggested — so a note built
+/// against the wrong budget either overflowed the side it landed on or, since
+/// the widget never truncates, vanished outright. Only [`SparklineCaret::row`]
+/// knows which side the caret is on and how much of the row that side
+/// actually has, so the fitting decision belongs there now, not here.
 ///
-/// Built with [`join_fitting`] rather than a fixed format string, from four
-/// segments taken in this order until the row runs out of room:
+/// # The priority order, and why
 ///
 /// 1. **The sample's wall clock**, `22:14:07Z`. This is the segment worth
 ///    protecting most. At the `Standard` and `Wide` breakpoints it is *also*
@@ -1347,14 +1318,17 @@ pub(crate) fn selected_sample_offset(state: &AppState) -> Option<usize> {
 ///    header's `[<HISTORY -MM:SS]` badge carries the same figure at every
 ///    breakpoint including `Compact` (§2.1), and `historical_notes` repeats it
 ///    again (`-00:08 behind live`) wherever that panel has room.
-pub(crate) fn caret_note(state: &AppState, units: ByteUnits, width: u16) -> String {
+///
+/// [`HistoryView::comparisons`] has existed since 0.1.0 with nothing calling
+/// it; this is where §2.5 reaches the interface.
+pub(crate) fn caret_note(state: &AppState, units: ByteUnits) -> Vec<String> {
     let ring = state.history();
     let view = state.timeline().view();
     let offset = view.offset_from_live(ring);
     let sample = state.timeline().selected_sample(ring);
     let comparisons = view.comparisons(ring, HistoryMetric::CpuBusy);
 
-    let segments: Vec<String> = [
+    [
         sample.map(|sample| wall_clock_of(sample.wall_time)),
         Some(format!(
             "cpu prev {}",
@@ -1368,10 +1342,7 @@ pub(crate) fn caret_note(state: &AppState, units: ByteUnits, width: u16) -> Stri
     ]
     .into_iter()
     .flatten()
-    .collect();
-
-    let budget = usize::from(width.saturating_sub(CARET_NOTE_RESERVE));
-    join_fitting(&segments, budget)
+    .collect()
 }
 
 /// One baseline's rendered delta, or the word that replaces a missing one.
@@ -1492,23 +1463,6 @@ mod tests {
             8,
         );
         assert_eq!(wall_clock(Some(&snapshot)), "--:--:--Z");
-    }
-
-    #[test]
-    fn joining_fields_keeps_the_priority_order_and_the_budget() {
-        let segments = vec![
-            "load 4.12".to_owned(),
-            "8 cpu".to_owned(),
-            "temp 62C".to_owned(),
-        ];
-        assert_eq!(join_fitting(&segments, 0), "");
-        assert_eq!(join_fitting(&segments, 9), "load 4.12");
-        assert_eq!(join_fitting(&segments, 16), "load 4.12  8 cpu");
-        assert_eq!(join_fitting(&segments, 100), "load 4.12  8 cpu  temp 62C");
-        // A field that does not fit ends the line; a shorter one behind it does
-        // not jump the queue, because the order is the priority.
-        let wide_then_narrow = vec!["a".repeat(40), "b".to_owned()];
-        assert_eq!(join_fitting(&wide_then_narrow, 10), "");
     }
 
     #[test]
@@ -1821,14 +1775,14 @@ mod tests {
         let mut state = fake_state(scenario, 3, (160, 48), ViewId::Overview);
         let _ = crate::app::reduce(&mut state, Action::TogglePause);
 
-        let note = caret_note(&state, ByteUnits::Iec, 160);
+        let segments = caret_note(&state, ByteUnits::Iec);
         assert!(
-            note.contains("cpu"),
-            "the caret says what was selected; §2.5 asks it to say what changed: {note}"
+            segments.iter().any(|segment| segment.contains("cpu")),
+            "the caret says what was selected; §2.5 asks it to say what changed: {segments:?}"
         );
         assert!(
-            note.contains("+41"),
-            "the delta against the previous sample belongs in the note: {note}"
+            segments.iter().any(|segment| segment.contains("+41")),
+            "the delta against the previous sample belongs in the note: {segments:?}"
         );
     }
 
@@ -1843,11 +1797,11 @@ mod tests {
         );
         let _ = crate::app::reduce(&mut state, Action::TogglePause);
 
-        let note = caret_note(&state, ByteUnits::Iec, 160);
+        let segments = caret_note(&state, ByteUnits::Iec);
         assert!(
-            note.contains("30s no baseline"),
+            segments.iter().any(|segment| segment == "30s no baseline"),
             "two samples cannot reach thirty seconds back, and a missing baseline is \
-             a word rather than a zero (§4, §26): {note}"
+             a word rather than a zero (§4, §26): {segments:?}"
         );
     }
 

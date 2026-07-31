@@ -437,7 +437,7 @@ fn gallery(
     SparklineCaret::new(presentation, history, 6)
         .with_label("CPU")
         .with_label_width(4)
-        .with_note("-00:06 selected")
+        .with_note_segments(&["-00:06 selected".to_owned()])
         .render(
             Rect {
                 y: plot.y + 3,

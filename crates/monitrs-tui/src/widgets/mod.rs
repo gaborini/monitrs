@@ -431,7 +431,7 @@ mod tests {
             .render(area, &mut buffer);
         SparklineCaret::new(presentation, &series, 5)
             .with_label("CPU")
-            .with_note("-00:37 selected")
+            .with_note_segments(&["-00:37 selected".to_owned()])
             .render(area, &mut buffer);
         ProcessTable::new(presentation, &table_layout, &rows)
             .with_header(true)

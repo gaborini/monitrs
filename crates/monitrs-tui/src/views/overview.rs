@@ -247,7 +247,7 @@ fn draw_history(
     let disk = plot_series(ring, HistoryMetric::DiskWrite);
     let cores = per_core_series(state);
     let caret = selected_sample_offset(state);
-    let note = caret_note(state, units, inner.width);
+    let note_segments = caret_note(state, units);
 
     let mut used = 0u16;
     let mut next_row = || -> Option<Rect> {
@@ -293,7 +293,7 @@ fn draw_history(
         SparklineCaret::new(presentation, &cpu, offset)
             .with_label("CPU")
             .with_label_width(HISTORY_LABEL_WIDTH)
-            .with_note(&note)
+            .with_note_segments(&note_segments)
             .render(rect, buffer);
     }
     if let Some(rect) = next_row() {

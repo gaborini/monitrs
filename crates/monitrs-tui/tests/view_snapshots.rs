@@ -1137,6 +1137,42 @@ fn a_history_overview_carries_its_offset_and_a_caret() {
 }
 
 #[test]
+fn a_mid_plot_caret_survives_at_eighty_columns() {
+    // §2.5: a caret parked near "now" sits at the plot's right-hand edge, which
+    // gives the note nearly the whole row on its one usable side. A caret
+    // parked near the *middle* of the visible plot splits that room roughly in
+    // half instead, which is a far tighter budget — and a real one, since
+    // `[` and `Shift+[` can park the Time Lens anywhere in the retained
+    // history, not only a few samples back. Network's inner panel width at 80
+    // columns is 78 cells and its label reserves 5, so the plot is 73 cells
+    // wide; offset 25 is squarely in the middle of that, not at either edge.
+    let mut state = Fixture::new((80, 24), ViewId::Network)
+        .with_samples(60)
+        .build();
+    for _ in 0..25 {
+        let _ = monitrs_tui::app::reduce(
+            &mut state,
+            monitrs_tui::action::Action::SeekHistory(monitrs_tui::action::Seek::Backward(1)),
+        );
+    }
+    let text = text_of(&frame(&state, ascii()));
+    let caret_row = text
+        .lines()
+        .find(|line| line.contains('^'))
+        .expect("a mid-plot caret must still be drawn");
+    assert!(
+        caret_row.contains('Z'),
+        "the wall clock must survive a mid-plot caret, not only one parked at \
+         the row's edge where nearly the whole row is free for the note: \
+         {caret_row:?}"
+    );
+    assert!(
+        caret_row.contains("cpu prev"),
+        "the comparison must survive a mid-plot caret too: {caret_row:?}"
+    );
+}
+
+#[test]
 fn the_network_caret_note_fits_the_eighty_column_panel() {
     // §2.1's Overview drops its History panel entirely below 100 columns (the
     // `Compact` band), and Storage's THROUGHPUT HISTORY panel is a fixed
@@ -1238,5 +1274,60 @@ fn the_caret_note_survives_a_three_digit_swing_at_eighty_columns() {
         monitrs_core::units::display_width(caret_row),
         usize::from(width) + 2,
         "the row must still fill exactly its panel width: {caret_row:?}"
+    );
+}
+
+#[test]
+fn the_caret_note_survives_a_three_digit_swing_mid_plot_at_eighty_columns() {
+    // The test above puts its three-digit swing at offset 0, which is the
+    // caret's *best* position: parked at the plot's right-hand edge, nearly
+    // the whole row is free for the note on its one usable side. That is not
+    // the worst case in either dimension. This test combines both: a caret
+    // mid-plot (offset 25 of a ~73-cell plot, splitting the row roughly in
+    // half) *and* a three-digit swing at exactly the selected sample, so the
+    // note has the least room and the longest possible text at the same time.
+    //
+    // The `Spike` sits on the sample 25 back from the newest of 70, rather
+    // than on the newest sample itself, so both the previous-sample and the
+    // thirty-second baselines (indices 24 and roughly 34 samples earlier,
+    // neither of which is the spike) read the pattern's `base`, giving both
+    // comparisons their full `+100 points` against the selected sample.
+    let scenario = Scenario {
+        cpu: Pattern::Spike {
+            base: 0.0,
+            peak: 100.0,
+            at: 44,
+        },
+        ..Scenario::default()
+    };
+    let mut state = Fixture::new((80, 24), ViewId::Network)
+        .with_scenario(scenario)
+        .with_samples(70)
+        .build();
+    for _ in 0..25 {
+        let _ = monitrs_tui::app::reduce(
+            &mut state,
+            monitrs_tui::action::Action::SeekHistory(monitrs_tui::action::Seek::Backward(1)),
+        );
+    }
+    let text = text_of(&frame(&state, ascii()));
+    let caret_row = text
+        .lines()
+        .find(|line| line.contains('^'))
+        .expect("the caret row must survive a mid-plot three-digit swing");
+    assert!(
+        caret_row.contains('Z'),
+        "the wall clock is the highest-priority segment; it must be the last \
+         thing to go, even in the tightest realistic case: {caret_row:?}"
+    );
+    assert!(
+        caret_row.contains("cpu prev +100 points"),
+        "whole segment or nothing, never a clipped number, even mid-plot: \
+         {caret_row:?}"
+    );
+    assert!(
+        caret_row.contains("30s +100 points"),
+        "whole segment or nothing, never a clipped number, even mid-plot: \
+         {caret_row:?}"
     );
 }
