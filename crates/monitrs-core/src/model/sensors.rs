@@ -235,6 +235,14 @@ impl SensorSnapshot {
     }
 
     /// The hottest reading, for the compact overview summary (§7.1).
+    ///
+    /// Deliberately returns only a freshly measured reading: it filters to
+    /// [`MetricState::fresh`], so a retained (`Stale`) list answers `None` here
+    /// rather than handing back an aged value with no way to say how old it is.
+    /// A caller that wants to keep showing a retained reading — as monitrs-tui's
+    /// header does — must read [`SensorSnapshot::temperatures`] through the
+    /// metric's own state (e.g. [`MetricState::displayable`]) instead, so the
+    /// age travels with the value rather than being silently discarded.
     #[must_use]
     pub fn hottest(&self) -> Option<&TemperatureReading> {
         self.temperatures

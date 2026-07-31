@@ -64,7 +64,8 @@ use std::time::SystemTime;
 
 use monitrs_core::history::{HistoricalSample, HistoryMetric, HistoryRing};
 use monitrs_core::model::{
-    BatterySnapshot, LoadSnapshot, MeasuredValue, MetricState, SystemSnapshot, TemperatureReading,
+    BatterySnapshot, LoadSnapshot, MeasuredValue, MetricState, SensorSnapshot, SystemSnapshot,
+    TemperatureReading,
 };
 use monitrs_core::units::{
     ByteUnits, Percent, Rate, display_width, format_age, format_bytes_compact, format_duration,
@@ -548,8 +549,8 @@ fn cpu_note_segments(snapshot: &SystemSnapshot) -> Vec<String> {
     if let Some(text) = cgroup_cpu_text(snapshot) {
         segments.push(text);
     }
-    if let Some(reading) = snapshot.sensors.hottest() {
-        segments.push(temperature_text(reading));
+    if let Some(display) = temperature_display(&snapshot.sensors) {
+        segments.push(display.annotated());
     }
     segments
 }
@@ -632,6 +633,29 @@ fn temperature_text(reading: &TemperatureReading) -> String {
         ' '
     };
     format!("temp{flag}{:.1}C", reading.celsius)
+}
+
+/// The hottest sensor reading as a display, so a retained one carries its age.
+///
+/// Goes through the metric's own state rather than through
+/// [`SensorSnapshot::hottest`], which filters to freshly measured lists: since
+/// sensors moved to their own cadence a reading can legitimately be 30 seconds
+/// old, and a header that dropped it would be less informative than one that
+/// dates it (§4, and the design document's A2).
+fn temperature_display(sensors: &SensorSnapshot) -> Option<MetricDisplay> {
+    let has_reading = sensors
+        .temperatures
+        .displayable()
+        .is_some_and(|(readings, _)| !readings.is_empty());
+    if !has_reading {
+        return None;
+    }
+    Some(states::describe(&sensors.temperatures, |readings| {
+        readings
+            .iter()
+            .max_by(|left, right| left.celsius.total_cmp(&right.celsius))
+            .map_or_else(String::new, temperature_text)
+    }))
 }
 
 /// `bat 82%-`, where the trailing character is the charge state's own cue (§5.2).
@@ -751,8 +775,8 @@ fn summary_segments(
     if let Some(text) = cgroup_limit_text(snapshot, units) {
         segments.push((text, Token::Muted));
     }
-    if let Some(reading) = snapshot.sensors.hottest() {
-        segments.push((temperature_text(reading), Token::Muted));
+    if let Some(display) = temperature_display(&snapshot.sensors) {
+        segments.push((display.annotated(), Token::Muted));
     }
     if let Some((battery, _)) = snapshot.sensors.battery.displayable() {
         segments.push((battery_text(battery), Token::Muted));
@@ -1620,6 +1644,55 @@ mod tests {
             memory.iter().any(|segment| segment.starts_with("bat 82%")),
             "{memory:?}"
         );
+    }
+
+    #[test]
+    fn a_retained_temperature_is_shown_with_its_age_rather_than_disappearing() {
+        // Sensors now have their own cadence, so a reading can legitimately be up
+        // to 30 seconds old. Before this fix `hottest()` filtered to `fresh()` and
+        // the header simply dropped the field for that window — worse than the
+        // problem this release set out to fix.
+        let mut snapshot =
+            SystemSnapshot::warming_up(std::time::Instant::now(), SystemTime::UNIX_EPOCH, 8);
+        snapshot.sensors.temperatures = MetricState::Stale {
+            value: vec![TemperatureReading {
+                label: "performance".into(),
+                celsius: 62.0,
+                peak_celsius: None,
+                critical_celsius: Some(100.0),
+            }],
+            age: Duration::from_secs(28),
+        };
+
+        let segments = cpu_note_segments(&snapshot);
+        let temperature = segments
+            .iter()
+            .find(|segment| segment.contains("62.0C"))
+            .expect("the hottest reading must still be shown");
+        // format_age renders 28 seconds as `00:28`, not `28s`; a test that only
+        // looked for `62.0C` would pass even if the age were silently dropped.
+        assert!(
+            temperature.contains("~00:28"),
+            "a retained reading must carry its age (§4), got {temperature}"
+        );
+    }
+
+    #[test]
+    fn a_measured_temperature_carries_no_age_marker() {
+        let mut snapshot =
+            SystemSnapshot::warming_up(std::time::Instant::now(), SystemTime::UNIX_EPOCH, 8);
+        snapshot.sensors.temperatures = MetricState::Available(vec![TemperatureReading {
+            label: "performance".into(),
+            celsius: 62.0,
+            peak_celsius: None,
+            critical_celsius: Some(100.0),
+        }]);
+
+        let temperature = cpu_note_segments(&snapshot)
+            .into_iter()
+            .find(|segment| segment.contains("62.0C"))
+            .expect("the hottest reading");
+        assert!(!temperature.contains('~'), "got {temperature}");
     }
 
     #[test]
