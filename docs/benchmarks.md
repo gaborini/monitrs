@@ -699,11 +699,11 @@ runs the tagged release archives on for the platform smoke tests.
 
 **Instance shape.** Any instance advertising 8 vCPUs (an `m5.2xlarge` or
 equivalent) approximates the reference CPU count. Its process count out of the
-box will usually be short of 200 — a fresh Amazon Linux or Ubuntu instance
-typically runs 100–160 — which is close enough that no synthetic process farm is
-required: `scripts/measure-overhead.py` now prints the host's actual process
-count beside its verdict, so a reader can see how close a given instance came
-rather than assuming it matched.
+box is not measured here — this file has already been misled once by assuming a
+process count instead of printing one — so no figure for it is guessed at either;
+`scripts/measure-overhead.py` now prints the host's actual count beside its
+verdict, and that printed count, not an expectation set out in this paragraph, is
+what decides whether a synthetic process farm is needed to approach 200.
 
 **Binary.** Do not build on the instance. Task 12 is already extracting the
 tagged release archive there to run the smoke tests, so reuse that extraction
