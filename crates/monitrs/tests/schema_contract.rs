@@ -31,9 +31,27 @@
 //! contributes no field paths at all — an inventory generated from a thin
 //! snapshot would silently promise less than the schema actually has. No single
 //! named scenario in `fake.rs` populates everything the schema can carry, so
-//! [`richest_export_json`] builds one by hand from `Scenario`'s public fields and
+//! [`richest_snapshot`] builds one by hand from `Scenario`'s public fields and
 //! patches in the handful of things no scenario (and no collector) can produce:
 //! see its doc comment for exactly which, and why.
+//!
+//! # `Stale` is a second wire shape, not a lesser `Available`
+//!
+//! [`MetricState`] uses serde's default enum representation, so `Available(T)`
+//! and `Stale { value: T, age }` are two *different* JSON shapes for the same
+//! field: `{"available": T}` versus `{"stale": {"value": T, "age": ..}}`. A
+//! snapshot in which every metric is either fresh or one of the always-absent
+//! unit variants — which is what [`richest_snapshot`] alone would produce — never
+//! exercises the second shape, so no `*.stale.*` path would ever reach the
+//! inventory even though Tasks 3 and 4 of this branch taught the collectors to
+//! publish exactly that shape for a carried-over sensor reading, and
+//! `crates/monitrs-core/src/model/memory.rs:205-212` documents a transient
+//! cgroup-limit read producing it too, as an ordinary occurrence rather than an
+//! edge case. [`battery_gone_stale_export_json`] forces one metric — the battery
+//! — into `Stale` on a clone of the same snapshot, specifically so that no
+//! `#[serde(rename)]` on `Stale`'s own fields (a change `cargo-semver-checks`
+//! cannot see, since the Rust field name would be untouched) can silently change
+//! every stale metric's shape without this guard noticing.
 
 #![allow(
     clippy::expect_used,
@@ -49,6 +67,7 @@ use std::time::{Duration, Instant, SystemTime};
 use serde_json::Value;
 
 use monitrs_collectors::{DueTiers, FakeCollector, SampleTick, Scenario, SnapshotSource as _};
+use monitrs_core::SystemSnapshot;
 use monitrs_core::diagnostics::{PressureEngine, Thresholds};
 use monitrs_core::model::{
     CollectorHealth, CollectorIssue, CpuBreakdown, MetricState, PsiResource, PsiSnapshot,
@@ -218,7 +237,7 @@ fn rich_health() -> CollectorHealth {
 /// populated, not merely present-and-null.
 const PRESSURE_SETTLE_SAMPLES: u64 = 20;
 
-/// The export of the richest snapshot this test can assemble.
+/// The richest snapshot this test can assemble.
 ///
 /// Starts from [`FakeCollector`] on [`richest_scenario`], then patches in the
 /// three things no scenario — and no collector — can produce:
@@ -234,8 +253,10 @@ const PRESSURE_SETTLE_SAMPLES: u64 = 20;
 /// and finally replaces `health` with [`rich_health`]. Multiple samples are taken
 /// — not just the two or three `export.rs`'s own tests use — because the pressure
 /// engine's hysteresis needs a run of observations before it has an opinion; see
-/// [`PRESSURE_SETTLE_SAMPLES`].
-fn richest_export_json() -> String {
+/// [`PRESSURE_SETTLE_SAMPLES`]. Every metric produced here is fresh (`Available`)
+/// or one of the always-absent unit variants — see the module doc comment for why
+/// [`battery_gone_stale_export_json`] exists alongside this.
+fn richest_snapshot() -> SystemSnapshot {
     let mut collector = FakeCollector::new(richest_scenario());
     let start = Instant::now();
     let mut tick = SampleTick::first(start, SystemTime::UNIX_EPOCH);
@@ -266,17 +287,58 @@ fn richest_export_json() -> String {
     }
     snapshot.health = rich_health();
 
+    snapshot
+}
+
+/// The same richest snapshot, exported once as-is.
+fn richest_export_json(snapshot: &SystemSnapshot) -> String {
+    SnapshotExport::new(snapshot, RedactionPolicy::default())
+        .to_json()
+        .expect("the export serializes")
+}
+
+/// A second export of the same snapshot, with the battery reading carried over
+/// from a previous sample instead of freshly measured.
+///
+/// [`MetricState::into_stale`] (`crates/monitrs-core/src/model/metric.rs:225`) is
+/// the collectors' own way of producing this shape — the same call
+/// `FakeCollector::age` makes, and the same one Task 3/4's real collectors make
+/// for a sensor reading that briefly failed to refresh — so this is not a shape
+/// invented for the test.
+///
+/// A snapshot's `sensors.battery` is a single [`MetricState`], not a per-element
+/// array like `cpu.per_core`, so it can only be `Available` or `Stale` in any one
+/// export, never both at once — there is no equivalent here of leaving one array
+/// entry in the other state. Rather than sacrifice `sensors.battery.available.*`
+/// (which [`richest_snapshot`] already produces and which a real machine reports
+/// most of the time) to gain `sensors.battery.stale.*`, this builds a *second*
+/// export from a clone with just that one field aged, and [`exported_paths`]
+/// takes the union of both exports' paths — so neither shape is lost from the
+/// inventory for the other's sake.
+fn battery_gone_stale_export_json(snapshot: &SystemSnapshot) -> String {
+    let mut snapshot = snapshot.clone();
+    snapshot.sensors.battery = snapshot.sensors.battery.into_stale(Duration::from_secs(45));
     SnapshotExport::new(&snapshot, RedactionPolicy::default())
         .to_json()
         .expect("the export serializes")
 }
 
-/// Every field path the richest export this test can build actually produces.
+/// Inserts every leaf path parsed from `json` into `out`.
+fn insert_field_paths(json: &str, out: &mut BTreeSet<String>) {
+    let value: Value = serde_json::from_str(json).expect("the export is valid JSON");
+    field_paths(&value, "", out);
+}
+
+/// Every field path produced by either of this test's two exports.
+///
+/// The union of the richest all-`Available` export and the battery-gone-stale
+/// export: see the module doc comment and [`battery_gone_stale_export_json`] for
+/// why a single export cannot carry both shapes of the same field.
 fn exported_paths() -> BTreeSet<String> {
-    let json = richest_export_json();
-    let value: Value = serde_json::from_str(&json).expect("the export is valid JSON");
+    let snapshot = richest_snapshot();
     let mut paths = BTreeSet::new();
-    field_paths(&value, "", &mut paths);
+    insert_field_paths(&richest_export_json(&snapshot), &mut paths);
+    insert_field_paths(&battery_gone_stale_export_json(&snapshot), &mut paths);
     paths
 }
 
