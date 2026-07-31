@@ -62,7 +62,7 @@ pub mod storage;
 use core::time::Duration;
 use std::time::SystemTime;
 
-use monitrs_core::history::{HistoricalSample, HistoryMetric, HistoryRing};
+use monitrs_core::history::{HistoricalSample, HistoryMetric, HistoryRing, MetricComparison};
 use monitrs_core::model::{
     BatterySnapshot, LoadSnapshot, MeasuredValue, MetricState, SensorSnapshot, SystemSnapshot,
     TemperatureReading,
@@ -1309,22 +1309,45 @@ pub(crate) fn selected_sample_offset(state: &AppState) -> Option<usize> {
     usize::try_from(newest.saturating_sub(selected)).ok()
 }
 
-/// The caret note for the Time Lens: `-00:37 selected 22:14:07Z`.
+/// The caret's note: how the selected sample compares to its baselines, `cpu
+/// prev +41 points 30s +54 points` (§2.5).
 ///
-/// Both figures are in the note on purpose. §2.1 fixes the relative offset as the
-/// header's form, and §5.6 shows the absolute sample time beside the timeline; a
-/// reader correlating monitrs with a log needs the second one.
-pub(crate) fn caret_note(state: &AppState) -> String {
+/// This used to be `-00:37 selected 22:14:07Z` — *when* the selection was, not
+/// what it means. §2.5 asks for the selected sample to be compared against the
+/// previous one and against roughly 30 seconds ago, and this is where that
+/// reaches the interface: [`HistoryView::comparisons`] has existed since 0.1.0
+/// with nothing calling it.
+///
+/// The relative offset and the sample's own wall clock are deliberately not
+/// here any more. The caret row has no width to spare for them: on the
+/// narrowest supported terminal, a caret parked mid-plot leaves roughly half
+/// the row on each side, and two [`MetricComparison::render_delta`] outputs —
+/// whose text this cannot shorten, only [`comparison_text`]'s labels around
+/// them — already reach that budget on their own. Dropping the offset costs
+/// nothing a reader cannot already see: the header's `HISTORY -MM:SS` badge
+/// carries it at every breakpoint (§2.1), including the one-line `Compact`
+/// strip. The sample's absolute wall clock is the one figure this note no
+/// longer states.
+pub(crate) fn caret_note(state: &AppState, units: ByteUnits) -> String {
     let ring = state.history();
-    let offset = state.timeline().view().offset_from_live(ring);
-    let sample = state.timeline().selected_sample(ring);
-    match sample {
-        Some(sample) => format!(
-            "-{} selected {}",
-            format_age(offset),
-            wall_clock_of(sample.wall_time)
-        ),
-        None => format!("-{} selected", format_age(offset)),
+    let view = state.timeline().view();
+    let comparisons = view.comparisons(ring, HistoryMetric::CpuBusy);
+    format!(
+        "cpu {} {}",
+        comparison_text("prev", comparisons.previous_sample.as_ref(), units),
+        comparison_text("30s", comparisons.thirty_seconds_ago.as_ref(), units)
+    )
+}
+
+/// One baseline's delta, or the reason there is none.
+///
+/// A baseline history cannot reach is `no baseline`, never `+0`: §2.5 asks for a
+/// comparison "when history permits", and a zero delta would say the metric did
+/// not change when the truth is that nothing was there to compare with (§26).
+fn comparison_text(label: &str, comparison: Option<&MetricComparison>, units: ByteUnits) -> String {
+    match comparison {
+        Some(comparison) => format!("{label} {}", comparison.render_delta(units)),
+        None => format!("{label} no baseline"),
     }
 }
 
@@ -1743,6 +1766,54 @@ mod tests {
     fn the_history_span_label_reads_as_a_duration() {
         let state = state_of(140, 38);
         assert_eq!(history_span_label(state.history()), "5m");
+    }
+
+    #[test]
+    fn the_caret_note_compares_the_selected_sample_with_its_baselines() {
+        // A ring with a rising CPU curve, then a pause that pins the caret on the
+        // newest sample. Sequence 0 is always `WarmingUp` regardless of pattern
+        // (§8.2, §26), so a `Spike` lands the peak on the newest of three samples
+        // and its `base` on the one before it — exactly the previous-sample
+        // comparison this test is after.
+        let scenario = monitrs_collectors::fake::Scenario {
+            cpu: monitrs_collectors::fake::Pattern::Spike {
+                base: 20.0,
+                peak: 61.0,
+                at: 2,
+            },
+            ..monitrs_collectors::fake::Scenario::default()
+        };
+        let mut state = fake_state(scenario, 3, (160, 48), ViewId::Overview);
+        let _ = crate::app::reduce(&mut state, Action::TogglePause);
+
+        let note = caret_note(&state, ByteUnits::Iec);
+        assert!(
+            note.contains("cpu"),
+            "the caret says what was selected; §2.5 asks it to say what changed: {note}"
+        );
+        assert!(
+            note.contains("+41"),
+            "the delta against the previous sample belongs in the note: {note}"
+        );
+    }
+
+    #[test]
+    fn a_baseline_history_cannot_reach_is_named_rather_than_shown_as_zero() {
+        // Two samples, one second apart: nowhere near the 30-second look-back.
+        let mut state = fake_state(
+            monitrs_collectors::fake::Scenario::default(),
+            2,
+            (160, 48),
+            ViewId::Overview,
+        );
+        let _ = crate::app::reduce(&mut state, Action::TogglePause);
+
+        let note = caret_note(&state, ByteUnits::Iec);
+        assert!(
+            note.contains("30s no baseline"),
+            "two samples cannot reach thirty seconds back, and a missing baseline is \
+             a word rather than a zero (§4, §26): {note}"
+        );
     }
 
     // -----------------------------------------------------------------------

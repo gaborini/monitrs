@@ -994,7 +994,7 @@ fn draw_history(
     let read = plot_series(ring, HistoryMetric::DiskRead);
     let write = plot_series(ring, HistoryMetric::DiskWrite);
     let caret = selected_sample_offset(state);
-    let note = caret_note(state);
+    let note = caret_note(state, units);
 
     let mut used = 0u16;
     let mut next_row = || -> Option<Rect> {

@@ -1126,10 +1126,54 @@ fn a_history_overview_carries_its_offset_and_a_caret() {
     }
     let text = text_of(&frame(&state, ascii()));
     assert!(text.contains("[<HISTORY -"), "{text}");
+    // §2.5: the caret's note is the selected sample's comparison against its
+    // baselines, not merely a repeat of the offset the header already carries.
     assert!(
-        text.contains("selected"),
-        "the caret note is missing:\n{text}"
+        text.contains("cpu prev"),
+        "the caret's comparison is missing:\n{text}"
     );
     assert!(text.contains('^'), "the caret is missing:\n{text}");
     insta::assert_snapshot!(text);
+}
+
+#[test]
+fn the_network_caret_note_fits_the_eighty_column_panel() {
+    // §2.1's Overview drops its History panel entirely below 100 columns (the
+    // `Compact` band), and Storage's THROUGHPUT HISTORY panel is a fixed
+    // `HISTORY_HEIGHT` of 2 inner rows at every breakpoint — enough for RX and TX
+    // but never a third row, so its caret note is computed but never has a row to
+    // render into. The Network screen's history panel is sized from what is left
+    // over instead, so at 80 columns it is the narrowest place a caret note
+    // actually reaches the screen — the binding case for §2.5's comparisons
+    // fitting beside it.
+    let mut state = Fixture::new((80, 24), ViewId::Network).build();
+    for _ in 0..4 {
+        let _ = monitrs_tui::app::reduce(
+            &mut state,
+            monitrs_tui::action::Action::SeekHistory(monitrs_tui::action::Seek::Backward(1)),
+        );
+    }
+    let text = text_of(&frame(&state, ascii()));
+    let caret_row = text
+        .lines()
+        .find(|line| line.contains('^'))
+        .expect("the caret row must be present at 80 columns");
+    // Every row `text_of` prints is wrapped in one synthetic `|` marker on each
+    // end (not part of the rendered buffer), so the true rendered width is the
+    // state's own column count.
+    let (width, _) = state.size();
+    assert_eq!(
+        monitrs_core::units::display_width(caret_row),
+        usize::from(width) + 2,
+        "the caret row must fill its 80-column panel without wrapping or being \
+         cut short: {caret_row:?}"
+    );
+    assert!(
+        caret_row.contains("cpu prev"),
+        "the comparison must reach the caret at 80 columns too: {caret_row:?}"
+    );
+    assert!(
+        !caret_row.trim_end_matches('|').trim_end().is_empty(),
+        "a note that does not fit must never render as a blank row: {caret_row:?}"
+    );
 }
