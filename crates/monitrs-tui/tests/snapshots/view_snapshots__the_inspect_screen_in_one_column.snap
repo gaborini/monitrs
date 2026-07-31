@@ -27,4 +27,4 @@ expression: "text_of(&frame(&state, ascii()))"
 ||UNAVAILABLE METRICS                                                                     ||
 ||  - CPU time breakdown      unsupported                                                 ||
 |+----------------------------------------------------------------------------------------+|
-| 1  2  3  4  5 [6] 7                                                      / filter  ? help|
+| 1  2  3  4  5 [6 Inspect] 7                                              / filter  ? help|

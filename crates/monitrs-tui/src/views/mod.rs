@@ -855,7 +855,15 @@ fn tab_segments(state: &AppState, room: u16) -> Vec<(String, Token)> {
         .map(|view| {
             let active = view == state.view();
             let (open, close) = if active { ('[', ']') } else { (' ', ' ') };
-            let body = if titled {
+            // Below the width that fits all seven names the inactive screens
+            // degrade to their digit — but the active one keeps its title. Seven
+            // screens stopped fitting below 92 columns in 0.2.0, and losing every
+            // name at once also lost the one piece of chrome that says where the
+            // reader currently is (§5.4). The widest this can get is six bare
+            // digits plus the longest title (`Processes`, 13 cells with its digit,
+            // space, and brackets) — 31 cells, comfortably inside the 80-column
+            // floor.
+            let body = if titled || active {
                 format!("{} {}", view.digit(), view.title())
             } else {
                 view.digit().to_string()
@@ -1551,11 +1559,65 @@ mod tests {
     }
 
     #[test]
-    fn a_narrow_footer_condenses_the_tabs_to_digits() {
+    fn a_narrow_footer_condenses_the_inactive_tabs_to_digits() {
         let state = state_of(80, 24);
         let condensed = tab_segments(&state, 20);
-        assert!(condensed.iter().any(|(text, _)| text == "[1]"));
-        assert!(condensed.iter().all(|(text, _)| display_width(text) == 3));
+        // Overview is the default active view (§7.1) and keeps its title even in
+        // a room this narrow — that is Task 11's whole point.
+        assert!(condensed.iter().any(|(text, _)| text == "[1 Overview]"));
+        assert!(
+            condensed
+                .iter()
+                .filter(|(text, _)| text.as_str() != "[1 Overview]")
+                .all(|(text, _)| display_width(text) == 3),
+            "every inactive tab still condenses to its bare digit: {condensed:?}"
+        );
+    }
+
+    /// The status footer's own row, read back from a real rendered frame.
+    ///
+    /// A hand-computed "room" value for [`tab_segments`] would have to
+    /// re-derive `render_status_footer`'s hint-width subtraction (mod.rs:808-810)
+    /// inline, which is exactly the kind of restated arithmetic that drifts out
+    /// of step with the code it is supposed to pin. Rendering the real frame and
+    /// reading its footer row back exercises the actual wiring instead.
+    fn footer_row_text(buffer: &Buffer, area: Rect) -> String {
+        let status = Chrome::resolve(area)
+            .layout
+            .status
+            .expect("an 80x24 frame or larger always has a footer");
+        (status.x..status.x.saturating_add(status.width))
+            .filter_map(|x| buffer.cell((x, status.y)).map(|cell| cell.symbol().to_owned()))
+            .collect()
+    }
+
+    #[test]
+    fn the_active_screens_name_survives_every_width() {
+        for width in [80u16, 92, 100, 160] {
+            let mut state = state_of(width, 24);
+            let _ = crate::app::reduce(&mut state, Action::ChangeView(ViewId::Battery));
+            let area = state.area();
+            let buffer = render_into(&state, Presentation::default(), (width, 24), area);
+            let strip = footer_row_text(&buffer, area);
+            assert!(
+                strip.contains(ViewId::Battery.title()),
+                "at {width} columns the strip lost the label saying where the reader \
+                 is: {strip:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_narrow_strip_degrades_the_inactive_screens_to_their_digits() {
+        let mut state = state_of(80, 24);
+        let _ = crate::app::reduce(&mut state, Action::ChangeView(ViewId::Battery));
+        let area = state.area();
+        let buffer = render_into(&state, Presentation::default(), (80, 24), area);
+        let strip = footer_row_text(&buffer, area);
+        assert!(
+            !strip.contains(ViewId::Processes.title()),
+            "80 columns has no room for seven names; the inactive ones are digits: {strip:?}"
+        );
     }
 
     #[test]
