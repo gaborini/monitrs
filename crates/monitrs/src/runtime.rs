@@ -559,10 +559,12 @@ where
             let current_interval = control.interval();
             if current_interval != interval {
                 interval = current_interval;
-                // The rebuilt scheduler starts with no sensor interest; the read of
-                // `sensor_interest` below restores it, at the cost of one extra
-                // sensor read on the tick after an interval change. Cheaper than
-                // threading the flag through the constructor.
+                // The rebuilt scheduler starts with no sensor interest — and with
+                // every tier due immediately, which is what `TierScheduler::new`
+                // means — so this pass re-reads every group regardless, and the
+                // `sensor_interest` read below restores the level before `due_at`
+                // sees it. Nothing is lost and nothing is read twice, which is why
+                // the flag does not need threading through the constructor.
                 scheduler = TierScheduler::new(TierIntervals::derived_from(interval));
                 // The cadence the hysteresis window was filled at no longer applies:
                 // §11.3 treats a break in the measurement stream as a reason to start
@@ -1115,7 +1117,8 @@ mod tests {
         )
         .expect("spawns");
         // Nothing drains the channel here; it coalesces snapshots, so the sampler
-        // keeps running either way. Held so the sender stays alive.
+        // keeps running either way. Held so the channel stays connected — dropping
+        // the receiver would make the sampler's first `send` fail and break the loop.
         let _receiver = receiver;
 
         // The very first pass has every tier due, sensors included.
