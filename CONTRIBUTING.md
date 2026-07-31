@@ -81,6 +81,50 @@ testable without sending real signals.
 See [`docs/architecture.md`](docs/architecture.md) for the full picture, and
 [`docs/adr/README.md`](docs/adr/README.md) for why things are the way they are.
 
+## What 1.0.0 froze
+
+`1.0.0` is a stability promise, and these are its terms.
+
+**API.** The public items of `monitrs-core`, `monitrs-collectors` and
+`monitrs-tui` — the three library crates in the dependency graph above.
+`monitrs` itself ships no library target (`crates/monitrs/Cargo.toml` declares a
+`[[bin]]` and no `[lib]`), so it has no API to freeze; its observable behaviour is
+covered by the export, configuration and keymap promises below instead. Enforced
+by the `semver compatibility` CI job (`.github/workflows/ci.yml`), which compares
+the workspace against the last version published to crates.io and fails on a
+breaking change that was not paired with a major bump.
+
+**The JSON export.** `docs/schema/v2.json` lists every field path version 2
+produces, and `crates/monitrs/tests/schema_contract.rs` fails if one disappears.
+Adding a field is not a break. Removing one, or changing what one means, is a
+`schema_version` bump with a new `docs/schema/v{N+1}.json` written beside the old
+one — the old file stays, so a consumer can see exactly what changed between the
+two.
+
+**Two guards, two surfaces, and neither covers the other's blind spot.**
+`cargo-semver-checks` reads the Rust API; it cannot see a `#[serde(rename)]`,
+which reshapes the JSON export while leaving every Rust signature untouched. The
+schema inventory reads the JSON wire format; it cannot see a Rust signature
+change that never reaches serialisation. A renamed export field is caught only by
+the schema test; a removed public function is caught only by the semver job.
+Treat them as complementary, not redundant — dropping either one reopens a
+different way to break the freeze silently.
+
+**Configuration keys** and their meanings, and the **default keymap**: a binding
+may be added, but an existing one does not change meaning without a major bump.
+
+**Not frozen:** layouts, wording, colours, glyph choices and panel arrangement.
+These are presentation. A cosmetic improvement is not a breaking change, and this
+paragraph exists so nobody has to guess which side of the line a change is on.
+
+**MSRV.** Raising it is a minor bump. `Cargo.toml`'s `rust-version` is the
+record; `rust-toolchain.toml` pins the development channel and says nothing about
+the minimum — that's why the `msrv` CI job sets `RUSTUP_TOOLCHAIN` explicitly
+rather than trusting the toolchain file to reflect it.
+
+**Deprecation.** A deprecated item lives at least one minor cycle before
+removal, and its deprecation message names the replacement.
+
 ## Testing expectations
 
 Name tests after the behaviour they pin down, not after the function they call.

@@ -336,8 +336,8 @@ just bench     # criterion benchmarks
 ```
 
 `just --list` shows every recipe with the underlying cargo command. `just` is a
-convenience only; nothing requires it. See
-[`CONTRIBUTING.md`](CONTRIBUTING.md).
+convenience only; nothing requires it. See [`CONTRIBUTING.md`](CONTRIBUTING.md),
+which also states what `1.0.0` froze and what it deliberately did not.
 
 ## Performance
 
