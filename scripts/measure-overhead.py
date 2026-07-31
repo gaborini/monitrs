@@ -8,8 +8,14 @@ measuring the thing with itself, so this uses `ps` and `lsof`: independent
 observers, and `ps`'s %CPU is the number a user would look at.
 
 Runs the release binary on a pty at 160x48 with `--no-config` (the default
-configuration §16.1 names), leaves it completely idle, and samples once a second.
-The first ten seconds are discarded, because startup work is not idle.
+configuration §16.1 names), leaves it completely idle, and samples roughly every
+0.81 s — a 0.25 s select() poll plus a 0.75 s sleep between reads, so a 60-second
+window yields about 74 samples, not 60. That is not a cosmetic detail: `ps`'s
+%cpu is reported over roughly that ~0.81 s window, not a clean second, so turning
+a reported percentage back into an absolute millisecond figure (or vice versa)
+has to use the real interval, not 1000 ms — see docs/benchmarks.md's "Why there
+are two idle rows" for a case where using the wrong one mattered. The first ten
+seconds are discarded, because startup work is not idle.
 
     cargo build --release -p monitrs
     python3 scripts/measure-overhead.py
@@ -54,6 +60,11 @@ MEASURE_SECONDS = 60
 # that keystroke once, shortly after start-up, so the requested screen is the one
 # idling for the whole measurement.
 SCREEN_KEY = os.environ.get("MONITRS_SCREEN_KEY")
+# Panel titles unique to a given screen, so a screen switch can be confirmed from
+# the pty output rather than merely inferred from RSS/byte-count side effects.
+# Only the key this script documents has one; an unrecognised key is not checked
+# rather than guessed at.
+SCREEN_MARKERS = {"7": "BATTERY"}  # crates/monitrs-tui/src/views/battery.rs's panel title
 
 
 def ps_sample(pid):
@@ -198,6 +209,9 @@ def main():
         ("RSS < 50 MiB", max(rss) < 50 * mib),
         ("no file-descriptor growth", fds[-1] <= fds[0] + 2),
     ]
+    marker = SCREEN_MARKERS.get(SCREEN_KEY)
+    if marker is not None:
+        verdicts.append((f"screen key {SCREEN_KEY!r} landed ({marker!r} visible)", marker in text))
     for label, ok in verdicts:
         print(f"  {'PASS' if ok else 'FAIL'}  {label}")
     return 0 if all(ok for _, ok in verdicts) else 1

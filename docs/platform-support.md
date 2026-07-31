@@ -131,16 +131,19 @@ Read-only, on the tier indicated:
 | `/etc/passwd` (via libc) | slow | resolving uid to user name |
 
 \* Temperatures and battery are not on any of the four tiers above; they are their
-own **sensor group**, riding on the medium tier's interval (5 s by default) while a
-sensor-bearing screen is visible and on the slow tier's interval (30 s) otherwise,
-rather than a fixed cadence of its own. Between reads, the last value is carried
-forward and shown aged rather than dropped — the Battery screen's own fields and
-the header's single temperature can be up to 30 seconds old, and say so
-(`Stale { value, age }`, rendered as e.g. `temp 62.0C ~00:28`). The cadence split
-exists because the read itself is not cheap: on macOS,
+own **sensor group**, riding on the medium tier's interval (5 s by default) while
+the Battery screen specifically is open — only that screen, not any screen that
+happens to display a sensor reading; the header's own temperature is visible on
+every screen without tightening the cadence — and on the slow tier's interval
+(30 s) otherwise, rather than a fixed cadence of its own. Between reads, the last
+value is carried forward and shown aged rather than dropped — the Battery
+screen's own fields and the header's single temperature can be up to 30 seconds
+old, and say so (`Stale { value, age }`, rendered as e.g. `temp 62.0C ~00:28`).
+The cadence split exists because the read itself is not cheap: on macOS,
 `Components::refresh` for temperatures costs about 85 ms regardless of how many
 sensors exist, which on a plain 5-second schedule was enough to fail §16.1's idle
-CPU p95 budget — see `benchmarks.md`.
+CPU p95 budget — and, measured after the split, still fails it, for a smaller and
+not yet identified reason — see `benchmarks.md`.
 
 Plus one syscall that is not a file read: `statfs(2)` on each mount point, on the
 medium tier, for the inode counts. Nothing under `/proc` reports `f_files`, so

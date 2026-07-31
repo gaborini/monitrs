@@ -92,16 +92,20 @@ stall.
 
 Temperatures and battery are not on any of the four tiers above. They are their
 own **sensor group**, scheduled apart from the medium tier they used to ride on:
-`TierScheduler` gives it the medium interval (5 s by default) while a
-sensor-bearing screen is visible and the slow interval (30 s) otherwise, rather
+`TierScheduler` gives it the medium interval (5 s by default) while the Battery
+screen specifically is open (`shows_sensors` in `crates/monitrs-tui/src/app/reducer.rs`
+checks `ViewId::Battery`, not any screen that happens to display a sensor
+reading — the Overview header shows the header's temperature on every screen
+without tightening the cadence) and the slow interval (30 s) otherwise, rather
 than a fixed cadence of its own. The reason is cost, not taste — the read is one
 call, `Components::refresh` for temperatures alongside the battery, that costs
 about 85 ms on macOS regardless of how many components exist, so putting it on
 the same 5-second schedule as everything else was expensive enough to fail
-§16.1's idle p95 budget outright; see `benchmarks.md`. Between reads the last
-value is carried forward and shown as `MetricState::Stale { value, age }`, so the
-header's temperature can be up to thirty seconds old and says so rather than
-silently holding a number nobody re-measured.
+§16.1's idle p95 budget outright — and, measured after the fix, still fails it,
+just for a smaller and not yet identified reason; see `benchmarks.md`. Between
+reads the last value is carried forward and shown as `MetricState::Stale {
+value, age }`, so the header's temperature can be up to thirty seconds old and
+says so rather than silently holding a number nobody re-measured.
 
 The on-demand tier exists because §2.4's process context is expensive per
 process: reading a working directory, counting file descriptors, and walking an

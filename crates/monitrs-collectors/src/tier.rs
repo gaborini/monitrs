@@ -14,7 +14,10 @@ use monitrs_core::model::Tier;
 pub struct TierIntervals {
     /// CPU, memory, processes, network and disk counters.
     pub fast: Duration,
-    /// Filesystem capacity, static device state, sensors.
+    /// Filesystem capacity, static device state. (The sensor group borrows this
+    /// interval too, while the Battery screen specifically is open — see
+    /// [`DueTiers::sensors`] and [`TierScheduler::sensor_interval`] — but it is not
+    /// itself part of what this tier is due *for*.)
     pub medium: Duration,
     /// Users, device lists, static metadata.
     pub slow: Duration,
