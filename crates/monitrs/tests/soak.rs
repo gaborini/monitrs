@@ -95,8 +95,8 @@ mod runtime;
 
 use runtime::{
     ChannelHealth, DetailRequest, EVENT_CHANNEL_CAPACITY, EventSender, SampleRequest,
-    SamplingControl, Shutdown, Workers, detail_channel, drain_to_newest_snapshot, event_channel,
-    spawn_detail_worker, spawn_sampler_thread, spawn_tick_thread,
+    SamplingControl, SensorInterest, Shutdown, Workers, detail_channel, drain_to_newest_snapshot,
+    event_channel, spawn_detail_worker, spawn_sampler_thread, spawn_tick_thread,
 };
 
 /// The event payload type. The soak run never reloads configuration, so the
@@ -706,6 +706,7 @@ fn run_soak(config: SoakConfig) -> SoakReport {
                 shutdown.clone(),
                 sampling.clone(),
                 SampleRequest::new(),
+                SensorInterest::new(),
             )
             .expect("the sampler thread must spawn");
             spawn_detail_worker(
@@ -728,6 +729,7 @@ fn run_soak(config: SoakConfig) -> SoakReport {
                 shutdown.clone(),
                 sampling.clone(),
                 SampleRequest::new(),
+                SensorInterest::new(),
             )
             .expect("the sampler thread must spawn");
             spawn_detail_worker(

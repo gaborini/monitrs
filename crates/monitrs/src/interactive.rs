@@ -50,9 +50,9 @@ use ratatui::layout::Rect;
 use crate::cli::Cli;
 use crate::config::{self, Config};
 use crate::runtime::{
-    DetailRequest, SampleRequest, SamplingControl, Shutdown, Workers, detail_channel,
-    drain_to_newest_snapshot, event_channel, spawn_detail_worker, spawn_input_thread,
-    spawn_sampler_thread, spawn_signal_thread, spawn_tick_thread,
+    DetailRequest, SampleRequest, SamplingControl, SensorInterest, Shutdown, Workers,
+    detail_channel, drain_to_newest_snapshot, event_channel, spawn_detail_worker,
+    spawn_input_thread, spawn_sampler_thread, spawn_signal_thread, spawn_tick_thread,
 };
 use crate::signals;
 
@@ -149,6 +149,11 @@ pub(crate) fn run(cli: &Cli, log_notices: Vec<String>) -> color_eyre::Result<Exi
     let (detail_tx, detail_rx) = detail_channel();
     let shutdown = Shutdown::new();
     let forced = SampleRequest::new();
+    // Starts false because monitrs opens on Overview or, with `--processes`, on the
+    // process table — neither shows a sensor panel. The reducer raises it the first
+    // time the Battery screen is opened. A future start-view flag that could open
+    // *on* Battery would have to seed this from that view.
+    let sensor_interest = SensorInterest::new();
     let mut workers = Workers::new();
 
     spawn_input_thread(&mut workers, sender.clone(), shutdown.clone(), LOOP_POLL)?;
@@ -171,6 +176,7 @@ pub(crate) fn run(cli: &Cli, log_notices: Vec<String>) -> color_eyre::Result<Exi
         shutdown.clone(),
         sampling.clone(),
         forced.clone(),
+        sensor_interest.clone(),
     )?;
     spawn_detail_worker(
         &mut workers,
@@ -185,6 +191,7 @@ pub(crate) fn run(cli: &Cli, log_notices: Vec<String>) -> color_eyre::Result<Exi
     let mut effects_context = EffectContext {
         detail_tx,
         forced,
+        sensor_interest,
         shutdown: shutdown.clone(),
         mouse_at_startup: settings.display.mouse,
         color_explicit: cli.color_was_explicit(),
@@ -294,6 +301,9 @@ enum Flow {
 struct EffectContext {
     detail_tx: crossbeam_channel::Sender<DetailRequest>,
     forced: SampleRequest,
+    /// Whether the visible screen shows a sensor reading, for the sampler's
+    /// cadence (§8.6).
+    sensor_interest: SensorInterest,
     shutdown: Shutdown,
     settings: Config,
     sender: crate::runtime::EventSender<ConfigEvent>,
@@ -325,6 +335,14 @@ fn execute(effect: &Effect, state: &mut AppState, ctx: &mut EffectContext) -> Fl
 
         Effect::RequestSample => {
             ctx.forced.request();
+            Flow::Continue
+        }
+
+        // The one write to the flag in the whole program: the reducer decided that a
+        // sensor-bearing screen is or is not visible, and this is where that decision
+        // reaches the sampler's own clock.
+        Effect::SetSensorInterest(interested) => {
+            ctx.sensor_interest.set(*interested);
             Flow::Continue
         }
 

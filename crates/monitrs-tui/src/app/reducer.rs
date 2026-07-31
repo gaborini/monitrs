@@ -456,13 +456,29 @@ fn ticked(state: &mut AppState, now: Instant) -> Effects {
 
 // --------------------------------------------------------------------- handlers
 
-/// Switches view (§6.2 `1`–`5`).
+/// Which screens make a sensor reading the thing the reader is looking at.
+///
+/// Only the Battery screen, which is where the thermal panel and the pack
+/// readings are. The header's hottest-sensor segment appears on every screen, but
+/// it is a glance and is dated when it is old — paying 85 ms every five seconds
+/// for it is what §16.1's idle budget could not absorb.
+const fn shows_sensors(view: ViewId) -> bool {
+    matches!(view, ViewId::Battery)
+}
+
+/// Switches view (§6.2 `1`–`7`).
 fn change_view(state: &mut AppState, view: ViewId) -> Effects {
     if state.view == view {
         return Effects::new();
     }
+    let had_interest = shows_sensors(state.view);
     state.view = view;
-    redraw()
+    let mut effects = Effects::new();
+    if shows_sensors(view) != had_interest {
+        effects.push(Effect::SetSensorInterest(shows_sensors(view)));
+    }
+    effects.push(Effect::RequestRedraw);
+    effects
 }
 
 /// `Space`: freezes or resumes the visible timeline (§2.1).
@@ -1543,18 +1559,55 @@ mod tests {
     }
 
     #[test]
+    fn opening_the_battery_screen_asks_for_fresher_sensor_readings() {
+        let mut state = state();
+        assert_eq!(
+            reduce(&mut state, Action::ChangeView(ViewId::Battery)).as_slice(),
+            &[Effect::SetSensorInterest(true), Effect::RequestRedraw]
+        );
+    }
+
+    #[test]
+    fn leaving_the_battery_screen_gives_up_the_interest() {
+        let mut state = state();
+        let _ = reduce(&mut state, Action::ChangeView(ViewId::Battery));
+        assert_eq!(
+            reduce(&mut state, Action::ChangeView(ViewId::Overview)).as_slice(),
+            &[Effect::SetSensorInterest(false), Effect::RequestRedraw]
+        );
+        assert_eq!(
+            reduce(&mut state, Action::ChangeView(ViewId::Processes)).as_slice(),
+            &[Effect::RequestRedraw],
+            "the interest was already given up; a level is not re-sent on every hop"
+        );
+    }
+
+    #[test]
+    fn moving_between_two_screens_that_show_no_sensor_panel_changes_no_cadence() {
+        let mut state = state();
+        assert_eq!(
+            reduce(&mut state, Action::ChangeView(ViewId::Processes)).as_slice(),
+            &[Effect::RequestRedraw],
+            "the header's single reading is a glance, not a reason to read faster"
+        );
+    }
+
+    #[test]
     fn no_reducer_action_performs_input_or_output() {
         // §17.4 asks for "no direct OS operation". The structural proof is that the
         // only effects that touch anything outside this process are the ones the
         // reducer *returns*, and the destructive ones are unreachable without a
         // confirmed pending action. Walk every action on a fresh state and assert
-        // that nothing escapes except redraws, sample requests and detail fetches.
+        // that nothing escapes except redraws, sample requests, detail fetches and
+        // the sampler's sensor cadence — none of which is an OS operation; every one
+        // of them is a message to another thread in this process.
         let allowed = |effect: &Effect| {
             matches!(
                 effect,
                 Effect::RequestRedraw
                     | Effect::RequestSample
                     | Effect::FetchProcessDetail(_)
+                    | Effect::SetSensorInterest(_)
                     | Effect::Shutdown
             )
         };
@@ -1580,6 +1633,9 @@ mod tests {
             Action::NextPanel,
             Action::PreviousPanel,
             Action::ChangeView(ViewId::Processes),
+            // The one view change that reaches outside the reducer, so the sweeps
+            // above have to include it.
+            Action::ChangeView(ViewId::Battery),
             Action::TogglePause,
             Action::SeekHistory(Seek::step_back()),
             Action::SeekHistory(Seek::Oldest),

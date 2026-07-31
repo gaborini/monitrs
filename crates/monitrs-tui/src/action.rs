@@ -738,6 +738,13 @@ pub enum Effect {
     RequestSample,
     /// Load a process detail on the on-demand worker (§8.6, §10.3).
     FetchProcessDetail(ProcessIdentity),
+    /// Tell the sampler whether a screen showing a sensor reading is visible
+    /// (§8.6's on-demand tier).
+    ///
+    /// Not a state change, so it cannot live in the reducer: the sampler owns its
+    /// own clock on another thread, and this is how the visible screen reaches it.
+    /// A level, not a pulse — the sampler holds the last value it was told.
+    SetSensorInterest(bool),
     /// Send a signal.
     ///
     /// The executor must re-read the identity immediately before delivery and
@@ -1161,6 +1168,7 @@ mod tests {
             Effect::RequestRedraw,
             Effect::RequestSample,
             Effect::FetchProcessDetail(identity()),
+            Effect::SetSensorInterest(true),
             Effect::RingBell,
             Effect::ReloadConfig,
             Effect::ExportSnapshot(PathBuf::from("/tmp/snapshot.json")),

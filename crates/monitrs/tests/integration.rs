@@ -104,9 +104,9 @@ mod runtime;
 use config::Config;
 use export::{RedactionPolicy, SnapshotExport};
 use runtime::{
-    EVENT_CHANNEL_CAPACITY, SampleRequest, SamplingControl, Shutdown, Workers, detail_channel,
-    drain_to_newest_snapshot, event_channel, spawn_detail_worker, spawn_sampler_thread,
-    spawn_tick_thread,
+    EVENT_CHANNEL_CAPACITY, SampleRequest, SamplingControl, SensorInterest, Shutdown, Workers,
+    detail_channel, drain_to_newest_snapshot, event_channel, spawn_detail_worker,
+    spawn_sampler_thread, spawn_tick_thread,
 };
 
 /// The event payload type for the tests that never reload configuration.
@@ -653,6 +653,7 @@ fn snapshots_coalesce_at_the_channel_bound_and_the_newest_one_wins() {
         shutdown.clone(),
         SamplingControl::new(Duration::from_millis(1), Thresholds::default()),
         SampleRequest::new(),
+        SensorInterest::new(),
     )
     .expect("the sampler thread must spawn");
 
@@ -1285,6 +1286,7 @@ fn every_worker_joins_on_shutdown_and_a_second_shutdown_is_harmless() {
         shutdown.clone(),
         SamplingControl::new(Duration::from_millis(10), Thresholds::default()),
         SampleRequest::new(),
+        SensorInterest::new(),
     )
     .expect("the sampler thread must spawn");
     spawn_detail_worker(

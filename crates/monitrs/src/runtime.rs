@@ -92,6 +92,36 @@ impl SampleRequest {
     }
 }
 
+/// Whether a screen showing a sensor reading is visible (§8.6).
+///
+/// A level rather than a one-shot, which is the difference from
+/// [`SampleRequest`]: the sampler asks "is anyone looking?" on every pass, and the
+/// answer stays true for as long as the Battery screen is up. `Relaxed` is
+/// sufficient — a cadence change one tick late is invisible, and no other state
+/// depends on the ordering.
+#[derive(Clone, Debug, Default)]
+pub(crate) struct SensorInterest(Arc<AtomicBool>);
+
+impl SensorInterest {
+    /// Nobody is looking at a sensor.
+    pub(crate) fn new() -> Self {
+        Self(Arc::new(AtomicBool::new(false)))
+    }
+
+    /// Records whether a sensor-bearing screen is visible.
+    ///
+    /// Called from `execute` in the interactive loop and from nowhere else, which
+    /// is what keeps the reducer pure.
+    pub(crate) fn set(&self, interested: bool) {
+        self.0.store(interested, Ordering::Relaxed);
+    }
+
+    /// Whether a sensor-bearing screen is visible.
+    pub(crate) fn get(&self) -> bool {
+        self.0.load(Ordering::Relaxed)
+    }
+}
+
 /// The sampling settings the sampler thread re-reads while running.
 ///
 /// Everything else the sampler needs is fixed when it is spawned. These two are
@@ -501,6 +531,7 @@ pub(crate) fn spawn_sampler_thread<Cfg, S>(
     shutdown: Shutdown,
     control: SamplingControl,
     forced: SampleRequest,
+    sensor_interest: SensorInterest,
 ) -> std::io::Result<()>
 where
     Cfg: Send + 'static,
@@ -528,6 +559,10 @@ where
             let current_interval = control.interval();
             if current_interval != interval {
                 interval = current_interval;
+                // The rebuilt scheduler starts with no sensor interest; the read of
+                // `sensor_interest` below restores it, at the cost of one extra
+                // sensor read on the tick after an interval change. Cheaper than
+                // threading the flag through the constructor.
                 scheduler = TierScheduler::new(TierIntervals::derived_from(interval));
                 // The cadence the hysteresis window was filled at no longer applies:
                 // §11.3 treats a break in the measurement stream as a reason to start
@@ -546,6 +581,10 @@ where
                 policy = current_policy;
                 pressure.set_thresholds(policy);
             }
+            // Cheap enough to do every pass, and doing it here rather than on a
+            // channel means the sampler never blocks on the UI thread. A rising
+            // edge makes the sensor group due at once (`set_sensor_interest`).
+            scheduler.set_sensor_interest(sensor_interest.get());
             // A forced refresh collects the fast tier out of turn; the schedule is
             // then marked complete, so `r` brings the next scheduled sample forward
             // rather than adding one on top of it.
@@ -939,6 +978,7 @@ mod tests {
             shutdown.clone(),
             SamplingControl::new(Duration::from_millis(250), Thresholds::default()),
             SampleRequest::new(),
+            SensorInterest::new(),
         )
         .expect("spawns");
         assert_eq!(workers.len(), 1);
@@ -984,6 +1024,134 @@ mod tests {
     }
 
     #[test]
+    fn the_sensor_interest_flag_is_shared_between_its_clones() {
+        let interest = SensorInterest::new();
+        assert!(!interest.get(), "nobody is looking at a sensor at startup");
+
+        interest.set(true);
+        assert!(interest.get());
+
+        // A clone shares the flag: the effect executor holds one end and the
+        // sampler thread the other. A `Copy` bool behind a wrapper would pass
+        // everything above and fail here.
+        let sampler_side = interest.clone();
+        interest.set(false);
+        assert!(!sampler_side.get());
+    }
+
+    /// A source that counts the passes on which the sensor group was due.
+    ///
+    /// [`FakeCollector`] ignores `tick.due` entirely, so nothing it publishes can
+    /// say whether the sampler scheduled a sensor read. This is the only way to
+    /// observe the one thing Task 6 wires up.
+    struct SensorPassCounter {
+        inner: FakeCollector,
+        sensor_passes: Arc<AtomicU64>,
+    }
+
+    impl SnapshotSource for SensorPassCounter {
+        fn name(&self) -> &'static str {
+            self.inner.name()
+        }
+
+        fn capabilities(&self) -> monitrs_core::model::CapabilitySnapshot {
+            self.inner.capabilities()
+        }
+
+        fn sample(
+            &mut self,
+            tick: &SampleTick,
+        ) -> Result<SystemSnapshot, monitrs_collectors::CollectorError> {
+            if tick.due.sensors() {
+                self.sensor_passes.fetch_add(1, Ordering::Relaxed);
+            }
+            self.inner.sample(tick)
+        }
+
+        fn process_detail(
+            &mut self,
+            identity: ProcessIdentity,
+        ) -> monitrs_core::model::ProcessDetailResult {
+            self.inner.process_detail(identity)
+        }
+    }
+
+    /// Spins until `condition` holds or `timeout` expires.
+    fn wait_for(timeout: Duration, mut condition: impl FnMut() -> bool) -> bool {
+        let deadline = Instant::now() + timeout;
+        while Instant::now() < deadline {
+            if condition() {
+                return true;
+            }
+            std::thread::sleep(Duration::from_millis(5));
+        }
+        condition()
+    }
+
+    #[test]
+    fn the_sampler_follows_the_sensor_interest_it_is_given() {
+        // 250ms fast, so 1.25s medium and 7.5s slow (`TierIntervals::derived_from`).
+        // The gap between those two is what the assertions live in: a sensor read
+        // that happens inside 1.5s can only be one the interest asked for.
+        let interval = Duration::from_millis(250);
+        let (sender, receiver) = event_channel::<()>();
+        let shutdown = Shutdown::new();
+        let mut workers = Workers::new();
+        let interest = SensorInterest::new();
+        let sensor_passes = Arc::new(AtomicU64::new(0));
+        let passes = || sensor_passes.load(Ordering::Relaxed);
+
+        spawn_sampler_thread(
+            &mut workers,
+            SensorPassCounter {
+                inner: FakeCollector::new(Scenario::default()),
+                sensor_passes: Arc::clone(&sensor_passes),
+            },
+            sender,
+            shutdown.clone(),
+            SamplingControl::new(interval, Thresholds::default()),
+            SampleRequest::new(),
+            interest.clone(),
+        )
+        .expect("spawns");
+        // Nothing drains the channel here; it coalesces snapshots, so the sampler
+        // keeps running either way. Held so the sender stays alive.
+        let _receiver = receiver;
+
+        // The very first pass has every tier due, sensors included.
+        assert!(
+            wait_for(Duration::from_secs(5), || passes() >= 1),
+            "the first pass reads every group"
+        );
+
+        // Well past the 1.25s medium deadline and nowhere near the 7.5s slow one.
+        std::thread::sleep(Duration::from_millis(1_400));
+        assert_eq!(
+            passes(),
+            1,
+            "nobody is looking, so sensors stay on the slow tier rather than riding \
+             the medium one"
+        );
+
+        // The rising edge clears the sensor deadline, so the next pass — one fast
+        // interval away — must read them. Without the sampler reading the flag the
+        // next sensor read is at 7.5s, three seconds after this timeout.
+        interest.set(true);
+        assert!(
+            wait_for(Duration::from_secs(3), || passes() >= 2),
+            "taking an interest must reach the sampler's scheduler: still {} sensor \
+             passes",
+            passes()
+        );
+
+        shutdown.trigger();
+        assert!(
+            workers.join_all().is_empty(),
+            "the sampler must join cleanly"
+        );
+    }
+
+    #[test]
     fn the_sampler_uses_the_measured_interval_not_the_configured_one() {
         let (sender, receiver) = event_channel::<()>();
         let shutdown = Shutdown::new();
@@ -1002,6 +1170,7 @@ mod tests {
             shutdown.clone(),
             SamplingControl::new(Duration::from_millis(250), Thresholds::default()),
             SampleRequest::new(),
+            SensorInterest::new(),
         )
         .expect("spawns");
 
@@ -1049,6 +1218,7 @@ mod tests {
             shutdown.clone(),
             control.clone(),
             SampleRequest::new(),
+            SensorInterest::new(),
         )
         .expect("spawns");
 
@@ -1145,6 +1315,7 @@ mod tests {
             shutdown.clone(),
             SamplingControl::new(Duration::from_millis(250), Thresholds::default()),
             SampleRequest::new(),
+            SensorInterest::new(),
         )
         .expect("spawns");
 
