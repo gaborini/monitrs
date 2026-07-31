@@ -33,66 +33,6 @@ with it.
 > library API and the JSON export schema; the changelog lists every break. Where a claim
 > has a caveat, the caveat is next to it rather than left out.
 
-## Demo
-
-A real frame, captured from the running program on a Mac with about a thousand
-processes, in strict ASCII mode with colour off — the form that survives a README, a
-terminal without colour, and a screen reader. It is written by
-`crates/monitrs/tests/capture.rs` straight out of the renderer with live data
-(`cargo test -p monitrs --release --test capture -- --ignored`), so it cannot drift
-from what monitrs actually draws, and §20.1's ban on a mocked-up screenshot is kept.
-
-Trimmed to 118 columns on the right for legibility. [`docs/screenshots/`](docs/screenshots/)
-has the full 160-column frame of every screen that has one — Overview, CPU, Storage,
-Inspect and Battery — plus the Unicode variant and the 80×24 compact layout. The hostname and the login name are
-substituted for the machine this was taken on — every measurement, process name and
-state is exactly as rendered, and the substitutes are the same width so no column
-moves. The animation at the top of this file is a plain screen recording with nothing
-substituted, which is why the two show different host names.
-
-```text
-+ monitrs  host:dev-mbp  [>LIVE]  250ms  up 9d 03:41 -----------------------------------------------------------------
-| CPU   49% [##############################################=-----------------------------------------------]  load  7.
-| MEM   67% [###############################################################=------------------------------]  32G/48G
-+ PRESSURE -----------------------+ HISTORY 5m -----------------------------------------------------------------------
-| . CPU     normal        49%     | CPU
-| . MEM     normal        33%     | MEM
-| . NET     normal     3.4K/s     | I/O
-| . LOAD    normal       7.03     | CORE  +=--+*******
-|                                 |
-+ PROCESSES  sort CPU% desc  no kthreads -----------------------------------------------------------------------------
-|      PID USER     S   CPU%  MEM%   RSS  VIRT  READ/s WRITE/s  THR      AGE NAME                             COMMAND
-|>   55629 me       R   263%  1.0%  473M  416G    0B/s  8.3M/s    7    00:09 rustc                            /Users/y
-|    45241 me       R    14%  1.5%  738M  1.8T    0B/s    0B/s   26 03:59:44 Cursor Helper (Renderer)         /Applica
-|    45234 me       R    12%  0.2%  103M  464G    0B/s    0B/s   19 03:59:45 Cursor Helper                    /Applica
-|     1398 me       R    10%  0.3%  129M  416G    0B/s    0B/s   10       9d Terminal                         /System/
-|    55806 me       R   8.9%  0.1%   26M  415G    0B/s    0B/s    5    00:07 capture-35a93566c2c11cd4         /Users/y
-|    37194 me       R   7.6%  0.5%  245M  1.8T    0B/s    0B/s   22    08:47 Google Chrome Helper (Renderer)  /Applica
-|    30365 me       R   7.4%  0.1%   32M  415G    0B/s    0B/s    9    12:39 probe_input_latency-fbafe9f20... /Users/y
-|    12764 me       R   5.8%  0.9%  453M  1.8T    0B/s    0B/s   44    26:24 Google Chrome Helper (Renderer)  /Applica
-|    62728 me       R   5.8%  1.6%  788M  421G    0B/s    0B/s   34 14:21:38 claude                           claude
-|    11623 me       R   3.8%  0.8%  370M  1.8T    0B/s    0B/s   25    27:38 Google Chrome Helper (Renderer)  /Applica
-|    84339 me       R   2.0%  0.7%  328M  465G    0B/s    0B/s   21       3d Google Chrome Helper             /Applica
-|     4571 me       R   1.7%  0.1%   25M  415G    0B/s    0B/s    4       2d python                           /Users/y
-|    12800 me       R   1.6%  0.0%   24M  415G    0B/s    0B/s    4       3d python                           /Users/y
-|    55337 me       R   1.5%  0.4%  199M  1.8T    0B/s    0B/s   22 03:37:45 Cursor Helper (Plugin)           Cursor H
-|    10421 me       R   1.4%  0.8%  415M  421G   38K/s    0B/s   29 18:55:36 claude                           claude
-```
-
-Things worth noticing, all of which are the design rather than the accident of one
-frame:
-
-* **`>` marks the selection, and it starts on the busiest process** — not on PID 1.
-  The cursor follows a process once you choose one, and until then it tracks the top
-  of the table (§7.2).
-* **`normal` is spelled out next to a `.` symbol.** Colour is never the only carrier
-  of meaning, so every state has a redundant character (§5.2).
-* **`n/a` and `denied` are different words.** A metric the OS refused to report is
-  not the same as one this machine cannot produce, and neither is a zero (§4, §26).
-* **`THR` has real numbers.** They come from the native macOS layer; the
-  cross-platform baseline cannot see them, which is why monitrs enriches by default
-  (§9.2).
-
 ## The screens
 
 Seven, on the digit keys, plus six overlays — help, command palette, filter edit, sort
@@ -107,6 +47,18 @@ selector, process detail, and the confirmation that covers both signals and reni
 | `5` | **Network** | per-interface counters, errors, link state, and utilization where the link speed is known |
 | `6` | **Inspect** | every fact about the machine and the selected process, plus what this build cannot measure and why |
 | `7` | **Battery** | charge, wear against design capacity, draw, and the thermal sensors |
+
+The recording above is a plain screen capture with nothing substituted. Plain-text
+frames of every screen except Network live in
+[`docs/screenshots/`](docs/screenshots/): Overview in both ASCII and Unicode, CPU,
+Storage, Inspect and Battery at 160×48, and Processes in the compact 80×24 layout.
+They are written straight out of the renderer with live data by
+`crates/monitrs/tests/capture.rs`
+(`cargo test -p monitrs --release --test capture -- --ignored`), so nothing in this
+repository is a mock-up and no frame can drift from what monitrs actually draws. Only
+the hostname and the login name in them are substituted — every measurement, process
+name and state is exactly as rendered, which is also why the recording and the frames
+show different host names.
 
 ## What makes it different
 
@@ -145,6 +97,13 @@ that memory ratio from the group, because `/proc/meminfo` is not namespaced and 
 host's `used` over a container's limit reports 2000%. It also refuses the tempting
 version of this: the load average is *not* divided by the quota, because
 `/proc/loadavg` counts every process on the machine including other tenants'.
+
+**Native detail on top of a portable baseline.** monitrs starts from the
+cross-platform collector and enriches it through the OS's own interfaces, which is why
+per-process thread counts, wired and compressed memory, and the thermal sensors are
+numbers here rather than blanks. Enrichment only ever upgrades: a native read that
+fails leaves the baseline value it could not improve, so it can never make a metric
+worse than the portable path alone.
 
 **Readable without color.** Every state has a redundant ASCII symbol (`.` `!`
 `X` `?`). A strict 7-bit ASCII mode renders correctly on any terminal, over any
