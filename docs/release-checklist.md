@@ -38,7 +38,12 @@ is what a user actually reads. What is still owed:
   [`benchmarks.md`](benchmarks.md#the-161-end-to-end-budgets) has the numbers, the
   per-read breakdown showing where the time goes, and what it would take to fix.
   This is the one item on this list that is a *product* problem rather than a
-  procedural one.
+  procedural one. Every figure quoted for it, on this machine and in every prior
+  release, is against about a thousand processes — five times §16.1's own
+  200-process, 8-CPU reference workload — so the budget has never actually been
+  read on the workload it names. Step 6 below now has that reading as a step, and
+  [`benchmarks.md`](benchmarks.md#reading-the-idle-cpu-budget-on-its-own-reference-workload)
+  has the protocol.
 * **A release section's date is the day you tag, not the day you wrote it.** Keep a
   Changelog dates a section by its release date, so if the notes were written yesterday
   and the tag goes out today, change that line first. The workflow's `verify` job passes
@@ -290,6 +295,27 @@ report, and what to record. In short:
 
 Automation cannot do these. Do them on **both** a Linux machine and a macOS
 machine, and write down the version and architecture of each.
+
+The idle-CPU budget, on §16.1's own reference workload (8 logical CPUs, 200
+processes, a one-second interval, a five-minute history) rather than on whatever
+this repository's own development machine happens to be running. Every idle-CPU
+figure in `benchmarks.md` up to this release is against roughly a thousand
+processes — five times the reference — so this box is the first time the budget
+is read on the workload it names.
+
+* [ ] On an 8-vCPU Linux instance (Task 12 already has one, running the release
+      archives), extract the tagged archive and run
+      `MONITRS_BINARY=/path/to/extracted/monitrs python3 scripts/measure-overhead.py`.
+      [`benchmarks.md`](benchmarks.md#reading-the-idle-cpu-budget-on-its-own-reference-workload)
+      has the full protocol, the instance shape, and what each outcome means —
+      decided in advance, not written after the fact.
+* [ ] Confirm the script's own printed `workload:` line says the run matched the
+      reference before trusting the median and p95 beside it; if it did not
+      match, record it as the hard case it is rather than as a reading of the
+      budget.
+* [ ] Both figures — median and p95 — recorded in `benchmarks.md`, beside the
+      existing ~1000-process numbers, and this list's own idle-CPU item above
+      updated to say which workload each figure is.
 
 Terminal behaviour. The first two are now **automated** —
 `python3 scripts/verify-terminal-restoration.py` runs the release binary on a real pty,
@@ -591,7 +617,10 @@ owes, carried into each release's *Known limitations* rather than resolved by ti
       has been measured on §16.1's actual reference workload (8 CPUs, 200 processes),
       where the per-process costs would be about five times smaller. Numbers,
       breakdown and the commands that produce them are in
-      [`benchmarks.md`](benchmarks.md#the-161-end-to-end-budgets).
+      [`benchmarks.md`](benchmarks.md#the-161-end-to-end-budgets). Step 6 above
+      now has that reference-workload reading as a step, with the protocol in
+      [`benchmarks.md`](benchmarks.md#reading-the-idle-cpu-budget-on-its-own-reference-workload);
+      it has not been run.
 - [x] **every claim in the README is supported by a test or a documented
       measurement.** §20.1's required contents are all present: the demo frame is
       real and reproducible, every performance figure links to the file that produced

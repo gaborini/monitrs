@@ -685,6 +685,79 @@ rather than calling `Components::refresh` for the whole list on every sensor-tie
 — every 30 seconds idle, every 5 seconds while the Battery screen is visible (§8.6) —
 has that spike to gain back on whichever cadence it lands on.
 
+### Reading the idle-CPU budget on its own reference workload
+
+Every idle-CPU figure above — the passing median and the failing p95 alike — was
+measured on this repository's own development machine: 12 logical cores and
+roughly a thousand processes, not §16.1's stated 8 logical CPUs and 200 processes.
+That is not a rounding difference: the dominant costs are per-process and
+per-device OS reads, so a host running five times the reference process count
+costs several times what the budget was written against. The budget has never
+actually been read on the workload it names. This is that protocol, for whoever
+next has an 8-vCPU machine to hand — most likely the EC2 instance Task 12 already
+runs the tagged release archives on for the platform smoke tests.
+
+**Instance shape.** Any instance advertising 8 vCPUs (an `m5.2xlarge` or
+equivalent) approximates the reference CPU count. Its process count out of the
+box will usually be short of 200 — a fresh Amazon Linux or Ubuntu instance
+typically runs 100–160 — which is close enough that no synthetic process farm is
+required: `scripts/measure-overhead.py` now prints the host's actual process
+count beside its verdict, so a reader can see how close a given instance came
+rather than assuming it matched.
+
+**Binary.** Do not build on the instance. Task 12 is already extracting the
+tagged release archive there to run the smoke tests, so reuse that extraction
+instead of a second one:
+
+```sh
+tar xzf monitrs-X.Y.Z-<target>.tar.gz
+cd monitrs-X.Y.Z-<target>
+```
+
+**Commands**, run from a checkout of this repository at the tagged commit,
+pointed at the extracted binary rather than a locally built one — the script
+needs Python 3 and nothing else:
+
+```sh
+python3 -m py_compile scripts/measure-overhead.py
+MONITRS_BINARY=/path/to/monitrs-X.Y.Z-<target>/monitrs python3 scripts/measure-overhead.py
+```
+
+The printed `monitrs: 1s sampling interval, 300s (5 min) history` line is not
+something to configure: those are `--no-config`'s compiled defaults
+(`crates/monitrs/src/config.rs`), and they already are §16.1's reference interval
+and history span. The `workload:` line above it, and the sentence under it
+saying whether the workload matches the reference, are what to check before
+trusting anything below them — see `scripts/measure-overhead.py`'s own docstring
+for why a Linux run's CPU figure is sourced differently from a Darwin one and
+must not be read as the same kind of number for any *other* reason.
+
+**Where the numbers go.** A new row beside the Mac's, in
+["The §16.1 end-to-end budgets"](#the-161-end-to-end-budgets): the reference host
+as the gate, the ~1000-process Mac as the hard case, which is the framing this
+file already gives every other measurement pair here. Name the instance type,
+vCPU count, OS and the printed process count, the same way the reference-machine
+table at the top of this file names this one.
+
+**What each outcome means, decided in advance:**
+
+* **p95 under 2% on the reference workload:** the budget is met on the workload
+  it names. Both figures get published side by side — the reference host as the
+  gate that passes, the ~1000-process Mac as the hard case that does not — and
+  `docs/release-checklist.md`'s idle-CPU box can be ticked for the reference
+  workload, with the Mac's numbers carried alongside as the harder case rather
+  than dropped.
+* **p95 still over 2% on the reference workload too:** the miss is not an
+  artefact of measuring a workload five times the size the budget names, and the
+  medium tier's measured 13.2–35.0 ms of CPU
+  (["What a tick costs in CPU"](#what-a-tick-costs-in-cpu)) is the next thing to
+  move — moved, not micro-optimised, the same lever Tasks 1–6 used on the sensor
+  read. That changes the release decision: the idle-CPU budget would be a real
+  miss on its own named workload, not only on a harder one nobody asked for.
+
+Neither outcome is written here in advance. Task 12 runs the commands; this file
+gets whichever numbers come back.
+
 ## What is not measured yet
 
 Named here so their absence is not mistaken for a passing grade. §16.3's own list of
@@ -700,7 +773,10 @@ ten benchmarks is now complete; what is left is end-to-end.
   outstanding: it was the measurement, not the program — see
   [`soak-testing.md`](soak-testing.md).)
 * The end-to-end numbers above on the §16.1 reference workload — 8 CPUs and 200
-  processes — rather than on this machine.
+  processes — rather than on this machine. `scripts/measure-overhead.py` can
+  now take that reading directly; see
+  ["Reading the idle-CPU budget on its own reference workload"](#reading-the-idle-cpu-budget-on-its-own-reference-workload)
+  for the protocol. Running it is Task 12's, and it has not been run yet.
 * Whether anything constitutes a redraw busy loop, as opposed to the idle-redraw
   interval the reducer enforces.
 * **How the medium tier's CPU splits between its two reads.** The tier costs
