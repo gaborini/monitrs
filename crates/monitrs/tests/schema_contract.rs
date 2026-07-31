@@ -47,11 +47,18 @@
 //! publish exactly that shape for a carried-over sensor reading, and
 //! `crates/monitrs-core/src/model/memory.rs:205-212` documents a transient
 //! cgroup-limit read producing it too, as an ordinary occurrence rather than an
-//! edge case. [`battery_gone_stale_export_json`] forces one metric — the battery
-//! — into `Stale` on a clone of the same snapshot, specifically so that no
-//! `#[serde(rename)]` on `Stale`'s own fields (a change `cargo-semver-checks`
-//! cannot see, since the Rust field name would be untouched) can silently change
-//! every stale metric's shape without this guard noticing.
+//! edge case. [`sensors_gone_stale_export_json`] forces the sensor group — the
+//! battery *and* the temperatures — into `Stale` on a clone of the same snapshot,
+//! specifically so that no `#[serde(rename)]` on `Stale`'s own fields (a change
+//! `cargo-semver-checks` cannot see, since the Rust field name would be untouched)
+//! can silently change every stale metric's shape without this guard noticing.
+//!
+//! Which fields get aged is not cosmetic, and the 1.0.0 review is the evidence: this
+//! aged only `sensors.battery`, so `sensors.temperatures.stale.*` was missing from
+//! the inventory while being the shape the palette's `:export` actually emits at
+//! idle. A guard that ages an arbitrary subset of a group whose members move
+//! together inventories a shape the program does not emit and misses the one it
+//! does. The rule this now follows: age whatever the collectors age together.
 
 #![allow(
     clippy::expect_used,
@@ -78,7 +85,7 @@ use monitrs_core::units::Percent;
 #[path = "../src/export.rs"]
 mod export;
 
-use export::{RedactionPolicy, SnapshotExport, SCHEMA_VERSION};
+use export::{RedactionPolicy, SCHEMA_VERSION, SnapshotExport};
 
 /// Every leaf path in a JSON document, as `a.b[].c`.
 ///
@@ -297,8 +304,8 @@ fn richest_export_json(snapshot: &SystemSnapshot) -> String {
         .expect("the export serializes")
 }
 
-/// A second export of the same snapshot, with the battery reading carried over
-/// from a previous sample instead of freshly measured.
+/// A second export of the same snapshot, with the **whole sensor group** carried
+/// over from a previous sample instead of freshly measured.
 ///
 /// [`MetricState::into_stale`] (`crates/monitrs-core/src/model/metric.rs:225`) is
 /// the collectors' own way of producing this shape — the same call
@@ -306,18 +313,31 @@ fn richest_export_json(snapshot: &SystemSnapshot) -> String {
 /// for a sensor reading that briefly failed to refresh — so this is not a shape
 /// invented for the test.
 ///
+/// Both sensor fields are aged, and *that* is the point rather than a tidying-up.
+/// The 1.0.0 review found that this function aged only `sensors.battery`, while
+/// `sensors.temperatures` is read on the same cadence and goes stale with it. So at
+/// idle the palette's `:export` (`interactive.rs`, serialising
+/// `state.live_snapshot()`) emitted `sensors.temperatures.stale.value[].celsius`,
+/// which was not one of the paths this inventory recorded, and *omitted*
+/// `sensors.temperatures.available[].celsius`, which was. The guard could not see
+/// either fact: it aged one field of a group whose two fields always move together.
+/// The two are aged together here for the same reason the collectors read them
+/// together.
+///
 /// A snapshot's `sensors.battery` is a single [`MetricState`], not a per-element
 /// array like `cpu.per_core`, so it can only be `Available` or `Stale` in any one
 /// export, never both at once — there is no equivalent here of leaving one array
-/// entry in the other state. Rather than sacrifice `sensors.battery.available.*`
-/// (which [`richest_snapshot`] already produces and which a real machine reports
-/// most of the time) to gain `sensors.battery.stale.*`, this builds a *second*
-/// export from a clone with just that one field aged, and [`exported_paths`]
+/// entry in the other state. Rather than sacrifice `sensors.*.available.*` (which
+/// [`richest_snapshot`] already produces, and which a real machine reports on the
+/// tick a sensor read actually lands) to gain `sensors.*.stale.*`, this builds a
+/// *second* export from a clone with those fields aged, and [`exported_paths`]
 /// takes the union of both exports' paths — so neither shape is lost from the
 /// inventory for the other's sake.
-fn battery_gone_stale_export_json(snapshot: &SystemSnapshot) -> String {
+fn sensors_gone_stale_export_json(snapshot: &SystemSnapshot) -> String {
     let mut snapshot = snapshot.clone();
-    snapshot.sensors.battery = snapshot.sensors.battery.into_stale(Duration::from_secs(45));
+    let age = Duration::from_secs(45);
+    snapshot.sensors.battery = snapshot.sensors.battery.into_stale(age);
+    snapshot.sensors.temperatures = snapshot.sensors.temperatures.into_stale(age);
     SnapshotExport::new(&snapshot, RedactionPolicy::default())
         .to_json()
         .expect("the export serializes")
@@ -331,14 +351,14 @@ fn insert_field_paths(json: &str, out: &mut BTreeSet<String>) {
 
 /// Every field path produced by either of this test's two exports.
 ///
-/// The union of the richest all-`Available` export and the battery-gone-stale
-/// export: see the module doc comment and [`battery_gone_stale_export_json`] for
+/// The union of the richest all-`Available` export and the sensors-gone-stale
+/// export: see the module doc comment and [`sensors_gone_stale_export_json`] for
 /// why a single export cannot carry both shapes of the same field.
 fn exported_paths() -> BTreeSet<String> {
     let snapshot = richest_snapshot();
     let mut paths = BTreeSet::new();
     insert_field_paths(&richest_export_json(&snapshot), &mut paths);
-    insert_field_paths(&battery_gone_stale_export_json(&snapshot), &mut paths);
+    insert_field_paths(&sensors_gone_stale_export_json(&snapshot), &mut paths);
     paths
 }
 
