@@ -9,7 +9,7 @@ expression: text
 || . CPU     normal        79%     | CPU                                                                             :---====+++***###%%%%%#||
 || . MEM     normal        29%     | MEM                                                                             #######################||
 || . SWAP    normal       0B/s     | I/O                                                                             @@@@@@@@@@@@@@@@@@@@@@@||
-|| . LOAD    normal       4.12     |                                                            cpu prev +4 points 30s no baseline ^        ||
+|| . LOAD    normal       4.12     |                               00:00:15Z  cpu prev +4 points  30s no baseline  -00:08 selected ^        ||
 || ? NET     n/a         18M/s     | CORE  +#%@+#%@                                                                                         ||
 |+ PROCESSES  sort CPU% desc --------------------------------------------------------------------------------------------------- 5 total ---+|
 ||      PID USER     S   CPU%  MEM%   RSS  VIRT  READ/s WRITE/s  THR      AGE NAME                     COMMAND                              ||

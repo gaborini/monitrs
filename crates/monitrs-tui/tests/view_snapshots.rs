@@ -1144,8 +1144,10 @@ fn the_network_caret_note_fits_the_eighty_column_panel() {
     // but never a third row, so its caret note is computed but never has a row to
     // render into. The Network screen's history panel is sized from what is left
     // over instead, so at 80 columns it is the narrowest place a caret note
-    // actually reaches the screen — the binding case for §2.5's comparisons
-    // fitting beside it.
+    // actually reaches the screen — the binding case for §2.5's comparisons, and
+    // for the sample's wall clock, fitting beside it. At `Compact` the caret note
+    // is that wall clock's *only* carrier (see `caret_note`'s doc comment), so
+    // this checks for it by name rather than only for the comparison.
     let mut state = Fixture::new((80, 24), ViewId::Network).build();
     for _ in 0..4 {
         let _ = monitrs_tui::app::reduce(
@@ -1173,7 +1175,68 @@ fn the_network_caret_note_fits_the_eighty_column_panel() {
         "the comparison must reach the caret at 80 columns too: {caret_row:?}"
     );
     assert!(
+        caret_row.contains('Z'),
+        "the wall clock is unrecoverable anywhere else at this breakpoint \
+         (Compact's summary strip reads the live snapshot, never the \
+         selection), so it must still lead the note here: {caret_row:?}"
+    );
+    assert!(
         !caret_row.trim_end_matches('|').trim_end().is_empty(),
         "a note that does not fit must never render as a blank row: {caret_row:?}"
+    );
+}
+
+#[test]
+fn the_caret_note_survives_a_three_digit_swing_at_eighty_columns() {
+    // The values in the test above are convenient, not adversarial: a delta of
+    // `+4 points` says little about whether the row actually has room. CpuBusy
+    // is documented `0..=100` (crates/monitrs-core/src/history/sample.rs), so an
+    // idle-to-saturated swing within a single tick is a realistic input, and it
+    // is exactly the moment a reader most wants the comparison on screen.
+    // `SparklineCaret::row` (crates/monitrs-tui/src/widgets/sparkline.rs) does
+    // not truncate a note that does not fit — it drops the whole thing — so a
+    // margin proven only against small numbers is not a margin at all.
+    //
+    // A `Spike` pattern peaking on the newest of 35 samples puts a full 0→100
+    // swing one sample back (the previous-sample baseline) and again roughly
+    // 30 seconds back (every other sample is the pattern's `base`), so both
+    // comparisons render their extreme, longest form at once.
+    let scenario = Scenario {
+        cpu: Pattern::Spike {
+            base: 0.0,
+            peak: 100.0,
+            at: 34,
+        },
+        ..Scenario::default()
+    };
+    let state = Fixture::new((80, 24), ViewId::Network)
+        .with_scenario(scenario)
+        .with_samples(35)
+        .paused()
+        .build();
+    let text = text_of(&frame(&state, ascii()));
+    let caret_row = text
+        .lines()
+        .find(|line| line.contains('^'))
+        .expect("the caret row must survive a three-digit swing at 80 columns");
+    // Whole segments, not fragments: `join_fitting` only ever includes a
+    // complete segment, so if either of these appears at all it appears in
+    // full — a clipped `+10` reading as a different number is what this
+    // guards against.
+    assert!(
+        caret_row.contains("cpu prev +100 points"),
+        "a three-digit previous-sample delta must render whole, not clipped \
+         or dropped: {caret_row:?}"
+    );
+    assert!(
+        caret_row.contains("30s +100 points"),
+        "a three-digit thirty-second delta must render whole, not clipped \
+         or dropped: {caret_row:?}"
+    );
+    let (width, _) = state.size();
+    assert_eq!(
+        monitrs_core::units::display_width(caret_row),
+        usize::from(width) + 2,
+        "the row must still fill exactly its panel width: {caret_row:?}"
     );
 }

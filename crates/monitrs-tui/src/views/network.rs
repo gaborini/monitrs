@@ -420,7 +420,7 @@ fn draw_history(
     let rx = plot_series(ring, HistoryMetric::NetworkRx);
     let tx = plot_series(ring, HistoryMetric::NetworkTx);
     let caret = selected_sample_offset(state);
-    let note = caret_note(state, units);
+    let note = caret_note(state, units, inner.width);
 
     let mut used = 0u16;
     let mut next_row = || -> Option<Rect> {

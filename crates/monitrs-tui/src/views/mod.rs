@@ -107,6 +107,13 @@ const RULE_TAIL: u16 = 3;
 /// noise rather than as a message; the Inspect screen shows the full log instead.
 const MIN_NOTICE_WIDTH: u16 = 12;
 
+/// Cells the caret glyph itself and the gap beside it keep from the note.
+///
+/// Matches [`crate::widgets::sparkline::SparklineCaret`]'s own reservation —
+/// "one cell for the caret, one for the gap, the rest for the note" — so
+/// [`caret_note`]'s budget describes the same row the widget will place it in.
+const CARET_NOTE_RESERVE: u16 = 2;
+
 /// Borders for a panel whose bottom edge is the next panel's top rule.
 ///
 /// §5.5 shares borders between vertically adjacent panels — one row is
@@ -1309,45 +1316,73 @@ pub(crate) fn selected_sample_offset(state: &AppState) -> Option<usize> {
     usize::try_from(newest.saturating_sub(selected)).ok()
 }
 
-/// The caret's note: how the selected sample compares to its baselines, `cpu
-/// prev +41 points 30s +54 points` (§2.5).
+/// The caret's note: what the selected sample means, in priority order —
+/// `22:14:07Z  cpu prev +41 points  30s +54 points  -00:37 selected` (§2.5),
+/// or as much of that as `width` has room for.
 ///
-/// This used to be `-00:37 selected 22:14:07Z` — *when* the selection was, not
-/// what it means. §2.5 asks for the selected sample to be compared against the
-/// previous one and against roughly 30 seconds ago, and this is where that
-/// reaches the interface: [`HistoryView::comparisons`] has existed since 0.1.0
-/// with nothing calling it.
+/// This used to be a fixed `-00:37 selected 22:14:07Z` — *when* the selection
+/// was, not what it means. §2.5 asks for the selected sample to be compared
+/// against the previous one and against roughly 30 seconds ago, and this is
+/// where that reaches the interface: [`HistoryView::comparisons`] has existed
+/// since 0.1.0 with nothing calling it.
 ///
-/// The relative offset and the sample's own wall clock are deliberately not
-/// here any more. The caret row has no width to spare for them: on the
-/// narrowest supported terminal, a caret parked mid-plot leaves roughly half
-/// the row on each side, and two [`MetricComparison::render_delta`] outputs —
-/// whose text this cannot shorten, only [`comparison_text`]'s labels around
-/// them — already reach that budget on their own. Dropping the offset costs
-/// nothing a reader cannot already see: the header's `HISTORY -MM:SS` badge
-/// carries it at every breakpoint (§2.1), including the one-line `Compact`
-/// strip. The sample's absolute wall clock is the one figure this note no
-/// longer states.
-pub(crate) fn caret_note(state: &AppState, units: ByteUnits) -> String {
+/// Built with [`join_fitting`] rather than a fixed format string, from four
+/// segments taken in this order until the row runs out of room:
+///
+/// 1. **The sample's wall clock**, `22:14:07Z`. This is the segment worth
+///    protecting most. At the `Standard` and `Wide` breakpoints it is *also*
+///    shown in [`historical_notes`]'s header meter rows (`sample 22:14:07Z`),
+///    so losing it here would cost nothing there — but at `Compact` (80-99
+///    columns) the header collapses to one row with no space for
+///    `historical_notes` (`Chrome::resolve`, `Layout::fill_compact`), and the
+///    one-line strip it draws instead reads the *live* snapshot, never the
+///    selection (§7.1's `render_summary_strip`). Below `Compact` this caret
+///    note is the only place the selected sample's wall clock is shown at
+///    all, which is why it now leads rather than trails.
+/// 2. **`cpu prev …`**, the previous-sample comparison — §2.5's nearer
+///    baseline, and the more actionable one.
+/// 3. **`30s …`**, the thirty-second comparison — §2.5's other baseline.
+/// 4. **`-00:37 selected`**, the relative offset. Lowest priority on purpose:
+///    it is the one segment that is genuinely redundant everywhere, since the
+///    header's `[<HISTORY -MM:SS]` badge carries the same figure at every
+///    breakpoint including `Compact` (§2.1), and `historical_notes` repeats it
+///    again (`-00:08 behind live`) wherever that panel has room.
+pub(crate) fn caret_note(state: &AppState, units: ByteUnits, width: u16) -> String {
     let ring = state.history();
     let view = state.timeline().view();
+    let offset = view.offset_from_live(ring);
+    let sample = state.timeline().selected_sample(ring);
     let comparisons = view.comparisons(ring, HistoryMetric::CpuBusy);
-    format!(
-        "cpu {} {}",
-        comparison_text("prev", comparisons.previous_sample.as_ref(), units),
-        comparison_text("30s", comparisons.thirty_seconds_ago.as_ref(), units)
-    )
+
+    let segments: Vec<String> = [
+        sample.map(|sample| wall_clock_of(sample.wall_time)),
+        Some(format!(
+            "cpu prev {}",
+            baseline_delta(comparisons.previous_sample.as_ref(), units)
+        )),
+        Some(format!(
+            "30s {}",
+            baseline_delta(comparisons.thirty_seconds_ago.as_ref(), units)
+        )),
+        Some(format!("-{} selected", format_age(offset))),
+    ]
+    .into_iter()
+    .flatten()
+    .collect();
+
+    let budget = usize::from(width.saturating_sub(CARET_NOTE_RESERVE));
+    join_fitting(&segments, budget)
 }
 
-/// One baseline's delta, or the reason there is none.
+/// One baseline's rendered delta, or the word that replaces a missing one.
 ///
 /// A baseline history cannot reach is `no baseline`, never `+0`: §2.5 asks for a
 /// comparison "when history permits", and a zero delta would say the metric did
 /// not change when the truth is that nothing was there to compare with (§26).
-fn comparison_text(label: &str, comparison: Option<&MetricComparison>, units: ByteUnits) -> String {
+fn baseline_delta(comparison: Option<&MetricComparison>, units: ByteUnits) -> String {
     match comparison {
-        Some(comparison) => format!("{label} {}", comparison.render_delta(units)),
-        None => format!("{label} no baseline"),
+        Some(comparison) => comparison.render_delta(units),
+        None => "no baseline".to_owned(),
     }
 }
 
@@ -1786,7 +1821,7 @@ mod tests {
         let mut state = fake_state(scenario, 3, (160, 48), ViewId::Overview);
         let _ = crate::app::reduce(&mut state, Action::TogglePause);
 
-        let note = caret_note(&state, ByteUnits::Iec);
+        let note = caret_note(&state, ByteUnits::Iec, 160);
         assert!(
             note.contains("cpu"),
             "the caret says what was selected; §2.5 asks it to say what changed: {note}"
@@ -1808,7 +1843,7 @@ mod tests {
         );
         let _ = crate::app::reduce(&mut state, Action::TogglePause);
 
-        let note = caret_note(&state, ByteUnits::Iec);
+        let note = caret_note(&state, ByteUnits::Iec, 160);
         assert!(
             note.contains("30s no baseline"),
             "two samples cannot reach thirty seconds back, and a missing baseline is \
