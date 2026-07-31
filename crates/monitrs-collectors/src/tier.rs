@@ -92,7 +92,16 @@ impl DueTiers {
         sensors: false,
     };
 
-    /// Every timed tier due, which is the state of the very first tick.
+    /// Every timed tier due **and the sensor group with them**, which is the state of
+    /// the very first tick.
+    ///
+    /// The sensor group is not a timed tier — its cadence follows what is on screen
+    /// (see [`TierScheduler::sensor_interval`]) — so "every timed tier" would not, on
+    /// its own, imply `sensors: true`. It is included because the first tick reads
+    /// everything, and because a caller asking for the most expensive tick there is
+    /// means to include the sensor read: that is what
+    /// [`Self::fast_only`]'s documentation contrasts against, and what the
+    /// every-thirtieth-tick figure in `docs/benchmarks.md` measures.
     pub const ALL: Self = Self {
         fast: true,
         medium: true,

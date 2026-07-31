@@ -512,8 +512,12 @@ fn explanation(battery: &MetricState<BatterySnapshot>) -> &'static [&'static str
             "A desktop, a server, a virtual machine and a container all read this way.",
             "It is a fact about the hardware, not a failed read and not a charge of zero.",
         ],
+        // Not "on the medium tier" any more: §8.6 moved the battery into the sensor
+        // group, which reads every 30 seconds — except that opening *this* screen
+        // clears the sensor deadline (`TierScheduler::set_sensor_interest`), so the
+        // reading really is seconds away rather than up to half a minute.
         MetricState::WarmingUp => {
-            &["The battery is read on the medium tier; the first reading is seconds away."]
+            &["The battery is read with the sensors, and opening this screen asks for one now."]
         }
         MetricState::PermissionDenied => {
             &["The power source is present but unreadable at this privilege level."]

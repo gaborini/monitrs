@@ -858,7 +858,12 @@ pub fn render_status_footer(
     painter.write_right(0, 0, width, &hints, presentation.style(Token::Muted));
 }
 
-/// The tab strip's segments, condensed to bare digits when the titles do not fit.
+/// The tab strip's segments: every title where they all fit, otherwise bare digits
+/// for the inactive screens and the full title for the active one.
+///
+/// The active screen never loses its name. That is the whole point of the narrow
+/// form — see the comment inside — so "condensed to bare digits" is true of six of
+/// the seven segments and never of the seventh.
 fn tab_segments(state: &AppState, room: u16) -> Vec<(String, Token)> {
     let full: usize = ViewId::ALL
         .iter()
@@ -871,10 +876,17 @@ fn tab_segments(state: &AppState, room: u16) -> Vec<(String, Token)> {
             let active = view == state.view();
             let (open, close) = if active { ('[', ']') } else { (' ', ' ') };
             // Below the width that fits all seven names the inactive screens
-            // degrade to their digit — but the active one keeps its title. Seven
-            // screens stopped fitting below 92 columns in 0.2.0, and losing every
-            // name at once also lost the one piece of chrome that says where the
-            // reader currently is (§5.4). The widest this can get is six bare
+            // degrade to their digit — but the active one keeps its title. Losing
+            // every name at once also lost the one piece of chrome that says where
+            // the reader currently is (§5.4).
+            //
+            // `room` is the width left after the footer's key hints, not the
+            // terminal's: all seven names need 76 cells, so the threshold is 76 plus
+            // whatever the hints take. With the two hints that show while the view is
+            // live (`/ filter  ? help`, 16 cells) that is **92 columns** — the figure
+            // 0.2.0 recorded. Frozen, a third hint (`live`) appears and the threshold
+            // moves up with it, which is why this is computed against `room` rather
+            // than compared against a constant. The widest this can get is six bare
             // digits plus the longest title (`Processes`, 13 cells with its digit,
             // space, and brackets) — 31 cells, comfortably inside the 80-column
             // floor.
@@ -1308,7 +1320,7 @@ pub(crate) fn selected_sample_offset(state: &AppState) -> Option<usize> {
 
 /// The caret's note, as segments in priority order — the sample's wall clock,
 /// then how it compares to its baselines (§2.5), then the relative offset —
-/// for [`SparklineCaret::with_note_segments`] to fit as many of as its own
+/// for [`SparklineCaret::with_note_segments`] to fit as many of them as its own
 /// row has room for.
 ///
 /// This used to return one already-joined string, sized against the row's
@@ -1330,9 +1342,12 @@ pub(crate) fn selected_sample_offset(state: &AppState) -> Option<usize> {
 ///    columns) the header collapses to one row with no space for
 ///    `historical_notes` (`Chrome::resolve`, `Layout::fill_compact`), and the
 ///    one-line strip it draws instead reads the *live* snapshot, never the
-///    selection (§7.1's `render_summary_strip`). Below `Compact` this caret
-///    note is the only place the selected sample's wall clock is shown at
-///    all, which is why it now leads rather than trails.
+///    selection (§7.1's `render_summary_strip`). **At** `Compact`, on the
+///    screens that keep a history panel there, this caret note is the only
+///    place the selected sample's wall clock is shown at all — which is why it
+///    now leads rather than trails. (Not "below `Compact`": below it there is
+///    no history panel and so no caret, and `Compact` is the narrowest band
+///    where this note exists at all.)
 /// 2. **`cpu prev …`**, the previous-sample comparison — §2.5's nearer
 ///    baseline, and the more actionable one.
 /// 3. **`30s …`**, the thirty-second comparison — §2.5's other baseline.

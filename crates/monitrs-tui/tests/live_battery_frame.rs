@@ -61,8 +61,10 @@ fn the_live_battery_screen_reads_as_a_screen_rather_than_as_a_wall_of_placeholde
         ..AppSettings::default()
     });
 
-    // Two samples: the first is all warming up by §8.2, and the battery lands on the
-    // medium tier, so one sample would prove nothing about either.
+    // Two samples: the first is all warming up by §8.2, and the battery is read with
+    // the sensor group rather than every tick, so one sample would prove nothing about
+    // either. `DueTiers::ALL` includes the sensor group, which is what makes the second
+    // sample carry a reading at all.
     let start = Instant::now();
     let mut tick = SampleTick::first(start, SystemTime::now());
     let mut snapshot = None;

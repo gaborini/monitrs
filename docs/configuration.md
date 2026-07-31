@@ -106,8 +106,14 @@ arithmetic, so `1.5GiB` is exactly 1610612736 bytes.
 |---|---|---|---|
 | `interval` | `"1s"` | 250ms–1m | Fast tier: CPU, memory, processes, network and disk counters. |
 | `history` | `"5m"` | 30s–1h | How far back Time Lens can scrub. Must be at least one `interval`. |
-| `medium_interval` | `"5s"` | ≥ `interval` | Filesystem capacity, static device state, sensors. |
+| `medium_interval` | `"5s"` | ≥ `interval` | Filesystem capacity, static device state. |
 | `slow_interval` | `"30s"` | ≥ `interval` | Users, device lists, static metadata. |
+
+Sensors and the battery have no key of their own. They are read as one group whose
+cadence follows what is on screen: `slow_interval` normally, `medium_interval` while
+the Battery screen is visible, and immediately when that screen is opened. So the two
+keys above bound the sensor group as well, from either end (§8.6, and
+[`metrics.md`](metrics.md#sensors-and-battery) for why the group is scheduled this way).
 | `max_history_memory` | `"32MiB"` | ≥ 1MiB | Ceiling for the history ring. If `interval` and `history` would need more, history is shortened and monitrs tells you it was clamped. |
 
 Shortening `interval` makes the machine work harder for finer resolution; 250 ms

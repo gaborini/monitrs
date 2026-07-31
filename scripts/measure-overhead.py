@@ -138,6 +138,22 @@ IS_LINUX = sys.platform.startswith("linux")
 # (`crates/monitrs/src/config.rs`), which already are these two figures.
 REFERENCE_LOGICAL_CPUS = 8
 REFERENCE_PROCESSES = 200
+# How far the live process count may sit from 200 and still count as "the
+# reference workload". Ten percent, i.e. 180-220.
+#
+# It was 50% — 100 to 300 processes — which is not defensible beside a CPU check
+# that demands exact equality. The per-process walk is the largest single term in a
+# fast tick, and it scales with the process count, so a ±50% window admits hosts
+# whose dominant cost differs by a factor of three while the script prints that its
+# figures are "a reading of the budget itself". A 110-process laptop passed.
+#
+# Ten percent is the line because it is below the instrument's own noise: three
+# 60-second runs on one unchanged host produced idle p95 figures spanning
+# 4.30-9.50% (`docs/benchmarks.md`), a factor of 2.2. A workload that moves the
+# dominant term by under 10% cannot be distinguished from that variance, so
+# tightening further would reject hosts for a difference this instrument cannot
+# see, and loosening admits ones where the difference is the measurement.
+REFERENCE_PROCESS_TOLERANCE = 0.10
 REFERENCE_INTERVAL_SECONDS = 1
 REFERENCE_HISTORY_SECONDS = 300
 MONITRS_INTERVAL_SECONDS = 1
@@ -272,17 +288,28 @@ def darwin_open_descriptors(pid):
 
 
 def system_process_count():
-    """Total live processes on this host, via `ps -A -o pid=`.
+    """Total live processes on this host, via `ps -A -o pid=`, or None.
 
     A bare enumeration, not an average of anything, so it does not carry the
     %cpu problem the module docstring describes — it is portable to both
     platforms unchanged, and it is the number that says whether this run
     approximates §16.1's 200-process reference workload or the ~1000-process
     hard case every other figure in this release was measured against.
+
+    `None` when `ps` is missing or fails, rather than a count. That matters
+    because this figure gates the "reading of the budget itself" claim: a
+    failed `ps` returning `0` would have been silently *inside* the old ±50%
+    window's lower edge on a small enough tolerance, and a workload nobody
+    measured must never read as one that matched.
     """
-    out = subprocess.run(
-        ["ps", "-A", "-o", "pid="], capture_output=True, text=True
-    )
+    try:
+        out = subprocess.run(
+            ["ps", "-A", "-o", "pid="], capture_output=True, text=True
+        )
+    except (FileNotFoundError, OSError):
+        return None
+    if out.returncode != 0:
+        return None
     return len(out.stdout.split())
 
 
@@ -439,18 +466,18 @@ def main():
         else None
     )
     # Logical CPUs must match exactly — §16.1 names a specific instance shape,
-    # not a range. Process count is inherently a moving figure even on the
-    # reference host itself, so "matches" allows the same order of magnitude
-    # (within 50%) rather than exact equality: generous enough that ordinary
-    # variation does not read as a mismatch, tight enough that this release's
-    # own 981-1007-vs-200 mistake would still be caught.
+    # not a range. The process count is a moving figure even on the reference host
+    # itself, so it gets a tolerance rather than exact equality, but a narrow one:
+    # see REFERENCE_PROCESS_TOLERANCE for why 10% and not the 50% this started with.
     matches_reference = (
         logical_cpus == REFERENCE_LOGICAL_CPUS
         and process_count is not None
-        and abs(process_count - REFERENCE_PROCESSES) <= REFERENCE_PROCESSES * 0.5
+        and abs(process_count - REFERENCE_PROCESSES)
+        <= REFERENCE_PROCESSES * REFERENCE_PROCESS_TOLERANCE
     )
+    counted = process_count if process_count is not None else "an unknown number of"
     print(
-        f"workload: {logical_cpus} logical CPUs, {process_count} processes, "
+        f"workload: {logical_cpus} logical CPUs, {counted} processes, "
         f"{COLUMNS}x{LINES} terminal"
     )
     print(

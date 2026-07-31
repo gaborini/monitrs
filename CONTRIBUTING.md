@@ -89,15 +89,29 @@ See [`docs/architecture.md`](docs/architecture.md) for the full picture, and
 `monitrs-tui` — the three library crates in the dependency graph above.
 `monitrs` itself ships no library target (`crates/monitrs/Cargo.toml` declares a
 `[[bin]]` and no `[lib]`), so it has no API to freeze; its observable behaviour is
-covered by the export, configuration and keymap promises below instead. Enforced
+covered by the export, configuration and keymap promises below instead. Checked
 by the `semver compatibility` CI job (`.github/workflows/ci.yml`), which compares
-the workspace against the last version published to crates.io and fails on a
-breaking change that was not paired with a major bump.
+the workspace against the last version published to crates.io.
 
-**Six enums are `#[non_exhaustive]` on purpose: `Effect`, `Action`, `ViewId` and
+**Right now that job reports and does not block.** It runs with
+`continue-on-error: true`, because there is no published 1.x release for the
+workspace to be compatible against yet, so a failure would be noise rather than
+information. **At the tag it becomes the gate:** the commit that tags `v1.0.0`
+flips `continue-on-error` to `false` and deletes the comment above it in
+`ci.yml`, and from that point a breaking change not paired with a major bump
+fails CI. Until that flip happens, the freeze described below is a policy with no
+mechanism behind it — which is why the release checklist carries the flip as a
+step of its own.
+
+**Seven enums are `#[non_exhaustive]` on purpose: `Effect`, `Action`, `ViewId` and
 `SortField` (`crates/monitrs-tui/src/action.rs`), the palette `Command`
-(`crates/monitrs-tui/src/app/command.rs`), and `HistoryMetric`
-(`crates/monitrs-core/src/history/sample.rs`).** These are the enums the roadmap
+(`crates/monitrs-tui/src/app/command.rs`), `HistoryMetric`
+(`crates/monitrs-core/src/history/sample.rs`), and `FilterPattern`
+(`crates/monitrs-core/src/process/filter.rs`).** The first six were marked going
+into 1.0.0; `FilterPattern` was already marked long before, for the same reason
+stated differently — it has exactly one variant today and §7.2 leaves room for a
+second, so the attribute is what keeps adding one from being a major bump. These
+are the enums the roadmap
 expects to grow within 1.x — a new effect, a new screen, a new sortable column, a
 new palette command, a new retained metric — and without the attribute, each
 addition would need a major bump the way `Effect::SetSensorInterest` did going
@@ -107,7 +121,7 @@ protection, not an inconvenience, and a new availability state should cost a
 major bump because every one of them must be handled deliberately. Marking an
 enum `#[non_exhaustive]` is itself a breaking change — matching it from another
 crate now requires a wildcard arm — so it can only happen before a major
-release, never inside one; do not add the attribute to a seventh enum without
+release, never inside one; do not add the attribute to an eighth enum without
 the same deliberation this list got. **The cost lands in
 `crates/monitrs/src/interactive.rs`'s `execute`:** its match on `Effect` can no
 longer be proven exhaustive by the compiler, so **adding an `Effect` variant now

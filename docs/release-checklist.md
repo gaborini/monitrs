@@ -18,6 +18,12 @@ this section is that the open items travel with the release instead of being for
 they are repeated in each `CHANGELOG.md` release section under *Known limitations*, which
 is what a user actually reads. What is still owed:
 
+* **The API freeze has no mechanism behind it yet.** `.github/workflows/ci.yml`'s
+  `semver compatibility` job runs `continue-on-error: true`, so it reports a break
+  and CI stays green. Flipping it to `false` is a step of the `1.0.0` release commit
+  ([step 2](#2-bump-the-version)) and is the *only* thing that makes
+  CONTRIBUTING.md's freeze enforceable rather than aspirational. It is called out
+  here as well as there because nothing fails if it is skipped.
 * **No twelve-hour soak is on record**, and it is not going to be produced from a
   workstation: the gate is twelve uninterrupted hours, and a laptop that sleeps does not
   yield one. It is being moved to a dedicated EC2 host under its own project. A 30-minute
@@ -126,6 +132,20 @@ prints the command it runs, and this checklist gives the underlying commands so
   is not possible, which is what that rule was protecting.
 
 ## 2. Bump the version
+
+> **`1.0.0` only, and do it in this same commit: make the semver job blocking.**
+> `.github/workflows/ci.yml`'s `semver compatibility` job runs with
+> `continue-on-error: true`, because before `1.0.0` there is no published 1.x
+> release to be compatible against and a failure would be noise. Set it to
+> `false` and delete the comment above it that says to.
+>
+> This is the **only blocking mechanism the API freeze has**. Everything
+> CONTRIBUTING.md's "What 1.0.0 freezes" section promises about the public API is,
+> until this flip, a policy that nothing enforces — the job reports and CI stays
+> green. It is also the single most forgettable step in the release, because
+> nothing fails if you skip it: CI passes, the tag ships, and the freeze is
+> unenforced until somebody notices. Do it in the release commit at step 7, where
+> the reviewer of that pull request can see it.
 
 The version lives in **exactly five places**, and three of them are one file. Every
 crate uses `version.workspace = true`, so no per-crate manifest is touched.
@@ -372,6 +392,8 @@ Distribution:
 ```sh
 git switch -c release/vX.Y.Z
 git add Cargo.toml Cargo.lock CHANGELOG.md README.md
+# 1.0.0 only: the semver job becomes blocking in this same commit (step 2).
+git add .github/workflows/ci.yml
 git commit -m "release: vX.Y.Z"
 ```
 
