@@ -188,17 +188,19 @@ pub(crate) fn run(cli: &Cli, log_notices: Vec<String>) -> color_eyre::Result<Exi
 
     // --- 7. the loop ------------------------------------------------------
     let channel_health = sender.health();
-    let mut effects_context = EffectContext {
+    // Read before `settings` moves into the constructor below.
+    let mouse_at_startup = settings.display.mouse;
+    let mut effects_context = EffectContext::new(
         detail_tx,
         forced,
         sensor_interest,
-        shutdown: shutdown.clone(),
-        mouse_at_startup: settings.display.mouse,
-        color_explicit: cli.color_was_explicit(),
+        shutdown.clone(),
         settings,
         sender,
-        sampling: sampling.clone(),
-    };
+        sampling.clone(),
+        mouse_at_startup,
+        cli.color_was_explicit(),
+    );
     let mut dirty = true;
 
     loop {
@@ -289,8 +291,13 @@ pub(crate) fn run(cli: &Cli, log_notices: Vec<String>) -> color_eyre::Result<Exi
 }
 
 /// Whether the loop should continue after an effect.
+///
+/// `pub(crate)`, like [`EffectContext`] and `execute` below, only so that
+/// `crates/monitrs/tests/effect_executor.rs` can drive the executor through
+/// `#[path]` (§9b): the guard on the non-exhaustive wildcard arm in `execute` is
+/// worth nothing if it is never called from a test.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-enum Flow {
+pub(crate) enum Flow {
     /// Keep going.
     Continue,
     /// Leave the loop.
@@ -298,7 +305,7 @@ enum Flow {
 }
 
 /// Everything an effect might need. Grouped so `execute` stays one screen.
-struct EffectContext {
+pub(crate) struct EffectContext {
     detail_tx: crossbeam_channel::Sender<DetailRequest>,
     forced: SampleRequest,
     /// Whether the visible screen shows a sensor reading, for the sampler's
@@ -323,13 +330,49 @@ struct EffectContext {
     color_explicit: bool,
 }
 
+impl EffectContext {
+    /// Assembles the context `run` builds at startup.
+    ///
+    /// A constructor rather than public fields, so a test can build one via
+    /// `#[path]` without every field needing to be `pub(crate)` on its own —
+    /// `EffectContext` stays an implementation grouping, not a public shape.
+    #[allow(
+        clippy::too_many_arguments,
+        reason = "one field per effect dependency; grouping them into a sub-struct \
+                  would only move the count, not reduce it"
+    )]
+    pub(crate) fn new(
+        detail_tx: crossbeam_channel::Sender<DetailRequest>,
+        forced: SampleRequest,
+        sensor_interest: SensorInterest,
+        shutdown: Shutdown,
+        settings: Config,
+        sender: crate::runtime::EventSender<ConfigEvent>,
+        sampling: SamplingControl,
+        mouse_at_startup: bool,
+        color_explicit: bool,
+    ) -> Self {
+        Self {
+            detail_tx,
+            forced,
+            sensor_interest,
+            shutdown,
+            settings,
+            sender,
+            sampling,
+            mouse_at_startup,
+            color_explicit,
+        }
+    }
+}
+
 /// Performs one effect.
 ///
 /// This is the only place in the program that acts on the outside world at the
 /// reducer's request. §10.5's whole point is that the reducer decides and this
 /// function does, which is what lets the confirmation chain be tested without a
 /// signal ever being sent.
-fn execute(effect: &Effect, state: &mut AppState, ctx: &mut EffectContext) -> Flow {
+pub(crate) fn execute(effect: &Effect, state: &mut AppState, ctx: &mut EffectContext) -> Flow {
     match effect {
         Effect::None | Effect::RequestRedraw => Flow::Continue,
 
@@ -559,6 +602,16 @@ fn execute(effect: &Effect, state: &mut AppState, ctx: &mut EffectContext) -> Fl
         Effect::Shutdown => {
             ctx.shutdown.trigger();
             Flow::Stop
+        }
+
+        // `Effect` is `#[non_exhaustive]` so 1.x can add effects without a major
+        // bump, and the compiler can therefore no longer prove this match is
+        // complete. An unhandled effect is a bug in this function, not in the
+        // reducer that emitted it, so it is loud rather than fatal: the interface
+        // stays usable and the log names exactly what was dropped (§14.2, §14.3).
+        unhandled => {
+            tracing::error!(effect = ?unhandled, "no executor arm for this effect");
+            Flow::Continue
         }
     }
 }

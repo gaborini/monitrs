@@ -94,6 +94,27 @@ by the `semver compatibility` CI job (`.github/workflows/ci.yml`), which compare
 the workspace against the last version published to crates.io and fails on a
 breaking change that was not paired with a major bump.
 
+**Six enums are `#[non_exhaustive]` on purpose: `Effect`, `Action`, `ViewId` and
+`SortField` (`crates/monitrs-tui/src/action.rs`), the palette `Command`
+(`crates/monitrs-tui/src/app/command.rs`), and `HistoryMetric`
+(`crates/monitrs-core/src/history/sample.rs`).** These are the enums the roadmap
+expects to grow within 1.x — a new effect, a new screen, a new sortable column, a
+new palette command, a new retained metric — and without the attribute, each
+addition would need a major bump the way `Effect::SetSensorInterest` did going
+into 1.0.0. `MetricState` (`crates/monitrs-core/src/model/metric.rs`) is
+deliberately **not** on this list: there, a consumer's exhaustive match is the
+protection, not an inconvenience, and a new availability state should cost a
+major bump because every one of them must be handled deliberately. Marking an
+enum `#[non_exhaustive]` is itself a breaking change — matching it from another
+crate now requires a wildcard arm — so it can only happen before a major
+release, never inside one; do not add the attribute to a seventh enum without
+the same deliberation this list got. **The cost lands in
+`crates/monitrs/src/interactive.rs`'s `execute`:** its match on `Effect` can no
+longer be proven exhaustive by the compiler, so **adding an `Effect` variant now
+requires adding its arm to `execute` by hand** — an effect with no arm falls
+through to the wildcard, which logs an error and continues rather than doing
+nothing silently, but a logged bug in production is still a bug; add the arm.
+
 **The JSON export.** `docs/schema/v2.json` lists every field path version 2
 produces, and `crates/monitrs/tests/schema_contract.rs` fails if one disappears.
 Adding a field is not a break. Removing one, or changing what one means, is a
