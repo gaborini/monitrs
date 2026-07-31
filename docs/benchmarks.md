@@ -347,6 +347,34 @@ medium tier's 85 ms `Components::refresh` once every five seconds — and two ro
 measurement to pass or fail. The reason for the p95 is measured rather than guessed, and
 whether that read can be made cheaper is the open question, not which read it is.
 
+### What a sensor read costs
+
+Measured by `crates/monitrs-collectors/benches/sensor_cost.rs`
+(`cargo bench -p monitrs-collectors --bench sensor_cost`) on the reference machine, 25
+components discovered — the same count the live measurement above saw:
+
+| Variant | Time |
+|---|---|
+| `Components::refresh(true)` — what the collector did before 1.0.0 | 80.1 ms |
+| `Components::refresh(false)` — no list rebuild | 85.6 ms |
+| one component refreshed alone | 334 µs |
+
+The list rebuild is not where the 85 ms goes: `refresh(false)` costs no less than
+`refresh(true)`, if anything a touch more. Reading `sysinfo` 0.39.6's arm64 path
+(`src/unix/apple/macos/component/arm.rs`) says why — `ComponentsInner::refresh`
+re-enumerates every matching IOKit HID service and re-reads each one's name and serial
+`CFString`s on every call regardless of the bool; that enumeration is the cost, not the
+`retain_mut` the bool actually controls. `Component::refresh`, by contrast, already
+holds the service handle and goes straight to `IOHIDServiceClientCopyEvent`: 334 µs,
+about 240× less than reading all 25 through the list.
+
+**A cheaper read exists.** The 85 ms buys re-discovering and re-identifying every
+sensor on the machine, not reading a temperature: a component that already knows which
+service it is can be refreshed for a few hundred microseconds instead of tens of
+milliseconds. A scheduler that keeps a handle to the one component the header shows,
+rather than calling `Components::refresh` for the whole list every five seconds, has
+that p95 spike to gain back.
+
 ## What is not measured yet
 
 Named here so their absence is not mistaken for a passing grade. §16.3's own list of

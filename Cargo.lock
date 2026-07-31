@@ -1142,6 +1142,7 @@ dependencies = [
 name = "monitrs-collectors"
 version = "0.2.0"
 dependencies = [
+ "criterion",
  "libc",
  "monitrs-core",
  "sysinfo",
