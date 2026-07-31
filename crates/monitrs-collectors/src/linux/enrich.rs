@@ -181,7 +181,7 @@ impl LinuxEnrichment {
             cached_uptime: None,
             cached_boot_time_secs: None,
             cached_links: HashMap::new(),
-            // Warming up rather than unsupported until the medium tier has actually
+            // Warming up rather than unsupported until the sensor group has actually
             // looked: claiming "this machine has no battery" before reading
             // `/sys/class/power_supply` would be a fact asserted without evidence.
             cached_battery: MetricState::WarmingUp,
@@ -871,16 +871,11 @@ impl LinuxEnrichment {
         } else {
             CapabilityState::Unsupported
         };
-        // The real gap since the read, never `tick.elapsed` and never the sensor
-        // cadence, which is a target rather than a measurement (§8.1).
-        let age = self.battery_read_at.map_or(Duration::ZERO, |read_at| {
-            tick.captured_at.saturating_duration_since(read_at)
-        });
-        snapshot.sensors.battery = if age.is_zero() {
-            self.cached_battery
-        } else {
-            crate::common::retained_sensor(self.cached_battery, age)
-        };
+        // Through the same rule every sensor publish site uses, so a carried charge
+        // states the real gap since it was read and a fresh one does not pretend to
+        // have one (§4, §8.1).
+        snapshot.sensors.battery =
+            crate::common::published_sensor(self.cached_battery, tick, self.battery_read_at);
     }
 
     /// The first system battery among this tick's power supplies.

@@ -252,16 +252,13 @@ impl CommonCollector {
     /// values marked stale with the real gap since they were measured — never
     /// republished as if they had just been read (§4).
     fn sensors_for(&self, tick: &SampleTick) -> SensorSnapshot {
-        let age = match (tick.due.sensors(), self.sensors_read_at) {
-            (true, _) | (_, None) => Duration::ZERO,
-            (false, Some(read_at)) => tick.captured_at.saturating_duration_since(read_at),
-        };
-        if age.is_zero() {
-            return self.cached_sensors.clone();
-        }
         SensorSnapshot {
-            temperatures: retained_sensor(self.cached_sensors.temperatures.clone(), age),
-            battery: retained_sensor(self.cached_sensors.battery, age),
+            temperatures: published_sensor(
+                self.cached_sensors.temperatures.clone(),
+                tick,
+                self.sensors_read_at,
+            ),
+            battery: published_sensor(self.cached_sensors.battery, tick, self.sensors_read_at),
         }
     }
 
@@ -918,16 +915,43 @@ fn read_temperatures(components: &Components) -> MetricState<Vec<TemperatureRead
     }
 }
 
-/// Marks a carried-over reading stale, leaving every other state alone.
+/// What a sensor reading published on `tick` says about its own age.
 ///
-/// Only a value that was once measured can go stale. `Unsupported` with an age
-/// would claim a measurement that never happened, and `WarmingUp` with an age
-/// would claim one that has not happened yet (§4, §26).
-pub(crate) fn retained_sensor<T>(state: MetricState<T>, age: Duration) -> MetricState<T> {
-    match state {
-        MetricState::Available(value) => MetricState::Stale { value, age },
-        other => other,
+/// **The one staleness rule for every sensor publish site**, here and in both
+/// native layers: this collector's temperatures and battery, the macOS battery, and
+/// the Linux battery all go through it. The sensor group is read on its own cadence
+/// (§8.6) while every tick republishes the cache, so each of those sites faces the
+/// same question — was this measured *now*? — and three answers to it would drift.
+///
+/// Two things it decides, both load-bearing:
+///
+/// * **A reading measured on this tick is published as measured.** The `is_zero`
+///   guard is what stops a fresh value going out as `Stale { age: 0 }`, which would
+///   be a measured number wearing a staleness marker — the §4 violation the sensor
+///   cadence work exists to avoid, not a harmless encoding of the same fact.
+/// * **Only a value that was once measured can go stale.** The transform is
+///   [`MetricState::into_stale`], which owns that rule in the crate that owns the
+///   variants: `Unsupported` with an age would claim a measurement that never
+///   happened, and `WarmingUp` with an age would claim one that has not happened yet
+///   (§4, §26).
+///
+/// `read_at` is when the value was actually measured, and the age is the real gap
+/// from there to this tick — never `tick.elapsed`, which is the fast tier's interval,
+/// and never the configured cadence, which is a target rather than a measurement
+/// (§8.1). `None` means nothing has been read yet, so there is no gap to report.
+#[must_use]
+pub(crate) fn published_sensor<T>(
+    cached: MetricState<T>,
+    tick: &SampleTick,
+    read_at: Option<Instant>,
+) -> MetricState<T> {
+    let age = read_at.map_or(Duration::ZERO, |read_at| {
+        tick.captured_at.saturating_duration_since(read_at)
+    });
+    if age.is_zero() {
+        return cached;
     }
+    cached.into_stale(age)
 }
 
 /// Narrows the platform's `f64` load averages to `f32`.
@@ -1237,13 +1261,32 @@ mod tests {
         );
     }
 
+    /// A tick `gap` after the sensor read, for the pure publish tests.
+    ///
+    /// `elapsed` is deliberately unequal to `gap`: it is the fast tier's measured
+    /// interval, and an age taken from it rather than from the read time would be
+    /// wrong here rather than coincidentally right (§8.1).
+    fn tick_after(read_at: Instant, gap: Duration) -> SampleTick {
+        SampleTick {
+            sequence: 1,
+            captured_at: read_at + gap,
+            wall_time: SystemTime::UNIX_EPOCH,
+            elapsed: Duration::from_millis(250),
+            due: DueTiers::fast_only(),
+        }
+    }
+
     #[test]
     fn a_carried_over_reading_becomes_stale_with_its_age() {
         // Pure, so it runs everywhere and needs no sensors: this is the rule §4
         // states, expressed as a function.
-        let available = MetricState::Available(41.5_f32);
+        let read_at = Instant::now();
         assert_eq!(
-            retained_sensor(available, Duration::from_secs(12)),
+            published_sensor(
+                MetricState::Available(41.5_f32),
+                &tick_after(read_at, Duration::from_secs(12)),
+                Some(read_at)
+            ),
             MetricState::Stale {
                 value: 41.5,
                 age: Duration::from_secs(12)
@@ -1252,19 +1295,52 @@ mod tests {
     }
 
     #[test]
+    fn a_reading_measured_on_this_very_tick_is_published_as_measured() {
+        // The load-bearing guard. `Stale { age: 0 }` is a measured value wearing a
+        // staleness marker: it renders with a `~` and an age of nothing, which tells
+        // the reader the number is old when it was taken this instant (§4).
+        let read_at = Instant::now();
+        assert_eq!(
+            published_sensor(
+                MetricState::Available(41.5_f32),
+                &tick_after(read_at, Duration::ZERO),
+                Some(read_at)
+            ),
+            MetricState::Available(41.5)
+        );
+        // And a sensor that has never been read has no gap to report either, however
+        // far into the session the tick is.
+        assert_eq!(
+            published_sensor(
+                MetricState::Available(41.5_f32),
+                &tick_after(read_at, Duration::from_secs(9)),
+                None
+            ),
+            MetricState::Available(41.5)
+        );
+    }
+
+    #[test]
     fn a_reading_that_was_never_available_is_not_made_stale() {
         // `Unsupported` with an age would claim there was once a measurement.
+        let read_at = Instant::now();
+        let carried = tick_after(read_at, Duration::from_secs(9));
+        let published = |state: MetricState<f32>| published_sensor(state, &carried, Some(read_at));
         assert_eq!(
-            retained_sensor(MetricState::<f32>::Unsupported, Duration::from_secs(9)),
+            published(MetricState::Unsupported),
             MetricState::Unsupported
         );
+        assert_eq!(published(MetricState::WarmingUp), MetricState::WarmingUp);
         assert_eq!(
-            retained_sensor(MetricState::<f32>::WarmingUp, Duration::from_secs(9)),
-            MetricState::WarmingUp
+            published(MetricState::PermissionDenied),
+            MetricState::PermissionDenied
         );
         assert_eq!(
-            retained_sensor(MetricState::<f32>::PermissionDenied, Duration::from_secs(9)),
-            MetricState::PermissionDenied
+            published(MetricState::TemporarilyUnavailable(
+                UnavailableReason::ParseFailed
+            )),
+            MetricState::TemporarilyUnavailable(UnavailableReason::ParseFailed),
+            "a read that failed this tick did not become an old measurement"
         );
     }
 

@@ -20,11 +20,11 @@
 mod collector;
 
 pub use collector::CommonCollector;
-/// The one staleness rule for a carried sensor reading, shared with the native
+/// The one staleness rule for every sensor publish site, shared with the native
 /// layers.
 ///
-/// Re-exported rather than duplicated: the native collectors read the battery on
-/// the same sensor group and have to mark a carried reading the same way, and two
-/// implementations of "what happens to a value that was not measured this tick"
-/// is exactly the drift §4 exists to prevent.
-pub(crate) use collector::retained_sensor;
+/// Re-exported rather than duplicated: the native collectors read the battery on the
+/// same sensor group and face the same question on every tick that did not read it,
+/// and more than one answer to "what happens to a value that was not measured this
+/// tick" is exactly the drift §4 exists to prevent.
+pub(crate) use collector::published_sensor;

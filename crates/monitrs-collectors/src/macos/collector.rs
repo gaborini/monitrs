@@ -331,8 +331,13 @@ impl MacosCollector {
     /// at five seconds while the temperatures beside it on the Battery screen are read
     /// every thirty, and one panel showing two cadences is a difference the reader
     /// cannot see the reason for (§4).
-    fn refresh_sensors(&mut self) {
+    fn refresh_sensors(&mut self, tick: &SampleTick) {
         self.cached_battery = power::read_battery();
+        // Stamped here, where the read happens, rather than by the caller: the age of
+        // a carried reading is measured from this moment, and a timestamp set anywhere
+        // else can disagree with the value it describes. Taken from the tick rather
+        // than from `Instant::now()` so it is on the same clock as the snapshot (§8.1).
+        self.battery_read_at = Some(tick.captured_at);
         // Derived from the reading this method just took, never from the value
         // `sample` publishes: that one is stale-marked on a carried tick, and a
         // capability derived from it would flip to unsupported every few seconds.
@@ -510,10 +515,7 @@ impl SnapshotSource for MacosCollector {
             self.refresh_medium();
         }
         if tick.due.sensors() {
-            self.refresh_sensors();
-            // Stamped from the tick rather than from `Instant::now()`, so the age
-            // below is measured against the same clock the snapshot is (§8.1).
-            self.battery_read_at = Some(tick.captured_at);
+            self.refresh_sensors(tick);
         }
 
         // Deliberately not gated on the fast tier. The tiers are scheduled
@@ -536,18 +538,10 @@ impl SnapshotSource for MacosCollector {
         // cannot see).
         crate::inodes::merge_into(&mut snapshot.filesystems, &self.cached_inodes);
         // The baseline published its own (stale-marked) sensors and leaves the battery
-        // to this layer. The replacement has to carry the same kind of age when this
-        // tick did not read it — and the age is the real gap since the read, never the
-        // tick interval and never the sensor cadence (§4, §8.1).
-        let battery_age = match (tick.due.sensors(), self.battery_read_at) {
-            (true, _) | (_, None) => Duration::ZERO,
-            (false, Some(read_at)) => tick.captured_at.saturating_duration_since(read_at),
-        };
-        snapshot.sensors.battery = if battery_age.is_zero() {
-            self.cached_battery
-        } else {
-            crate::common::retained_sensor(self.cached_battery, battery_age)
-        };
+        // to this layer. The replacement goes through the same rule, so the two halves
+        // of the Battery screen answer "how old is this?" identically (§4, §8.1).
+        snapshot.sensors.battery =
+            crate::common::published_sensor(self.cached_battery, tick, self.battery_read_at);
         // macOS has no PSI, and the baseline leaves the field `WarmingUp` because on
         // Linux it is filled in by the enrichment. Left alone, the radar's three PSI
         // rows would read `warming` for the entire session — a promise that the value

@@ -87,7 +87,7 @@ pub const MAX_COUNTED_FDS: usize = 65_536;
 /// Each entry costs sixteen small attribute reads, and the directory is not only
 /// batteries: a docking station full of bluetooth peripherals adds one entry each.
 /// Sixteen is far above the two batteries and one charger a real laptop has, so the
-/// cap bounds the medium tier's work without reaching a machine anyone owns (§16.1).
+/// cap bounds the sensor group's work without reaching a machine anyone owns (§16.1).
 pub const MAX_POWER_SUPPLIES: usize = 16;
 
 /// Why a read produced no bytes.
