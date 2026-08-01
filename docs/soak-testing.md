@@ -142,11 +142,34 @@ For each of the three release runs, keep in the release record:
 
    ```sh
    # Linux, while the soak runs, in another shell:
-   watch -n60 'grep VmRSS /proc/$(pgrep -f soak- | head -1)/status'
+   watch -n60 'grep VmRSS /proc/$(pgrep -f "^[^ ]*/deps/soak-" | head -1)/status'
 
    # macOS, same idea:
-   while sleep 60; do ps -o rss=,vsz= -p "$(pgrep -f 'soak-' | head -1)"; done
+   while sleep 60; do ps -o rss=,vsz= -p "$(pgrep -f '^[^ ]*/deps/soak-' | head -1)"; done
    ```
+
+   **Anchor the pattern**, and note why this used to be wrong here. The commands
+   above pipe through `tee soak-12h.txt`, so a bare `pgrep -f soak-` matches that
+   `tee` too — and it does not merely *risk* picking it. `pgrep` prints ascending
+   PIDs and `head -1` takes the first; the `tee` is created when the pipeline
+   starts, while the test binary is spawned by cargo minutes later once the build
+   finishes, so the binary's PID is the higher of the two. In the flow this
+   document prescribes, the first match is the `tee`.
+
+   Reading `tee` instead of the soak is worse than reading nothing: its resident
+   size is flat by construction, so the one check meant to corroborate the
+   report's own memory figure would show perfect health no matter what the soak
+   did. `^[^ ]*/deps/soak-` matches only a process whose own path ends in
+   `/deps/soak-…`, where cargo puts the test executable — on Linux it also
+   excludes the linker invocations during the build, which the bare pattern
+   catches as well.
+
+   Both halves were measured, not reasoned: on Amazon Linux 2023 with procps-ng
+   and on macOS, the bare pattern returned the soak binary *and*
+   `tee …/soak-12h.txt`, while the anchored one returned the binary alone.
+
+   Confirm it before trusting sixty samples: `pgrep -af "^[^ ]*/deps/soak-"`
+   should print exactly one line, and it should be the test binary.
 
    `ps` reports kibibytes. It will not agree exactly with the report's figure —
    they are sampled at different instants — but it must agree on the *trend*.
