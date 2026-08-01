@@ -1,7 +1,7 @@
 //! The `sysinfo`-backed baseline collector.
 
 use std::collections::HashMap;
-use std::time::{Duration, SystemTime};
+use std::time::{Duration, Instant, SystemTime};
 
 use monitrs_core::SystemSnapshot;
 use monitrs_core::model::{
@@ -69,6 +69,9 @@ pub struct CommonCollector {
     cached_host: HostSnapshot,
     cached_filesystems: Vec<FilesystemSnapshot>,
     cached_sensors: SensorSnapshot,
+    /// When `cached_sensors` was actually measured, so a carried-over reading can
+    /// state its age (§4). `None` until the first sensor read.
+    sensors_read_at: Option<Instant>,
     capabilities: CapabilitySnapshot,
     /// Whether a native layer supplies the process table (see
     /// [`Self::delegate_process_table`]).
@@ -120,6 +123,7 @@ impl CommonCollector {
             cached_host: HostSnapshot::warming_up(),
             cached_filesystems: Vec::new(),
             cached_sensors: SensorSnapshot::warming_up(),
+            sensors_read_at: None,
             capabilities: baseline_capabilities(),
             process_table_delegated: false,
         })
@@ -184,7 +188,6 @@ impl CommonCollector {
 
     fn refresh_medium(&mut self) {
         self.disks.refresh(true);
-        self.components.refresh(true);
 
         self.cached_filesystems = self
             .disks
@@ -217,22 +220,46 @@ impl CommonCollector {
             })
             .collect();
 
-        self.cached_sensors = SensorSnapshot {
-            temperatures: read_temperatures(&self.components),
-            // The baseline exposes no battery data; the native layers add it.
-            battery: MetricState::Unsupported,
-        };
-
         self.capabilities.filesystem_capacity = if self.cached_filesystems.is_empty() {
             CapabilityState::Unsupported
         } else {
             CapabilityState::Available
+        };
+    }
+
+    /// Reads the sensors: temperatures here, battery in the native layers.
+    ///
+    /// Separate from the medium tier because this is the expensive read of the
+    /// whole collector — about 85 ms on macOS, where it is every SMC key the
+    /// machine has — and §16.1's idle budget cannot absorb it every five seconds.
+    fn refresh_sensors(&mut self) {
+        self.components.refresh(true);
+        self.cached_sensors = SensorSnapshot {
+            temperatures: read_temperatures(&self.components),
+            // The baseline exposes no battery data; the native layers add it.
+            battery: MetricState::Unsupported,
         };
         self.capabilities.temperatures = if self.cached_sensors.temperatures.is_available() {
             CapabilityState::Available
         } else {
             CapabilityState::Unsupported
         };
+    }
+
+    /// The sensor snapshot to publish on this tick.
+    ///
+    /// On a tick that read them, the measurement. On any other tick, the same
+    /// values marked stale with the real gap since they were measured — never
+    /// republished as if they had just been read (§4).
+    fn sensors_for(&self, tick: &SampleTick) -> SensorSnapshot {
+        SensorSnapshot {
+            temperatures: published_sensor(
+                self.cached_sensors.temperatures.clone(),
+                tick,
+                self.sensors_read_at,
+            ),
+            battery: published_sensor(self.cached_sensors.battery, tick, self.sensors_read_at),
+        }
     }
 
     /// Refreshes the fast tier.
@@ -888,6 +915,45 @@ fn read_temperatures(components: &Components) -> MetricState<Vec<TemperatureRead
     }
 }
 
+/// What a sensor reading published on `tick` says about its own age.
+///
+/// **The one staleness rule for every sensor publish site**, here and in both
+/// native layers: this collector's temperatures and battery, the macOS battery, and
+/// the Linux battery all go through it. The sensor group is read on its own cadence
+/// (§8.6) while every tick republishes the cache, so each of those sites faces the
+/// same question — was this measured *now*? — and three answers to it would drift.
+///
+/// Two things it decides, both load-bearing:
+///
+/// * **A reading measured on this tick is published as measured.** The `is_zero`
+///   guard is what stops a fresh value going out as `Stale { age: 0 }`, which would
+///   be a measured number wearing a staleness marker — the §4 violation the sensor
+///   cadence work exists to avoid, not a harmless encoding of the same fact.
+/// * **Only a value that was once measured can go stale.** The transform is
+///   [`MetricState::into_stale`], which owns that rule in the crate that owns the
+///   variants: `Unsupported` with an age would claim a measurement that never
+///   happened, and `WarmingUp` with an age would claim one that has not happened yet
+///   (§4, §26).
+///
+/// `read_at` is when the value was actually measured, and the age is the real gap
+/// from there to this tick — never `tick.elapsed`, which is the fast tier's interval,
+/// and never the configured cadence, which is a target rather than a measurement
+/// (§8.1). `None` means nothing has been read yet, so there is no gap to report.
+#[must_use]
+pub(crate) fn published_sensor<T>(
+    cached: MetricState<T>,
+    tick: &SampleTick,
+    read_at: Option<Instant>,
+) -> MetricState<T> {
+    let age = read_at.map_or(Duration::ZERO, |read_at| {
+        tick.captured_at.saturating_duration_since(read_at)
+    });
+    if age.is_zero() {
+        return cached;
+    }
+    cached.into_stale(age)
+}
+
 /// Narrows the platform's `f64` load averages to `f32`.
 ///
 /// A load average is a small number — even a badly overloaded machine reports
@@ -969,6 +1035,10 @@ impl SnapshotSource for CommonCollector {
         if tick.due.contains(Tier::Medium) {
             self.refresh_medium();
         }
+        if tick.due.sensors() {
+            self.refresh_sensors();
+            self.sensors_read_at = Some(tick.captured_at);
+        }
         if tick.due.contains(Tier::Fast) {
             self.refresh_fast(tick.due.contains(Tier::Medium));
         }
@@ -991,7 +1061,7 @@ impl SnapshotSource for CommonCollector {
             // its history. A collector deciding a pressure state would be
             // deciding policy in the wrong layer.
             pressure: PressureSnapshot::warming_up(),
-            sensors: self.cached_sensors.clone(),
+            sensors: self.sensors_for(tick),
             capabilities: self.capabilities,
             health: CollectorHealth::default(),
         })
@@ -1078,7 +1148,6 @@ impl SnapshotSource for CommonCollector {
 mod tests {
     use super::*;
     use crate::tier::DueTiers;
-    use std::time::Instant;
 
     #[test]
     fn filesystem_classification_separates_virtual_network_and_removable_mounts() {
@@ -1192,6 +1261,89 @@ mod tests {
         );
     }
 
+    /// A tick `gap` after the sensor read, for the pure publish tests.
+    ///
+    /// `elapsed` is deliberately unequal to `gap`: it is the fast tier's measured
+    /// interval, and an age taken from it rather than from the read time would be
+    /// wrong here rather than coincidentally right (§8.1).
+    fn tick_after(read_at: Instant, gap: Duration) -> SampleTick {
+        SampleTick {
+            sequence: 1,
+            captured_at: read_at + gap,
+            wall_time: SystemTime::UNIX_EPOCH,
+            elapsed: Duration::from_millis(250),
+            due: DueTiers::fast_only(),
+        }
+    }
+
+    #[test]
+    fn a_carried_over_reading_becomes_stale_with_its_age() {
+        // Pure, so it runs everywhere and needs no sensors: this is the rule §4
+        // states, expressed as a function.
+        let read_at = Instant::now();
+        assert_eq!(
+            published_sensor(
+                MetricState::Available(41.5_f32),
+                &tick_after(read_at, Duration::from_secs(12)),
+                Some(read_at)
+            ),
+            MetricState::Stale {
+                value: 41.5,
+                age: Duration::from_secs(12)
+            }
+        );
+    }
+
+    #[test]
+    fn a_reading_measured_on_this_very_tick_is_published_as_measured() {
+        // The load-bearing guard. `Stale { age: 0 }` is a measured value wearing a
+        // staleness marker: it renders with a `~` and an age of nothing, which tells
+        // the reader the number is old when it was taken this instant (§4).
+        let read_at = Instant::now();
+        assert_eq!(
+            published_sensor(
+                MetricState::Available(41.5_f32),
+                &tick_after(read_at, Duration::ZERO),
+                Some(read_at)
+            ),
+            MetricState::Available(41.5)
+        );
+        // And a sensor that has never been read has no gap to report either, however
+        // far into the session the tick is.
+        assert_eq!(
+            published_sensor(
+                MetricState::Available(41.5_f32),
+                &tick_after(read_at, Duration::from_secs(9)),
+                None
+            ),
+            MetricState::Available(41.5)
+        );
+    }
+
+    #[test]
+    fn a_reading_that_was_never_available_is_not_made_stale() {
+        // `Unsupported` with an age would claim there was once a measurement.
+        let read_at = Instant::now();
+        let carried = tick_after(read_at, Duration::from_secs(9));
+        let published = |state: MetricState<f32>| published_sensor(state, &carried, Some(read_at));
+        assert_eq!(
+            published(MetricState::Unsupported),
+            MetricState::Unsupported
+        );
+        assert_eq!(published(MetricState::WarmingUp), MetricState::WarmingUp);
+        assert_eq!(
+            published(MetricState::PermissionDenied),
+            MetricState::PermissionDenied
+        );
+        assert_eq!(
+            published(MetricState::TemporarilyUnavailable(
+                UnavailableReason::ParseFailed
+            )),
+            MetricState::TemporarilyUnavailable(UnavailableReason::ParseFailed),
+            "a read that failed this tick did not become an old measurement"
+        );
+    }
+
     #[test]
     fn the_baseline_declares_only_what_sysinfo_can_actually_provide() {
         let capabilities = baseline_capabilities();
@@ -1272,6 +1424,58 @@ mod tests {
     // §17.6 platform smoke tests. `#[ignore]` so `cargo test` stays hermetic and
     // fast for contributors; CI runs them with `-- --ignored` on real Linux and
     // macOS runners.
+
+    #[test]
+    #[ignore = "platform smoke: reads the live system (§17.6)"]
+    fn sensors_are_read_when_due_and_carried_stale_when_not() {
+        let mut collector = CommonCollector::new().expect("constructs");
+        let start = Instant::now();
+        let first = SampleTick::first(start, SystemTime::now());
+        let sampled = collector.sample(&first).expect("first sample");
+        // The first tick is `DueTiers::ALL`, so whatever this machine has is fresh.
+        assert!(
+            !sampled.sensors.temperatures.is_stale(),
+            "a tick that read the sensors must publish them as measured"
+        );
+
+        // Two fast-only ticks, and deliberately unequal: the gap since the sensor read
+        // is five seconds while the last tick's own `elapsed` is three. A `sensors_for`
+        // that measured the age from `tick.elapsed` — which §8.1 forbids anywhere in
+        // this codebase — would report three, so this fixture is what makes the
+        // distinction visible rather than coincidental.
+        let mid = start + Duration::from_secs(2);
+        let second = SampleTick {
+            sequence: 1,
+            captured_at: mid,
+            wall_time: SystemTime::now(),
+            elapsed: Duration::from_secs(2),
+            due: DueTiers::fast_only(),
+        };
+        let _ = collector.sample(&second).expect("second sample");
+
+        let later = start + Duration::from_secs(5);
+        let third = SampleTick {
+            sequence: 2,
+            captured_at: later,
+            wall_time: SystemTime::now(),
+            elapsed: Duration::from_secs(3),
+            due: DueTiers::fast_only(),
+        };
+        let carried = collector.sample(&third).expect("third sample");
+        match (&sampled.sensors.temperatures, &carried.sensors.temperatures) {
+            (MetricState::Available(_), MetricState::Stale { age, .. }) => {
+                assert_eq!(*age, Duration::from_secs(5));
+            }
+            (MetricState::Available(_), other) => {
+                panic!("a carried-over reading must be stale, got {other:?}");
+            }
+            // A machine with no sensors at all: nothing to carry, nothing to claim.
+            (unavailable, carried) => assert_eq!(
+                std::mem::discriminant(unavailable),
+                std::mem::discriminant(carried)
+            ),
+        }
+    }
 
     #[test]
     #[ignore = "platform smoke test: reads the live system"]

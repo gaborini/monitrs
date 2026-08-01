@@ -12,6 +12,195 @@ work yet, regardless of what the source contains.
 
 Nothing yet.
 
+## [1.0.0] - 2026-08-01
+
+The stability promise. Four surfaces are frozen and each has a machine guard behind it.
+On the way there the sensors came off the one-size-fits-all schedule, and a reading
+carried over from an earlier tick now says how old it is instead of being republished as
+though it had just been measured.
+
+### Added
+
+#### Sensors read on their own cadence, and a carried-over reading is dated
+
+* **Temperatures and the battery are read every 30 seconds instead of every 5** — and
+  every 5 seconds while the Battery screen is visible, plus immediately when you open it.
+  They used to ride the 5-second medium tier whatever was on screen. On macOS one such
+  read costs about 85 ms of wall clock, which is a long time to spend on a number nobody
+  is looking at. It did **not** fix the budget it was aimed at, and *Known limitations*
+  below says so rather than leaving you to find out.
+* **A reading carried over from an earlier tick is published as stale, carrying its age.**
+  Until now a value read four seconds ago was republished as freshly measured, and nothing
+  downstream could tell the difference. At a 30-second cadence that would have become a
+  half-minute-old temperature presented as current, which is the one thing this project
+  will not do. The rule reaches the interface, the JSON export, and a library consumer
+  reading `SensorSnapshot` alike.
+* **The header dates its hottest reading**: `temp 62.5C ~00:28`. The alternative was a
+  field that vanished for most of every 30 seconds, which is what filtering to freshly
+  measured readings would have done — a dated number beats a blank.
+* **The Battery screen states the age once per panel**, in the panel's own trailing label
+  — `82% discharging ~00:28`, `2 sensors ~00:28`. A dozen fields unwrapped from one
+  retained snapshot are all exactly the same age, and `~00:28` printed beside each of them
+  would be one fact rendered twelve times; the fields themselves are drawn in the stale
+  style rather than as measurements. The charge meter is the exception, because every
+  meter annotates its own value where it draws it.
+
+#### The Time Lens caret says what changed, not only when
+
+* **A caret parked on a historical sample now carries the sample's wall clock and how its
+  CPU compares with two baselines**, then how far back it is: `22:14:07Z`, then
+  `cpu prev +41 points`, then `30s -6 points`, then `-00:37 selected`. §2.5's comparisons
+  have been in the core since `0.1.0` with nothing calling them; this is where they reach
+  a screen. A baseline the history cannot reach reads `30s no baseline` rather than `+0`,
+  because a zero delta would say the metric did not change when the truth is that there
+  was nothing to compare it against.
+* **The segments are ordered by what nothing else carries**, and the note drops from the
+  end when the caret's side of the row runs out of room. The wall clock leads: between 80
+  and 99 columns this note is the only place the *selected* sample's clock appears at all,
+  because the compact header's one-line strip reads the live snapshot. The relative offset
+  goes last, since the `[<HISTORY -MM:SS]` badge repeats it at every width.
+
+#### What `1.0.0` froze, and the four guards behind it
+
+* **Four surfaces are frozen**: the public API of `monitrs-core`, `monitrs-collectors` and
+  `monitrs-tui`; the JSON export; the configuration keys; and the default keymap.
+  [`CONTRIBUTING.md`](CONTRIBUTING.md)'s *What 1.0.0 froze* is the reference rather than
+  this list — it states the terms of each, what is deliberately **not** frozen (layout,
+  wording, colour, glyph choice and panel arrangement are presentation, not API), and why
+  no one of the four guards can see another's blind spot.
+* **Each surface has a mechanism, not a paragraph.** The API is checked by
+  `cargo-semver-checks` in CI; the export by `docs/schema/v2.json`, an inventory of all 292
+  field paths version 2 produces, and `crates/monitrs/tests/schema_contract.rs`; the
+  configuration keys by `docs/schema/config-v1.json`, all 32 of them, and
+  `crates/monitrs/tests/config_contract.rs`; the keymap by exact key→action assertions in
+  `crates/monitrs-tui/src/keymap.rs`. Three of the four fail a build today. The semver job
+  reports without blocking until the commit that tags `v1.0.0`, which is where it becomes
+  the gate.
+
+### Changed
+
+Breaking for library users, one at a time:
+
+* **Six public enums are now `#[non_exhaustive]`**: `Effect`, `Action`, `ViewId` and
+  `SortField` (`monitrs-tui`), the palette `Command` (`monitrs-tui`), and `HistoryMetric`
+  (`monitrs-core`). Matching one of them from another crate now needs a wildcard arm,
+  which is itself the break — and this is the last moment it can be taken, because the
+  attribute is what buys the whole of `1.x` a new screen, a new effect, a new sortable
+  column, a new palette command or a new retained metric without a major bump.
+  **`MetricState` is deliberately excluded**: there a consumer's exhaustive match is the
+  protection rather than an inconvenience, and a new availability state *should* cost a
+  major bump, because every one of them has to be handled deliberately. (`FilterPattern`
+  in `monitrs-core` carried the attribute already, so seven public enums carry it in
+  total; `CONTRIBUTING.md` lists all seven with their file paths.)
+* **`SparklineCaret::with_note` is replaced by `with_note_segments`**, which takes the note
+  as priority-ordered segments instead of one finished string. Only the widget knows which
+  side of the caret the note lands on and how much room that side has, so only the widget
+  can decide what fits; a caller sizing one string against the row's full width produced
+  notes that vanished outright for most scrub positions on a 160-column Overview.
+* **`Effect::SetSensorInterest(bool)` is a new variant** — how the visible screen tells the
+  sampler to read the sensors every 5 seconds instead of every 30.
+* **`SensorSnapshot::hottest` is deprecated rather than removed.** Its `fresh()` filter
+  returns `None` for exactly the retained readings that became normal in this release, so
+  it is now a trap rather than a convenience; the header's own use of it was the first
+  casualty. It still compiles and still means what it always meant, and its deprecation
+  note names the replacement, which yields the value *together with* its age. Removal
+  waits for a later major version, per the deprecation policy in `CONTRIBUTING.md`.
+
+And two changes that break nothing and still need saying:
+
+* **The JSON export's usual shape changed, and `schema_version` is still `2`.** No field
+  was removed and none was renamed, so the version does not move — but the *variant
+  frequency inverted*. Sensors are stale most of the time now, so a consumer of the command
+  palette's `export snapshot <path>` that reads `sensors.temperatures.available` used to
+  find it on every tick and will now usually find `sensors.temperatures.stale` instead,
+  with the reading under `.value` and its age beside it. The same goes for
+  `sensors.battery`. Both shapes are recorded in `docs/schema/v2.json` and both are
+  guarded. The `monitrs snapshot --format json` subcommand is unaffected: it takes a single
+  sample with every tier due, so its sensors are always freshly measured.
+* **`sampling.slow_interval` and `sampling.medium_interval` govern different things now**,
+  with no key added, removed or renamed. `slow_interval` (30 s) sets the sensor read while
+  nobody is looking at a sensor panel; `medium_interval` (5 s) sets it only while the
+  Battery screen is open, where it used to set it always. A configuration file written
+  before `1.0.0` still loads and still means what it says about the tiers.
+  [`docs/configuration.md`](docs/configuration.md) is the record, because a frozen key
+  whose *meaning* moves is precisely the thing none of the four guards can see.
+
+### Fixed
+
+* **Below 92 columns the tab strip lost every screen name, including the active one's** —
+  a regression `0.2.0` listed in its own *Known limitations*. The active screen keeps its
+  title, bracketed, and only the other six condense to bare digits, so the one piece of
+  chrome that says where you are survives the narrow bands. The threshold is computed from
+  the room the footer's key hints leave rather than compared against a constant, so it
+  moves with them: 92 columns with the two hints a live view shows, 100 while the timeline
+  is frozen and a third appears.
+
+### Known limitations
+
+Compiled by re-reading `0.2.0`'s list and checking each item against the code and
+[`docs/benchmarks.md`](docs/benchmarks.md), rather than by copying it forward — plus what
+this release itself leaves open. Every figure below comes from that file.
+
+* **The idle self-CPU p95 still misses §16.1's budget, and closing it is what this release
+  was built for.** Median **0.60–0.85%** against 1%, which passes; p95 **4.30–9.50%**
+  against 2%, which does not. The previous figures were 0.5–1.1% and 6–11%, so the p95
+  improved and the two median ranges overlap — "barely moved" is the honest reading of the
+  median. With the Battery screen visible, where the sensors return to five seconds, the
+  median is clearly worse (**1.20–1.70%**) while the p95 (**6.00–8.30%**) does not separate
+  from the Overview row's at all. §16.1's gate is about idle, and idle is the Overview row.
+* **The cause this release was designed around turned out to be the wrong one**, which is
+  the most useful thing this section can tell you. The plan assumed the ~85 ms `sysinfo`
+  temperature read on the 5-second tier was what the budget was paying for. A thread- and
+  process-CPU instrument built afterwards bounded that read at about **4 ms of CPU**: the
+  85 ms is a blocking wait on in-kernel IOKit calls, and §16.1 budgets CPU. What is
+  measured to cost CPU is the medium tier's remaining work — its two filesystem-capacity
+  reads — at **13.2–35.0 ms beyond a fast-only tick, positive in 15 of 15 runs**, against
+  a whole-tick budget of roughly 16 ms. Which of the two reads carries it was never
+  separated, and where the sensor read's 85 ms actually goes is a hypothesis rather than a
+  finding. The sensor work stands on its own merits regardless: the wall-clock cost is
+  real, a 136 ms tick occupies the sampler thread whether or not it burns CPU, and a
+  retained reading that says its age is right whatever the budget does.
+* **Every figure in this release was measured against 981–1007 processes**, five times
+  §16.1's 200-process, 8-CPU reference workload, and the dominant costs scale with process
+  count. The budget has never been read on the workload it was written for.
+  `scripts/measure-overhead.py` can now take that reading, and prints the host's real
+  process count beside its verdict so it cannot call a mismatched host a reference
+  measurement. The run is owed; `docs/benchmarks.md` says in advance what each outcome
+  means.
+* **The twelve-hour soak was deferred until after this release, by decision.** It is a
+  blocking gate, and it did not lapse: on 2026-08-01 the maintainer decided to tag `1.0.0`
+  first and run the soak after, and `docs/release-checklist.md`'s step 5 records the
+  decision, its reasoning, and the deadline — all three runs within seven days of the tag.
+  What exists instead is a 30-minute run with the shipped collector, which shows no growth:
+  resident size fell, retained history stayed bounded, file descriptors were flat at 3, and
+  nothing was dropped. §16.1 asks for twelve hours, so that is the right shape rather than
+  the gate. The trade being made is that a leak is a `1.0.1` patch and cannot touch what
+  this release froze. What the trade does **not** cover is that **nothing has been soaked
+  on Linux at all**, which is also the only configuration in which the descriptor budget is
+  exercised — so the Linux run is the one carrying real unknown. If the soak finds
+  something, it will appear in `1.0.1`'s notes and in `docs/soak-testing.md`.
+* **Two of the seven screens have never been seen on Linux.** The Battery screen's Linux
+  collector is tested from captured `/sys/class/power_supply` fixtures and the inode reader
+  from `statfs` errno cases, both on macOS; no Linux machine has drawn either. Every frame
+  in `docs/screenshots/` is a macOS frame.
+* **Four of the six published archives have never been executed.** Every archive's checksum
+  and build attestation verifies, and the two macOS ones have been run from the published
+  tarball — the x86_64 one only under Rosetta, where it reports temperatures as
+  unsupported. Nobody has run the four Linux archives on their own hardware. Unchanged
+  since `0.1.0`.
+* A slow terminal can still block a frame for an unbounded time, and no instrument here can
+  see it: frame time is measured through ratatui's `TestBackend`, which stops short of the
+  write to the terminal, and the soak harness has no renderer. Whether anything constitutes
+  a redraw busy loop, as opposed to the idle-redraw interval the reducer enforces, is
+  likewise unmeasured.
+* Device busy time remains unsupported on macOS: there is no documented API for it. On
+  macOS the Battery screen's cycles, capacity, wear, pack temperature and watts read `n/a`
+  for the related reason — they live in the undocumented `AppleSmartBattery` registry
+  properties §9.3 forbids this build from reading — and are real on Linux.
+* PSI is Linux-only, and says `n/a` on macOS rather than promising a value that will never
+  arrive.
+* Timestamps are UTC and labelled `Z`: no time-zone database is bundled.
+
 ## [0.2.0] - 2026-07-30
 
 Two more screens, the container facts the collector was already reading, and a way to
@@ -398,6 +587,7 @@ Named because §16.1's own last line asks for measurement rather than claims:
   the Rust ecosystem norm and this project's dependency licence policy. Anyone who
   cloned the repository at its first commit saw the earlier licence.
 
-[Unreleased]: https://github.com/gaborini/monitrs/compare/v0.2.0...HEAD
+[Unreleased]: https://github.com/gaborini/monitrs/compare/v1.0.0...HEAD
+[1.0.0]: https://github.com/gaborini/monitrs/releases/tag/v1.0.0
 [0.2.0]: https://github.com/gaborini/monitrs/releases/tag/v0.2.0
 [0.1.0]: https://github.com/gaborini/monitrs/releases/tag/v0.1.0

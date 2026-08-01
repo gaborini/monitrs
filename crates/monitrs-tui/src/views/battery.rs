@@ -62,6 +62,50 @@
 //! Nothing here concludes thermal throttling from a temperature: §11.3 forbids it,
 //! and the `!` marker on a hot row is the sensor's own claim about its own threshold.
 //!
+//! # Where a retained reading's age goes
+//!
+//! Both metrics on this screen are read on the sensor cadence rather than every tick,
+//! so both arrive as [`MetricState::Stale`] most of the time — and §4 allows a retained
+//! value on screen only alongside its age. The awkward part is that the `Stale`
+//! envelope wraps the *whole* [`BatterySnapshot`] and the *whole* reading list, while
+//! what is on screen is a dozen fields unwrapped out of them. Every one of those fields
+//! is the same age.
+//!
+//! So the age is stated **once per panel, in the panel's own trailing label** —
+//! `82% discharging ~00:28`, `2 sensors ~00:28` — and that label is the only place any
+//! of it appears as *text*. Two reasons it goes there rather than on each field:
+//!
+//! * `~00:28` printed six times down a three-row panel is one fact rendered as six,
+//!   and the trailing label is already where each panel describes itself.
+//! * `VALUE_WIDTH` is eleven cells, which holds `31.4C` and not `31.4C ~00:28`.
+//!   Widening it to thirteen would cost eight cells of a row that already truncates at
+//!   80 columns, permanently, to make room for a suffix that is usually absent.
+//!
+//! The fields are still routed through [`states::describe`] with the envelope's
+//! staleness pushed into them (`retained_field`), because a 28-second-old instantaneous
+//! wattage must not be *drawn* as a fresh measurement either. **What that buys them is a
+//! style and not a character:** `push_field` renders
+//! [`MetricDisplay::fitted`], which emits the text alone — [`MetricDisplay::flagged`] is
+//! the form that prefixes the symbol, and no field on this screen uses it. So each
+//! retained field is [`Token::Stale`], which is `DIM | ITALIC` and therefore survives
+//! [`ColorDepth::Off`] (`theme::Token::emphasis`), and the `~` itself appears only in the
+//! panel label above. Colour is not the only carrier (§5.2, §5.3), but the redundant cue
+//! here is an attribute rather than a glyph, and the text that names the age is one row
+//! away rather than in the cell.
+//!
+//! A field that is unavailable in its own right keeps its own reason and its own symbol,
+//! since [`MetricState::into_stale`] only touches `Available`.
+//!
+//! One consequence worth knowing before editing: because the cells differ only by style,
+//! a snapshot taken through `text_of` cannot see the difference, which is why
+//! `a_retained_pack_is_styled_stale_at_the_call_site_and_not_only_in_the_helper`
+//! inspects spans instead.
+//!
+//! The one place the age is repeated is the charge meter, which annotates its own value
+//! ([`Meter`] does this for every metric it draws) — that is the widget's rule, not this
+//! screen's, and it is right there beside the figure it dates.
+//!
+//! [`ColorDepth::Off`]: crate::theme::ColorDepth::Off
 //! [`SensorSnapshot::battery`]: monitrs_core::model::SensorSnapshot::battery
 //! [`TemperatureReading::share_of_critical`]: monitrs_core::model::TemperatureReading::share_of_critical
 //! [`TemperatureReading::peak_celsius`]: monitrs_core::model::TemperatureReading::peak_celsius
@@ -85,8 +129,8 @@ use crate::widgets::states::{self, MetricDisplay};
 use crate::widgets::{Meter, Presentation};
 
 use super::{
-    Chrome, SHARED_BOTTOM, draw_bordered_panel, inner_of, inset, muted_line, row_builder,
-    split_rows, truncation_label, write_lines,
+    Chrome, SHARED_BOTTOM, draw_bordered_panel, fit_label, inner_of, inset, muted_line,
+    row_builder, split_rows, truncation_label, write_lines,
 };
 
 /// Cells reserved for a field label, wide enough for `TO EMPTY` and `CAPACITY`.
@@ -210,8 +254,12 @@ fn draw_battery(
     let mut lines = vec![charge_line(&sensors.battery, presentation, inner.width)];
     match sensors.battery.displayable() {
         Some((battery, _)) => {
-            lines.push(vitals_line(battery, presentation, inner.width));
-            lines.push(capacity_line(battery, presentation, inner.width));
+            // The age of the envelope these fields came out of, so each of them can be
+            // drawn as the retained reading it is. The figure itself was stated once, in
+            // the trailing label above.
+            let retained = retained_age(&sensors.battery);
+            lines.push(vitals_line(battery, retained, presentation, inner.width));
+            lines.push(capacity_line(battery, retained, presentation, inner.width));
         }
         None => {
             // §4: name the absence in words. The meter above already carries the
@@ -226,13 +274,51 @@ fn draw_battery(
     write_lines(buffer, inner, &lines);
 }
 
-/// The panel's trailing label: `82% discharging`, or the reason there is nothing.
+/// The panel's trailing label: `82% discharging ~00:28`, or the reason there is nothing.
+///
+/// The age is this panel's single statement of how old everything in it is (see the
+/// module documentation), so it goes through [`states::describe`] and
+/// [`MetricDisplay::annotated`] rather than being assembled by hand — the charge in
+/// `82%` is a measurement like any other, and an undated one here would be the panel
+/// vouching for the freshness of every figure below it.
 fn headline(battery: &MetricState<BatterySnapshot>) -> String {
-    match battery.displayable() {
-        Some((battery, _)) => format!("{} {}", battery.charge, battery.state.label()),
+    if battery.displayable().is_none() {
         // Not a metric placeholder: it is the panel describing itself, which is what
         // `muted_line`'s own documentation reserves plain sentences for.
-        None => "no battery on this machine".to_owned(),
+        return "no battery on this machine".to_owned();
+    }
+    states::describe(battery, |battery: &BatterySnapshot| {
+        format!("{} {}", battery.charge, battery.state.label())
+    })
+    .annotated()
+}
+
+/// How old the retained value in `state` is, or `None` when it was freshly measured.
+///
+/// The panels on this screen unwrap a `Stale` envelope and render its inner fields, so
+/// they need the envelope's age separately from its value.
+fn retained_age<T>(state: &MetricState<T>) -> Option<Duration> {
+    state
+        .displayable()
+        .and_then(|(_, age)| state.is_stale().then_some(age))
+}
+
+/// One field of a retained snapshot, marked with the age of the envelope it arrived in.
+///
+/// The `Stale` envelope sits around the whole snapshot; each field inside it is
+/// `Available`, because each one *was* available when the read happened. Describing them
+/// as they stand paints a 28-second-old instantaneous wattage in the style of a fresh
+/// measurement, which is the distinction §4 exists to protect. Pushing the envelope's
+/// staleness down gives every field the stale token and the `~` cue; the age is printed
+/// once, in the panel's trailing label.
+///
+/// [`MetricState::into_stale`] leaves anything that is not `Available` alone, so a field
+/// the platform refused keeps `permission denied` and its own symbol rather than being
+/// recast as a retained reading.
+fn retained_field<T>(state: MetricState<T>, retained: Option<Duration>) -> MetricState<T> {
+    match retained {
+        Some(age) => state.into_stale(age),
+        None => state,
     }
 }
 
@@ -260,8 +346,12 @@ fn charge_line(
 }
 
 /// `TO EMPTY  4h 00m    CYCLES  214    TEMP  31.4C    POWER  12.4 W`
+///
+/// `retained` is the age of the envelope the pack arrived in, which every field on this
+/// row shares; see [`retained_field`].
 fn vitals_line(
     battery: &BatterySnapshot,
+    retained: Option<Duration>,
     presentation: Presentation<'_>,
     width: u16,
 ) -> Line<'static> {
@@ -275,21 +365,31 @@ fn vitals_line(
     let fields = [
         (
             remaining_label,
-            states::describe(&battery.time_remaining, |value| remaining_text(*value)),
+            states::describe(
+                &retained_field(battery.time_remaining.as_ref(), retained),
+                |value: &&Duration| remaining_text(**value),
+            ),
         ),
         (
             "CYCLES",
-            states::describe(&battery.cycle_count, u32::to_string),
+            states::describe(
+                &retained_field(battery.cycle_count.as_ref(), retained),
+                |count: &&u32| count.to_string(),
+            ),
         ),
         (
             "TEMP",
-            states::describe(&battery.temperature_celsius, |celsius| {
-                format!("{celsius:.1}C")
-            }),
+            states::describe(
+                &retained_field(battery.temperature_celsius.as_ref(), retained),
+                |celsius: &&f32| format!("{celsius:.1}C"),
+            ),
         ),
         (
             "POWER",
-            states::describe(&battery.power_watts, |watts| format!("{watts:.1} W")),
+            states::describe(
+                &retained_field(battery.power_watts.as_ref(), retained),
+                |watts: &&f32| format!("{watts:.1} W"),
+            ),
         ),
     ];
     for (index, (label, display)) in fields.iter().enumerate() {
@@ -305,19 +405,25 @@ fn vitals_line(
 ///
 /// The two capacities are printed together and the health beside them, because the
 /// wear figure is only interpretable next to the numbers it came out of.
+///
+/// `retained` is the age of the envelope the pack arrived in; see [`retained_field`].
 fn capacity_line(
     battery: &BatterySnapshot,
+    retained: Option<Duration>,
     presentation: Presentation<'_>,
     width: u16,
 ) -> Line<'static> {
     let mut row = row_builder(presentation, width);
-    let capacity = states::describe(&battery.capacity, |capacity: &BatteryCapacity| {
-        format!(
-            "{} full of {} design",
-            watt_hours(capacity.full_microwatt_hours),
-            watt_hours(capacity.design_microwatt_hours)
-        )
-    });
+    let capacity = states::describe(
+        &retained_field(battery.capacity.as_ref(), retained),
+        |capacity: &&BatteryCapacity| {
+            format!(
+                "{} full of {} design",
+                watt_hours(capacity.full_microwatt_hours),
+                watt_hours(capacity.design_microwatt_hours)
+            )
+        },
+    );
     row.push_field(
         "CAPACITY",
         LABEL_WIDTH,
@@ -340,7 +446,7 @@ fn capacity_line(
         &mut row,
         presentation,
         "HEALTH",
-        &states::describe_percent(&battery.health()),
+        &states::describe_percent(&retained_field(battery.health(), retained)),
     );
     row.finish()
 }
@@ -419,8 +525,12 @@ fn explanation(battery: &MetricState<BatterySnapshot>) -> &'static [&'static str
             "A desktop, a server, a virtual machine and a container all read this way.",
             "It is a fact about the hardware, not a failed read and not a charge of zero.",
         ],
+        // Not "on the medium tier" any more: §8.6 moved the battery into the sensor
+        // group, which reads every 30 seconds — except that opening *this* screen
+        // clears the sensor deadline (`TierScheduler::set_sensor_interest`), so the
+        // reading really is seconds away rather than up to half a minute.
         MetricState::WarmingUp => {
-            &["The battery is read on the medium tier; the first reading is seconds away."]
+            &["The battery is read with the sensors, and opening this screen asks for one now."]
         }
         MetricState::PermissionDenied => {
             &["The power source is present but unreadable at this privilege level."]
@@ -447,9 +557,12 @@ fn draw_thermal(
         .temperatures
         .displayable()
         .map(|(readings, _)| readings);
+    // Sensors run on their own cadence, so this list is a retained one most of the time.
+    // Its age is the panel's to state (see the module documentation) and the rows' to be
+    // marked with.
+    let retained = retained_age(&sensors.temperatures);
     let probe = inner_of(presentation, area, Borders::ALL);
     let room = usize::from(probe.height);
-    let total = readings.map_or(0, Vec::len);
     // Apple Silicon declares no critical threshold on any sensor, so on that machine
     // every one of seventeen rows would carry the same "no declared limit" note.
     // Saying it once, in the panel's own label, is the difference between a fact and
@@ -459,11 +572,26 @@ fn draw_thermal(
     let unscaled = readings.is_some_and(|readings| {
         !readings.is_empty() && readings.iter().all(|r| r.share_of_critical().is_none())
     });
-    let trailing = match readings {
-        Some(_) if unscaled => format!("{total} sensors, none declares a limit"),
-        Some(_) => {
+    // `annotated()` rather than a hand-built count, so a retained list says `2 sensors
+    // ~00:28` and the age cannot be separated from the readings it applies to.
+    let counted = states::describe(
+        &sensors.temperatures,
+        |readings: &Vec<TemperatureReading>| {
+            let total = readings.len();
             truncation_label(room.min(total), total).unwrap_or_else(|| format!("{total} sensors"))
-        }
+        },
+    )
+    .annotated();
+    let trailing = match readings {
+        // Through `fit_label` because the label now has up to two clauses: at 80 columns
+        // the "no limit" note does not fit, and losing the count and the age with it
+        // would be the worse trade (§5.4).
+        Some(_) if unscaled => fit_label(
+            &[counted, "none declares a limit".to_owned()],
+            "THERMAL SENSORS",
+            area.width,
+        ),
+        Some(_) => counted,
         None => absence_reason_for_sensors(&sensors.temperatures).to_owned(),
     };
     let inner = inset(draw_bordered_panel(
@@ -522,14 +650,20 @@ fn draw_thermal(
     let lines: Vec<Line<'static>> = ordered
         .into_iter()
         .take(room)
-        .map(|reading| thermal_line(reading, presentation, inner.width, unscaled))
+        .map(|reading| thermal_line(reading, retained, presentation, inner.width, unscaled))
         .collect();
     write_lines(buffer, inner, &lines);
 }
 
 /// `performance   62.5C  [####----]  high 95.0C  crit 105.0C`
+///
+/// `retained` is the age of the reading list this row came out of. It is not printed
+/// here — the panel's trailing label carries it once for all the rows — but it decides
+/// how the figure is *styled*, because a retained temperature drawn in the colour of a
+/// fresh one is the same claim as an undated one (§4, §5.3).
 fn thermal_line(
     reading: &TemperatureReading,
+    retained: Option<Duration>,
     presentation: Presentation<'_>,
     width: u16,
     panel_says_unscaled: bool,
@@ -547,13 +681,21 @@ fn thermal_line(
     // §5.2 and §11.3: the marker is the *sensor's* claim that it is past its own
     // critical threshold, and nothing here turns that into a throttling diagnosis.
     let critical = reading.is_critical() == Some(true);
+    // Through `states` so the retained figure picks up `Token::Stale` from the one place
+    // that decides what a state looks like. `Critical` still wins where the sensor says
+    // it is past its limit: the `!` beside the figure is an alert, and an alert the user
+    // has to act on outranks the mark saying when it was taken.
+    let degrees = states::describe(
+        &retained_field(MetricState::Available(reading.celsius), retained),
+        |celsius: &f32| format!("{celsius:.1}C{}", if critical { "!" } else { "" }),
+    );
     let token = if critical {
         Token::Critical
     } else {
-        Token::Text
+        degrees.token()
     };
     row.push_field(
-        &format!("{:.1}C{}", reading.celsius, if critical { "!" } else { "" }),
+        &degrees.fitted(usize::from(DEGREES_WIDTH), glyphs),
         DEGREES_WIDTH,
         Align::Right,
         presentation.style(token),
@@ -650,6 +792,24 @@ mod tests {
             .collect()
     }
 
+    /// The style of the first span whose text contains `needle`.
+    ///
+    /// The styles are exactly what [`text_of`] throws away, and on this screen they are
+    /// the *only* thing separating a retained field from a freshly measured one: the
+    /// cells are byte-identical either way, because `push_field` renders
+    /// `MetricDisplay::fitted` and that never emits the `~`. So a test — or a snapshot —
+    /// that reads only text cannot fail when `retained_field` is dropped from a call
+    /// site, which is the hole this exists to close.
+    fn style_of(line: &Line<'static>, needle: &str) -> ratatui::style::Style {
+        line.spans
+            .iter()
+            .find(|span| span.content.contains(needle))
+            .map_or_else(
+                || panic!("no span containing {needle:?} in {:?}", text_of(line)),
+                |span| span.style,
+            )
+    }
+
     fn battery() -> BatterySnapshot {
         BatterySnapshot {
             charge: Percent::new(82.0).expect("finite"),
@@ -742,11 +902,11 @@ mod tests {
         // `4h 00m` beside a charging pack and beside a discharging one are opposite
         // claims, and an unlabelled figure would be read as whichever the user
         // expected.
-        let discharging = text_of(&vitals_line(&battery(), presentation(), 140));
+        let discharging = text_of(&vitals_line(&battery(), None, presentation(), 140));
         assert!(discharging.contains("TO EMPTY"), "{discharging}");
         let mut charging = battery();
         charging.state = ChargeState::Charging;
-        let text = text_of(&vitals_line(&charging, presentation(), 140));
+        let text = text_of(&vitals_line(&charging, None, presentation(), 140));
         assert!(text.contains("TO FULL"), "{text}");
     }
 
@@ -756,7 +916,7 @@ mod tests {
         // answer, so a pack whose platform publishes nothing gets a placeholder.
         let mut unreported = battery();
         unreported.time_remaining = MetricState::Unsupported;
-        let text = text_of(&vitals_line(&unreported, presentation(), 140));
+        let text = text_of(&vitals_line(&unreported, None, presentation(), 140));
         assert!(text.contains("n/a"), "{text}");
         // Nothing that could be read as a duration.
         assert!(!text.contains('h'), "{text}");
@@ -767,7 +927,7 @@ mod tests {
     fn the_worn_capacity_is_printed_beside_the_design_capacity_and_the_health() {
         // The three numbers only mean anything together: 48.2 Wh is alarming or fine
         // depending entirely on what the cell shipped holding.
-        let text = text_of(&capacity_line(&battery(), presentation(), 140));
+        let text = text_of(&capacity_line(&battery(), None, presentation(), 140));
         assert!(text.contains("48.2 Wh"), "{text}");
         assert!(text.contains("52.6 Wh design"), "{text}");
         assert!(text.contains("HEALTH"), "{text}");
@@ -783,7 +943,7 @@ mod tests {
         // absent pair, so both say the same thing about why they are missing.
         let mut unknown = battery();
         unknown.capacity = MetricState::Unsupported;
-        let text = text_of(&capacity_line(&unknown, presentation(), 140));
+        let text = text_of(&capacity_line(&unknown, None, presentation(), 140));
         assert!(text.contains("n/a"), "{text}");
         assert!(!text.contains("0%"), "{text}");
     }
@@ -795,11 +955,11 @@ mod tests {
         let mut full = battery();
         full.state = ChargeState::Full;
         full.power_watts = MetricState::Available(0.0);
-        let measured = text_of(&vitals_line(&full, presentation(), 140));
+        let measured = text_of(&vitals_line(&full, None, presentation(), 140));
         assert!(measured.contains("0.0 W"), "{measured}");
 
         full.power_watts = MetricState::Unsupported;
-        let absent = text_of(&vitals_line(&full, presentation(), 140));
+        let absent = text_of(&vitals_line(&full, None, presentation(), 140));
         assert!(!absent.contains("0.0 W"), "{absent}");
     }
 
@@ -821,6 +981,7 @@ mod tests {
         // be a made-up scale. Every real Apple Silicon sensor is this case.
         let text = text_of(&thermal_line(
             &reading("ambient", 62.5, None),
+            None,
             presentation(),
             140,
             false,
@@ -833,6 +994,7 @@ mod tests {
 
         let scaled = text_of(&thermal_line(
             &reading("package", 52.5, Some(105.0)),
+            None,
             presentation(),
             140,
             false,
@@ -848,7 +1010,7 @@ mod tests {
         // it as a denominator would peg every bar at 100% for the whole run.
         let mut peaked = reading("PMU tdie1", 70.8, None);
         peaked.peak_celsius = Some(73.7);
-        let text = text_of(&thermal_line(&peaked, presentation(), 140, false));
+        let text = text_of(&thermal_line(&peaked, None, presentation(), 140, false));
         assert!(text.contains("peak 73.7C"), "{text}");
         assert!(!text.contains("high"), "{text}");
         assert!(!text.contains('#'), "a peak is not a scale:\n{text}");
@@ -859,7 +1021,7 @@ mod tests {
         // §11.3: the marker is the sensor's claim about its own limit, and §5.2 wants
         // a character rather than only a colour.
         let hot = reading("package", 106.0, Some(105.0));
-        let text = text_of(&thermal_line(&hot, presentation(), 140, false));
+        let text = text_of(&thermal_line(&hot, None, presentation(), 140, false));
         assert!(text.contains("106.0C!"), "{text}");
         assert!(!text.contains("throttl"), "{text}");
         // Past the end of the scale the bar is full rather than overflowing its field.
@@ -891,6 +1053,211 @@ mod tests {
         let mut peaked = reading("a", 40.0, None);
         peaked.peak_celsius = Some(41.0);
         assert_eq!(context_text(&peaked, true), "peak 41.0C");
+    }
+
+    #[test]
+    fn a_retained_pack_is_dated_once_in_the_panels_own_label() {
+        // The finding this test exists for: both sensor metrics are read on their own
+        // cadence, so at idle the whole `BatterySnapshot` arrives as `Stale`. The screen
+        // used to unwrap it and print `POWER 12.4 W` with nothing saying the wattage was
+        // measured 28 seconds ago (§4, and the design document's A2).
+        let age = Duration::from_secs(28);
+        let retained = MetricState::Available(battery()).into_stale(age);
+        assert_eq!(headline(&retained), "82% discharging ~00:28");
+        assert_eq!(retained_age(&retained), Some(age));
+        // And exactly once: the rows below it are marked, not re-dated.
+        let vitals = text_of(&vitals_line(&battery(), Some(age), presentation(), 140));
+        assert!(!vitals.contains("~00:28"), "{vitals}");
+        let capacity = text_of(&capacity_line(&battery(), Some(age), presentation(), 140));
+        assert!(!capacity.contains("~00:28"), "{capacity}");
+    }
+
+    #[test]
+    fn a_freshly_measured_pack_carries_no_mark_at_all() {
+        // The other half of §4: a fresh reading must not be decorated, or the mark stops
+        // meaning anything.
+        let fresh = MetricState::Available(battery());
+        assert_eq!(headline(&fresh), "82% discharging");
+        assert_eq!(retained_age(&fresh), None);
+        for state in [
+            MetricState::Unsupported,
+            MetricState::WarmingUp,
+            MetricState::PermissionDenied,
+        ] {
+            let state: MetricState<BatterySnapshot> = state;
+            assert_eq!(retained_age(&state), None, "{state:?}");
+        }
+    }
+
+    #[test]
+    fn every_field_of_a_retained_pack_is_styled_as_retained_rather_than_as_measured() {
+        // §5.2 and §5.3: the panel label states the age once, and what each field owes is
+        // the mark. A field drawn in `Token::Text` is a field claiming to be this tick's
+        // reading, which is the same lie as an undated figure.
+        let age = Duration::from_secs(28);
+        let battery = battery();
+        for state in [
+            retained_field(battery.cycle_count.as_ref(), Some(age)),
+            retained_field(battery.time_remaining.as_ref(), Some(age)).map(|_| &214u32),
+        ] {
+            let display = states::describe(&state, |value: &&u32| value.to_string());
+            assert_eq!(display.token(), Token::Stale, "{state:?}");
+            assert_eq!(display.symbol(), '~', "{state:?}");
+        }
+    }
+
+    #[test]
+    fn a_field_the_platform_refused_keeps_its_own_reason_inside_a_retained_pack() {
+        // `into_stale` only touches `Available`, and that is load-bearing here: a pack
+        // whose driver publishes no time estimate must still say `n/a` rather than be
+        // recast as a retained reading of something.
+        let mut unreported = battery();
+        unreported.time_remaining = MetricState::PermissionDenied;
+        let display = states::describe(
+            &retained_field(
+                unreported.time_remaining.as_ref(),
+                Some(Duration::from_secs(28)),
+            ),
+            |value: &&Duration| remaining_text(**value),
+        );
+        assert_eq!(display.text(), "permission denied");
+        assert_eq!(display.symbol(), '!');
+        assert_eq!(display.age(), None);
+    }
+
+    /// The regression test for C1's own fix, at the call sites rather than the helper.
+    ///
+    /// `every_field_of_a_retained_pack_is_styled_as_retained_rather_than_as_measured`
+    /// exercises `retained_field` directly, and the Battery snapshot fixtures compare
+    /// text — so between them, all three `retained_field` call sites could be deleted
+    /// while the `retained` parameters stayed in place, the four vitals fields would fall
+    /// back to `Token::Text`, and every other test in the workspace would still pass.
+    /// That is the same shape of hole C1 existed to close: a correct rendering with
+    /// nothing able to observe it. This asserts the styles the cells actually carry.
+    #[test]
+    fn a_retained_pack_is_styled_stale_at_the_call_site_and_not_only_in_the_helper() {
+        let presentation = presentation();
+        let stale = presentation.style(Token::Stale);
+        let measured = presentation.style(Token::Text);
+        let age = Some(Duration::from_secs(28));
+        // Every value on the vitals row, by the text a reader sees in it.
+        const VITALS: [&str; 4] = ["4h 00m", "214", "31.4C", "12.4 W"];
+
+        let retained = vitals_line(&battery(), age, presentation, 140);
+        for value in VITALS {
+            assert_eq!(
+                style_of(&retained, value),
+                stale,
+                "{value} is drawn as a fresh measurement"
+            );
+        }
+        // And the other half of §4: a fresh reading is not decorated, so this test fails
+        // if `retained_field` ever marks unconditionally.
+        let fresh = vitals_line(&battery(), None, presentation, 140);
+        for value in VITALS {
+            assert_eq!(
+                style_of(&fresh, value),
+                measured,
+                "{value} is marked retained on a freshly measured pack"
+            );
+        }
+
+        let capacity = capacity_line(&battery(), age, presentation, 140);
+        assert_eq!(style_of(&capacity, "48.2 Wh"), stale);
+        assert_eq!(
+            style_of(&capacity, "92%"),
+            stale,
+            "HEALTH is derived from the \
+             capacities beside it, so it is exactly as old as they are"
+        );
+        let capacity_fresh = capacity_line(&battery(), None, presentation, 140);
+        assert_eq!(style_of(&capacity_fresh, "48.2 Wh"), measured);
+        assert_eq!(style_of(&capacity_fresh, "92%"), measured);
+
+        let thermal = thermal_line(
+            &reading("performance", 62.5, Some(105.0)),
+            age,
+            presentation,
+            140,
+            false,
+        );
+        assert_eq!(style_of(&thermal, "62.5C"), stale);
+        let thermal_fresh = thermal_line(
+            &reading("performance", 62.5, Some(105.0)),
+            None,
+            presentation,
+            140,
+            false,
+        );
+        assert_eq!(style_of(&thermal_fresh, "62.5C"), measured);
+
+        // The cells are byte-identical across both, which is why this test reads styles
+        // and the snapshot fixtures cannot.
+        assert_eq!(text_of(&retained), text_of(&fresh));
+        assert_eq!(text_of(&thermal), text_of(&thermal_fresh));
+    }
+
+    #[test]
+    fn a_retained_temperature_is_styled_stale_unless_the_sensor_calls_it_critical() {
+        // The thermal rows are dated by the panel's label, so what a row owes is the
+        // mark — except where the sensor says it is past its own limit, in which case the
+        // alert is what the reader has to act on and outranks the staleness cue.
+        let age = Some(Duration::from_secs(28));
+        let warm = states::describe(
+            &retained_field(MetricState::Available(62.5f32), age),
+            |celsius: &f32| format!("{celsius:.1}C"),
+        );
+        assert_eq!(warm.token(), Token::Stale);
+        // The row itself never repeats the figure the panel label already carries.
+        let text = text_of(&thermal_line(
+            &reading("performance", 62.5, Some(105.0)),
+            age,
+            presentation(),
+            140,
+            false,
+        ));
+        assert!(text.contains("62.5C"), "{text}");
+        assert!(!text.contains("~00:28"), "{text}");
+        // And a hot sensor still says so.
+        let hot = text_of(&thermal_line(
+            &reading("package", 106.0, Some(105.0)),
+            age,
+            presentation(),
+            140,
+            false,
+        ));
+        assert!(hot.contains("106.0C!"), "{hot}");
+    }
+
+    #[test]
+    fn a_retained_sensor_list_is_dated_in_the_panels_trailing_label() {
+        // The label is built through `describe`/`annotated` precisely so the count and
+        // the age cannot be separated. Rendered through the whole panel, because the
+        // label is assembled in `draw_thermal` rather than in a function of its own.
+        let sensors = SensorSnapshot {
+            temperatures: MetricState::Available(vec![
+                reading("performance", 62.5, Some(105.0)),
+                reading("efficiency", 44.0, Some(105.0)),
+            ])
+            .into_stale(Duration::from_secs(28)),
+            battery: MetricState::Unsupported,
+        };
+        let mut buffer = Buffer::empty(Rect::new(0, 0, 140, 6));
+        draw_thermal(
+            &mut buffer,
+            Rect::new(0, 0, 140, 6),
+            &sensors,
+            presentation(),
+        );
+        let rendered: String = (0..6)
+            .map(|row| {
+                (0..140)
+                    .map(|column| buffer[(column, row)].symbol())
+                    .collect::<String>()
+            })
+            .collect::<Vec<_>>()
+            .join("\n");
+        assert!(rendered.contains("2 sensors ~00:28"), "{rendered}");
     }
 
     #[test]

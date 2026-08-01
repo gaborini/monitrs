@@ -28,7 +28,12 @@ use crate::glyphs::GlyphMode;
 use crate::theme::{ColorMode, ThemeId};
 
 /// A parsed palette command (§6.3's initial list).
+///
+/// `#[non_exhaustive]`: §6.3 exists precisely so that new features can be reached
+/// without a key, so this grammar is expected to grow within 1.x, and a new
+/// command must not force a major version bump.
 #[derive(Clone, Debug, Eq, PartialEq)]
+#[non_exhaustive]
 pub enum Command {
     /// `view overview|processes|cpu|storage|network|inspect|battery`.
     ChangeView(ViewId),

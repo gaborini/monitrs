@@ -50,9 +50,9 @@ use ratatui::layout::Rect;
 use crate::cli::Cli;
 use crate::config::{self, Config};
 use crate::runtime::{
-    DetailRequest, SampleRequest, SamplingControl, Shutdown, Workers, detail_channel,
-    drain_to_newest_snapshot, event_channel, spawn_detail_worker, spawn_input_thread,
-    spawn_sampler_thread, spawn_signal_thread, spawn_tick_thread,
+    DetailRequest, SampleRequest, SamplingControl, SensorInterest, Shutdown, Workers,
+    detail_channel, drain_to_newest_snapshot, event_channel, spawn_detail_worker,
+    spawn_input_thread, spawn_sampler_thread, spawn_signal_thread, spawn_tick_thread,
 };
 use crate::signals;
 
@@ -149,6 +149,11 @@ pub(crate) fn run(cli: &Cli, log_notices: Vec<String>) -> color_eyre::Result<Exi
     let (detail_tx, detail_rx) = detail_channel();
     let shutdown = Shutdown::new();
     let forced = SampleRequest::new();
+    // Starts false because monitrs opens on Overview or, with `--processes`, on the
+    // process table — neither shows a sensor panel. The reducer raises it the first
+    // time the Battery screen is opened. A future start-view flag that could open
+    // *on* Battery would have to seed this from that view.
+    let sensor_interest = SensorInterest::new();
     let mut workers = Workers::new();
 
     spawn_input_thread(&mut workers, sender.clone(), shutdown.clone(), LOOP_POLL)?;
@@ -171,6 +176,7 @@ pub(crate) fn run(cli: &Cli, log_notices: Vec<String>) -> color_eyre::Result<Exi
         shutdown.clone(),
         sampling.clone(),
         forced.clone(),
+        sensor_interest.clone(),
     )?;
     spawn_detail_worker(
         &mut workers,
@@ -182,16 +188,19 @@ pub(crate) fn run(cli: &Cli, log_notices: Vec<String>) -> color_eyre::Result<Exi
 
     // --- 7. the loop ------------------------------------------------------
     let channel_health = sender.health();
-    let mut effects_context = EffectContext {
+    // Read before `settings` moves into the constructor below.
+    let mouse_at_startup = settings.display.mouse;
+    let mut effects_context = EffectContext::new(
         detail_tx,
         forced,
-        shutdown: shutdown.clone(),
-        mouse_at_startup: settings.display.mouse,
-        color_explicit: cli.color_was_explicit(),
+        sensor_interest,
+        shutdown.clone(),
         settings,
         sender,
-        sampling: sampling.clone(),
-    };
+        sampling.clone(),
+        mouse_at_startup,
+        cli.color_was_explicit(),
+    );
     let mut dirty = true;
 
     loop {
@@ -282,8 +291,13 @@ pub(crate) fn run(cli: &Cli, log_notices: Vec<String>) -> color_eyre::Result<Exi
 }
 
 /// Whether the loop should continue after an effect.
+///
+/// `pub(crate)`, like [`EffectContext`] and `execute` below, only so that
+/// `crates/monitrs/tests/effect_executor.rs` can drive the executor through
+/// `#[path]` (§9b): the guard on the non-exhaustive wildcard arm in `execute` is
+/// worth nothing if it is never called from a test.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-enum Flow {
+pub(crate) enum Flow {
     /// Keep going.
     Continue,
     /// Leave the loop.
@@ -291,9 +305,12 @@ enum Flow {
 }
 
 /// Everything an effect might need. Grouped so `execute` stays one screen.
-struct EffectContext {
+pub(crate) struct EffectContext {
     detail_tx: crossbeam_channel::Sender<DetailRequest>,
     forced: SampleRequest,
+    /// Whether the visible screen shows a sensor reading, for the sampler's
+    /// cadence (§8.6).
+    sensor_interest: SensorInterest,
     shutdown: Shutdown,
     settings: Config,
     sender: crate::runtime::EventSender<ConfigEvent>,
@@ -313,18 +330,62 @@ struct EffectContext {
     color_explicit: bool,
 }
 
+impl EffectContext {
+    /// Assembles the context `run` builds at startup.
+    ///
+    /// A constructor rather than public fields, so a test can build one via
+    /// `#[path]` without every field needing to be `pub(crate)` on its own —
+    /// `EffectContext` stays an implementation grouping, not a public shape.
+    #[allow(
+        clippy::too_many_arguments,
+        reason = "one field per effect dependency; grouping them into a sub-struct \
+                  would only move the count, not reduce it"
+    )]
+    pub(crate) fn new(
+        detail_tx: crossbeam_channel::Sender<DetailRequest>,
+        forced: SampleRequest,
+        sensor_interest: SensorInterest,
+        shutdown: Shutdown,
+        settings: Config,
+        sender: crate::runtime::EventSender<ConfigEvent>,
+        sampling: SamplingControl,
+        mouse_at_startup: bool,
+        color_explicit: bool,
+    ) -> Self {
+        Self {
+            detail_tx,
+            forced,
+            sensor_interest,
+            shutdown,
+            settings,
+            sender,
+            sampling,
+            mouse_at_startup,
+            color_explicit,
+        }
+    }
+}
+
 /// Performs one effect.
 ///
 /// This is the only place in the program that acts on the outside world at the
 /// reducer's request. §10.5's whole point is that the reducer decides and this
 /// function does, which is what lets the confirmation chain be tested without a
 /// signal ever being sent.
-fn execute(effect: &Effect, state: &mut AppState, ctx: &mut EffectContext) -> Flow {
+pub(crate) fn execute(effect: &Effect, state: &mut AppState, ctx: &mut EffectContext) -> Flow {
     match effect {
         Effect::None | Effect::RequestRedraw => Flow::Continue,
 
         Effect::RequestSample => {
             ctx.forced.request();
+            Flow::Continue
+        }
+
+        // The one write to the flag in the whole program: the reducer decided that a
+        // sensor-bearing screen is or is not visible, and this is where that decision
+        // reaches the sampler's own clock.
+        Effect::SetSensorInterest(interested) => {
+            ctx.sensor_interest.set(*interested);
             Flow::Continue
         }
 
@@ -541,6 +602,16 @@ fn execute(effect: &Effect, state: &mut AppState, ctx: &mut EffectContext) -> Fl
         Effect::Shutdown => {
             ctx.shutdown.trigger();
             Flow::Stop
+        }
+
+        // `Effect` is `#[non_exhaustive]` so 1.x can add effects without a major
+        // bump, and the compiler can therefore no longer prove this match is
+        // complete. An unhandled effect is a bug in this function, not in the
+        // reducer that emitted it, so it is loud rather than fatal: the interface
+        // stays usable and the log names exactly what was dropped (§14.2, §14.3).
+        unhandled => {
+            tracing::error!(effect = ?unhandled, "no executor arm for this effect");
+            Flow::Continue
         }
     }
 }

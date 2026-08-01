@@ -45,7 +45,12 @@ use monitrs_core::model::ProcessIdentity;
 /// reads `n/a` on half the hosts monitrs runs on has no claim on a low digit. Putting
 /// it at the end also renumbered nothing, which is why it is there rather than beside
 /// the sensors it shares a screen with.
+///
+/// `#[non_exhaustive]`: this is a public, growing enum — the roadmap already defers
+/// features to 1.x that may add a screen — and a new variant must not force a major
+/// version bump the way [`Effect::SetSensorInterest`] just did (see `CONTRIBUTING.md`).
 #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
+#[non_exhaustive]
 pub enum ViewId {
     /// §7.1: CPU, memory, load, pressure radar, top processes.
     Overview,
@@ -268,7 +273,11 @@ impl SignalKind {
 /// Local to this crate on purpose: `monitrs_core::process::ProcessSort` is being
 /// written in parallel and will own the comparator and the stable tie-breaker.
 /// This enum only names the column a key or palette command selected.
+///
+/// `#[non_exhaustive]`: the process table's column set is expected to grow within
+/// 1.x, and a new sortable column must not force a major version bump.
 #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
+#[non_exhaustive]
 pub enum SortField {
     /// Process identifier.
     Pid,
@@ -417,7 +426,12 @@ impl SortField {
 /// * **Proposal vs request.** [`Action::ProposeSignal`] opens a dialog;
 ///   [`Action::RequestSignal`] executes one. No key produces the latter (§15.1),
 ///   which [`Action::can_signal_process`] lets the keymap test assert.
+///
+/// `#[non_exhaustive]`: the reducer's vocabulary is expected to grow within 1.x —
+/// the pressure event log and the panel zoom deferred to 1.1.0 will both need new
+/// actions — and a new one must not force a major version bump.
 #[derive(Clone, Debug, PartialEq)]
+#[non_exhaustive]
 pub enum Action {
     // ---- application ----
     /// Leave, restoring the terminal (§14.3).
@@ -727,7 +741,16 @@ impl ConfirmationKind {
 /// The reducer returns these and performs none of them, which is what makes
 /// keyboard behaviour and safety dialogs testable without touching a real
 /// process, file or terminal.
+///
+/// `#[non_exhaustive]`: this enum is expected to grow within 1.x — the pressure
+/// event log and the panel zoom deferred to 1.1.0 will both need new effects — and
+/// a new variant must not force a major version bump the way
+/// [`Effect::SetSensorInterest`] did going into 1.0.0. The cost of that is real:
+/// the `monitrs` binary's effect executor can no longer be proven exhaustive by
+/// the compiler, so adding a variant now requires adding its arm there by hand
+/// (see `CONTRIBUTING.md`).
 #[derive(Clone, Debug, Eq, PartialEq)]
+#[non_exhaustive]
 pub enum Effect {
     /// Nothing. Kept because §10.5 lists it; [`Effects::push`] discards it.
     None,
@@ -738,6 +761,13 @@ pub enum Effect {
     RequestSample,
     /// Load a process detail on the on-demand worker (§8.6, §10.3).
     FetchProcessDetail(ProcessIdentity),
+    /// Tell the sampler whether a screen showing a sensor reading is visible
+    /// (§8.6's on-demand tier).
+    ///
+    /// Not a state change, so it cannot live in the reducer: the sampler owns its
+    /// own clock on another thread, and this is how the visible screen reaches it.
+    /// A level, not a pulse — the sampler holds the last value it was told.
+    SetSensorInterest(bool),
     /// Send a signal.
     ///
     /// The executor must re-read the identity immediately before delivery and
@@ -1161,6 +1191,7 @@ mod tests {
             Effect::RequestRedraw,
             Effect::RequestSample,
             Effect::FetchProcessDetail(identity()),
+            Effect::SetSensorInterest(true),
             Effect::RingBell,
             Effect::ReloadConfig,
             Effect::ExportSnapshot(PathBuf::from("/tmp/snapshot.json")),

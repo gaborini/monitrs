@@ -393,6 +393,40 @@ impl RowBuilder {
     }
 }
 
+/// Cells between two segments of a one-line summary, hint strip, or caret note.
+pub(crate) const SEGMENT_GAP: usize = 2;
+
+/// Joins `segments` with [`SEGMENT_GAP`] while the total stays inside `budget`.
+///
+/// Segments are considered in order and a segment that does not fit ends the
+/// line, rather than being skipped in favour of a shorter one behind it: the
+/// order *is* the priority, and a strip whose fields reordered themselves as
+/// values changed would be unreadable (§5.4). A segment is always included
+/// whole or not at all — this never clips one down to fit, so the result
+/// cannot read as a different, truncated value.
+///
+/// Lives here rather than in `views` because [`crate::widgets::sparkline::SparklineCaret`]
+/// needs it too, and a widget must not depend on the screen layer above it:
+/// the caret's two sides only know their own room once the caret's column
+/// does, which is geometry `SparklineCaret::row` owns, not `views::caret_note`.
+pub(crate) fn join_fitting(segments: &[String], budget: usize) -> String {
+    let mut out = String::new();
+    let mut used = 0usize;
+    for segment in segments {
+        let width = display_width(segment);
+        let gap = if out.is_empty() { 0 } else { SEGMENT_GAP };
+        if used + gap + width > budget {
+            break;
+        }
+        for _ in 0..gap {
+            out.push(' ');
+        }
+        out.push_str(segment);
+        used += gap + width;
+    }
+    out
+}
+
 #[cfg(test)]
 mod row_tests {
     use super::*;
@@ -540,6 +574,23 @@ mod row_tests {
             .filter_map(|x| buffer.cell((x, 0)).map(|cell| cell.symbol().to_owned()))
             .collect();
         assert_eq!(rendered, "  abcdef    ");
+    }
+
+    #[test]
+    fn joining_fields_keeps_the_priority_order_and_the_budget() {
+        let segments = vec![
+            "load 4.12".to_owned(),
+            "8 cpu".to_owned(),
+            "temp 62C".to_owned(),
+        ];
+        assert_eq!(join_fitting(&segments, 0), "");
+        assert_eq!(join_fitting(&segments, 9), "load 4.12");
+        assert_eq!(join_fitting(&segments, 16), "load 4.12  8 cpu");
+        assert_eq!(join_fitting(&segments, 100), "load 4.12  8 cpu  temp 62C");
+        // A field that does not fit ends the line; a shorter one behind it does
+        // not jump the queue, because the order is the priority.
+        let wide_then_narrow = vec!["a".repeat(40), "b".to_owned()];
+        assert_eq!(join_fitting(&wide_then_narrow, 10), "");
     }
 }
 

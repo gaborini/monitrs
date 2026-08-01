@@ -18,6 +18,15 @@ this section is that the open items travel with the release instead of being for
 they are repeated in each `CHANGELOG.md` release section under *Known limitations*, which
 is what a user actually reads. What is still owed:
 
+* **One of the four freeze guards does not block yet, and it is the API one.**
+  `.github/workflows/ci.yml`'s `semver compatibility` job runs
+  `continue-on-error: true`, so it reports a break and CI stays green. Flipping it to
+  `false` is a step of the `1.0.0` release commit ([step 2](#2-bump-the-version)) and
+  is the only thing that makes the *API* half of CONTRIBUTING.md's freeze enforceable
+  rather than aspirational. The other three surfaces — the JSON export, the
+  configuration keys and the default keymap — are each guarded by a test that already
+  fails a build ([step 4](#and-the-four-freeze-guards)). This one is called out here
+  as well as there because nothing fails if it is skipped.
 * **No twelve-hour soak is on record**, and it is not going to be produced from a
   workstation: the gate is twelve uninterrupted hours, and a laptop that sleeps does not
   yield one. It is being moved to a dedicated EC2 host under its own project. A 30-minute
@@ -27,18 +36,30 @@ is what a user actually reads. What is still owed:
   full, and nothing was dropped even with the channel saturated. That is evidence,
   not the gate — §16.1 says twelve hours. (The 90 ms worst-case input latency that run
   reported turned out to be the harness measuring two thread wake-ups rather than
-  monitrs; see [`soak-testing.md`](soak-testing.md).)
+  monitrs; see [`soak-testing.md`](soak-testing.md).) For `1.0.0` specifically, that
+  gate was **deferred past the tag by a written decision** rather than met or skipped:
+  [step 5](#5-soak) names who decided, on what date, on what evidence, what the
+  deferral does not cover, and the seven days inside which the runs are owed.
 * **The idle self-CPU budget of §16.1 is half met.** Measured on a 12-core Mac with
-  about a thousand processes: median **0.5–1.1%** against a 1% budget, which passes, and
-  p95 **6–11%** against 2%, which does not. (This list previously quoted 1.3–2.7% and
-  11–15%, which were the figures from partway through the fix and were already superseded
-  in [`benchmarks.md`](benchmarks.md) when they were written here.)
-  The other five measurable budgets pass — frame render, input latency, collection
-  p95, resident memory, descriptor growth — and
+  about a thousand processes: median **0.60–0.85%** against a 1% budget, which passes, and
+  p95 **4.30–9.50%** against 2%, which does not. The remaining cost is measured rather
+  than suspected: the medium tier's two filesystem-capacity reads cost **13.2–35.0 ms of
+  CPU per tick**, positive in 15 of 15 runs, against a whole-tick budget of roughly 16 ms.
+  Which of the two carries it has not been separated. (This list previously quoted
+  1.3–2.7% and 11–15%, and then 0.5–1.1% and 6–11%; both were superseded in
+  [`benchmarks.md`](benchmarks.md) before this list was next read.)
+  Four of the other five measurable budgets pass outright — frame render, input latency,
+  collection p95, resident memory — and descriptor growth passes **over half an hour
+  only**; §16.1 asks for twelve, and that run is still owed.
   [`benchmarks.md`](benchmarks.md#the-161-end-to-end-budgets) has the numbers, the
   per-read breakdown showing where the time goes, and what it would take to fix.
   This is the one item on this list that is a *product* problem rather than a
-  procedural one.
+  procedural one. Every figure quoted for it, on this machine and in every prior
+  release, is against about a thousand processes — five times §16.1's own
+  200-process, 8-CPU reference workload — so the budget has never actually been
+  read on the workload it names. Step 6 below now has that reading as a step, and
+  [`benchmarks.md`](benchmarks.md#reading-the-idle-cpu-budget-on-its-own-reference-workload)
+  has the protocol.
 * **A release section's date is the day you tag, not the day you wrote it.** Keep a
   Changelog dates a section by its release date, so if the notes were written yesterday
   and the tag goes out today, change that line first. The workflow's `verify` job passes
@@ -72,8 +93,11 @@ written. The [§23 gate](#the-23-gate) at the bottom is the record of what has b
 proven, and it still has unticked boxes — the idle-CPU p95 and the soak. Two releases
 have gone out over those boxes, deliberately and with the pre-release flag the workflow
 applies to every `0.x`, and each one repeats the open items in its own changelog section
-under *Known limitations*. That is the arrangement: a box may be shipped over, but not
-quietly, and never by editing the box.
+under *Known limitations*. `1.0.0` ships over the soak box as well, and it is the first
+release to do so **without** that flag, which is why [step 5](#5-soak) carries a dated,
+attributed decision with a deadline instead of one more repetition of this paragraph.
+That is the arrangement: a box may be shipped over, but not quietly, and never by
+editing the box.
 
 ## 0. Prerequisites
 
@@ -117,6 +141,20 @@ prints the command it runs, and this checklist gives the underlying commands so
   is not possible, which is what that rule was protecting.
 
 ## 2. Bump the version
+
+> **`1.0.0` only, and do it in this same commit: make the semver job blocking.**
+> `.github/workflows/ci.yml`'s `semver compatibility` job runs with
+> `continue-on-error: true`, because before `1.0.0` there is no published 1.x
+> release to be compatible against and a failure would be noise. Set it to
+> `false` and delete the comment above it that says to.
+>
+> This is the **only blocking mechanism the API freeze has**. Everything
+> CONTRIBUTING.md's "What 1.0.0 froze" section promises about the public API is,
+> until this flip, a policy that nothing enforces — the job reports and CI stays
+> green. It is also the single most forgettable step in the release, because
+> nothing fails if you skip it: CI passes, the tag ships, and the freeze is
+> unenforced until somebody notices. Do it in the release commit at step 7, where
+> the reviewer of that pull request can see it.
 
 The version lives in **exactly five places**, and three of them are one file. Every
 crate uses `version.workspace = true`, so no per-crate manifest is touched.
@@ -273,10 +311,73 @@ so the first two commands passed while the release gate would not have. Run all 
 `--all-features` matters here too: the native layers are behind `linux-native` and
 `macos-native`, so omitting it checks the `sysinfo` baseline and nothing else.
 
+### And the four freeze guards
+
+`1.0.0` froze four surfaces and gave each one a guard. Three of them already ran in
+the `cargo test` above; the fourth runs locally only if you run it yourself.
+
+| Frozen surface | Guard | Where it runs |
+|---|---|---|
+| the public API of `monitrs-core`, `monitrs-collectors`, `monitrs-tui` | `cargo-semver-checks` | the `semver compatibility` CI job — and locally, below |
+| the JSON export | `docs/schema/v2.json` (292 field paths) + `crates/monitrs/tests/schema_contract.rs` | `cargo test` |
+| the configuration keys | `docs/schema/config-v1.json` (32 key paths) + `crates/monitrs/tests/config_contract.rs` | `cargo test` |
+| the default keymap | `every_global_binding_from_the_spec_resolves_in_normal_mode` and its list-binding sibling, `crates/monitrs-tui/src/keymap.rs` | `cargo test` |
+
+Run the semver check by hand before you tag. CI's copy stays advisory until the
+`1.0.0` release commit flips it (step 2), and a job that reports without blocking
+looks exactly like a job that passed:
+
+```sh
+cargo install cargo-semver-checks --locked      # once
+cargo semver-checks check-release --workspace
+```
+
+`monitrs` itself declares a `[[bin]]` and no `[lib]`, so `--workspace` checks exactly
+the three crates CONTRIBUTING.md's freeze names as API.
+
+**Then look at what the two inventory tests printed**, which the run above hid.
+Removing a path fails the test and says so loudly; *adding* one is deliberately only
+printed, because a consumer reading by name cannot be broken by a field it has never
+heard of. `cargo test` captures the stdout of a passing test, so the additions are
+invisible unless you ask:
+
+```sh
+cargo test -p monitrs --test schema_contract --test config_contract -- --nocapture \
+  | grep '^new '
+```
+
+Every line it prints is a field path or configuration key this release adds and the
+inventory does not yet record. Add them to `docs/schema/v2.json` or
+`docs/schema/config-v1.json` — deliberately, having read them, which is why the test
+prints rather than regenerates. An unrecorded path is not a broken promise, but it is
+a promise nobody wrote down, and the next release cannot notice it disappearing.
+
+**A guard that fails is a decision, not an obstacle.** Adding a field, a key or a
+binding is not a break. Removing or renaming one is, and each has its own price:
+`SCHEMA_VERSION` bumped with a new `docs/schema/v{N+1}.json` written *beside* the old
+file; `SUPPORTED_VERSION` bumped with a new `docs/schema/config-v{N+1}.json` beside
+the old one, plus `docs/configuration.md`; a major version for the API; a major
+version for a rebound default key. The old inventory file always stays, so a consumer
+can diff the two. Each test's own failure message spells its rule out.
+
+**And the one thing none of the four can see:** a frozen key or field whose *meaning*
+changes while every name stays put. `sampling.slow_interval` taking over the sensor
+read in `1.0.0` is the worked example — no inventory moved, and nothing failed. If a
+release changes what a frozen name *does*, `CHANGELOG.md` and the relevant document
+are the only record there will ever be, and writing them is part of the release rather
+than a follow-up to it.
+
 ## 5. Soak
 
-Blocking. [`soak-testing.md`](soak-testing.md) has the invocations, how to read the
-report, and what to record. In short:
+**Blocking** — and for `1.0.0`, and `1.0.0` only, **deliberately deferred until after
+the tag**, by Gabor Lepsenyi (`@gaborini`) on **2026-08-01**. The boxes below are not
+ticked and are not removed: they are still owed, on the deadline further down. For
+every release after this one, read the first word of this section as though the rest
+of it were not here — no soak, no tag. Moving a gate costs a written decision each
+time, which is the only thing that stops it from becoming a habit.
+
+[`soak-testing.md`](soak-testing.md) has the invocations, how to read the report, and
+what to record. In short:
 
 * [ ] twelve-hour release-profile run, report kept;
 * [ ] one-hour 10,000-process run, report kept;
@@ -286,10 +387,99 @@ report, and what to record. In short:
 * [ ] all three reports attached to the release record, with machine, toolchain, and
       profile.
 
+### Why the deferral was defensible, and what it does not cover
+
+**There is evidence, and it is not the gate.** One soak is on record
+([`soak-testing.md`](soak-testing.md#runs-on-record), 2026-07-30): the shipped
+collector, thirty minutes, `--release`, on an Apple M4 Pro under rustc 1.97.1 with
+about a thousand other processes on the machine. Over 2212 snapshots resident size
+*fell* — `first quartile 30880 KiB, last quartile 29192 KiB`, peak 31,184 KiB —
+descriptors were "flat at 3", retained history did not rise — 2,009,802 B at the
+start and 1,998,685 B at the end, against the ring's own 5,512,800 B worst case, with
+the ring full at 300 of 300 samples so that is the steady state and not a ring still
+filling — and nothing was dropped even when the stall
+probe filled the channel to 64 of 64. That is a flat half hour where §16.1 asks for
+twelve, and the difference is not rhetorical: it is enough to say the curve has the
+right shape, not enough to say it holds.
+
+**And what the deferral risks is cheap to fix forward.** If the twelve hours turn up
+a leak or a descriptor climb, that is a behavioural defect, not an API break — none
+of the four surfaces `1.0.0` froze can move because of it. The vehicle is a `1.0.1`
+patch under the ordinary [Rollback](#rollback) procedure, and the freeze is
+unaffected either way. That asymmetry is the whole argument for tagging first: the
+promise this release actually makes is the one no soak result can touch.
+
+**What the argument does not cover: Linux.** Nothing has been soaked on Linux at all,
+and the descriptor budget is only meaningfully exercised there. The macOS collector
+reads through `sysctl`, `libproc`, mach routines and `getifaddrs` and opens no file,
+so `flat at 3` on macOS is flat by construction — it confirms the runtime holds
+nothing open and says nothing about the collector that reads `/proc` constantly. So
+of the three runs above, **the one-hour Linux real-collector run is the one carrying
+real unknown**; the other two extend a measurement that already looks right on a
+platform where it has been taken. If only one of the three can be run, run that one
+first.
+
+### The deadline
+
+**All three runs and their records within seven days of the `v1.0.0` tag — by
+2026-08-08.** Seven days because the three runs are fourteen hours of machine time on
+a host [step 6](#6-verify-by-hand-on-real-machines) already provisions for the
+reference-workload reading, which leaves the week as provisioning plus room for one
+run to fail and be repeated — and because a defect found inside a week still reaches
+roughly the people who installed `1.0.0`, where one found in a month reaches
+strangers.
+
+If a run fails, the report goes into
+[`soak-testing.md`](soak-testing.md#runs-on-record) with the series that produced it,
+the `v1.0.0` release gets the warning [Rollback](#rollback) step 2 describes, and the
+fix ships as `1.0.1`. If the window passes with nothing run, **that is itself the
+failure and is reported as one**: the next release section says the deferral went
+overdue, naming this date, rather than restoring "the twelve-hour run is still owed"
+to the list it came from. That sentence has been true since `0.1.0`; repeating it
+once more would be exactly the quiet erosion this decision was written down to avoid.
+
 ## 6. Verify by hand, on real machines
 
 Automation cannot do these. Do them on **both** a Linux machine and a macOS
 machine, and write down the version and architecture of each.
+
+The idle-CPU budget, on §16.1's own reference workload (8 logical CPUs, 200
+processes, a one-second interval, a five-minute history) rather than on whatever
+this repository's own development machine happens to be running. Every idle-CPU
+figure in `benchmarks.md` up to this release is against roughly a thousand
+processes — five times the reference — so this box is the first time the budget
+is read on the workload it names.
+
+* [ ] On an 8-vCPU Linux instance (Task 12 already has one, running the release
+      archives), extract the tagged archive and run
+      `MONITRS_BINARY=/path/to/extracted/monitrs python3 scripts/measure-overhead.py`.
+      [`benchmarks.md`](benchmarks.md#reading-the-idle-cpu-budget-on-its-own-reference-workload)
+      has the full protocol, the instance shape, and what each outcome means —
+      decided in advance, not written after the fact.
+* [ ] Confirm the script's own printed `workload:` line says the run matched the
+      reference before trusting the median and p95 beside it; if it did not
+      match, record it as the hard case it is rather than as a reading of the
+      budget.
+* [ ] Both figures — median and p95 — recorded in `benchmarks.md`, beside the
+      existing ~1000-process numbers, and this list's own idle-CPU item above
+      updated to say which workload each figure is.
+
+**Two rows, not one**, every time this measurement is taken — on the reference host
+and on whatever the development machine is. Since `1.0.0` the sensor group's cadence
+follows what is on screen (§8.6), so idle self-CPU is two different numbers and
+publishing one of them alone hides which:
+
+* [ ] **Overview visible, untouched.** This is the row §16.1's budget is about, and
+      the only one a pass or a fail is read from. Three runs of 60 s.
+* [ ] **The Battery screen visible**, where the sensors return to `medium_interval`.
+      Three runs of 60 s. This row is not a gate — it is the evidence that the
+      cadence switch is doing something, and `benchmarks.md`'s two-row table is
+      where it goes, with a sentence saying which of the two the budget names.
+* [ ] Read the **medians** against each other and treat a p95 comparison between the
+      two rows with suspicion: a p95 over ~74 samples is the fourth-largest value in
+      the window, and the two rows' p95 ranges have already overlapped once across
+      three runs each while their medians separated cleanly. `benchmarks.md`'s "Why
+      there are two idle rows" explains the instrument; do not re-derive it.
 
 Terminal behaviour. The first two are now **automated** —
 `python3 scripts/verify-terminal-restoration.py` runs the release binary on a real pty,
@@ -342,6 +532,8 @@ Distribution:
 ```sh
 git switch -c release/vX.Y.Z
 git add Cargo.toml Cargo.lock CHANGELOG.md README.md
+# 1.0.0 only: the semver job becomes blocking in this same commit (step 2).
+git add .github/workflows/ci.yml
 git commit -m "release: vX.Y.Z"
 ```
 
@@ -584,14 +776,23 @@ owes, carried into each release's *Known limitations* rather than resolved by ti
       checksum verified against the downloaded files, and every archive carrying a build
       attestation that `gh attestation verify` accepts.
 - [ ] **default settings remain below the memory and CPU budgets on the reference
-      workload.** Frame time, input latency, collection p95, resident memory,
-      descriptor growth **and the idle-CPU median** are measured and pass. The
-      **idle-CPU p95 does not**: 6–11% against a 2% budget, which is the medium
-      tier's 85 ms temperature read arriving as one spike every five seconds. Nothing
+      workload.** Frame time, input latency, collection p95, resident memory **and the
+      idle-CPU median** are measured and pass; descriptor growth passes over half an
+      hour, and §16.1's twelve-hour run is still owed — deferred past the `1.0.0` tag
+      by the decision recorded at [step 5](#5-soak) on 2026-08-01, which sets seven
+      days from the tag as the deadline. The **idle-CPU p95 does not
+      pass**: 4.30–9.50% against a 2% budget. The cause is the medium tier's two
+      filesystem-capacity reads, at 13.2–35.0 ms of CPU per tick against a whole-tick
+      budget of roughly 16 ms — *not* the 85 ms temperature read this list previously
+      named, which turns out to be almost all blocked wait and to cost a few
+      milliseconds of CPU at most. Nothing
       has been measured on §16.1's actual reference workload (8 CPUs, 200 processes),
       where the per-process costs would be about five times smaller. Numbers,
       breakdown and the commands that produce them are in
-      [`benchmarks.md`](benchmarks.md#the-161-end-to-end-budgets).
+      [`benchmarks.md`](benchmarks.md#the-161-end-to-end-budgets). Step 6 above
+      now has that reference-workload reading as a step, with the protocol in
+      [`benchmarks.md`](benchmarks.md#reading-the-idle-cpu-budget-on-its-own-reference-workload);
+      it has not been run.
 - [x] **every claim in the README is supported by a test or a documented
       measurement.** §20.1's required contents are all present: the demo frame is
       real and reproducible, every performance figure links to the file that produced

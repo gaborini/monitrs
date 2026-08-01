@@ -235,7 +235,40 @@ impl SensorSnapshot {
     }
 
     /// The hottest reading, for the compact overview summary (§7.1).
+    ///
+    /// **Deprecated in 1.0.0, and still behaves exactly as it always did.** It
+    /// returns only a *freshly measured* reading: it filters to
+    /// [`MetricState::fresh`], so a retained (`Stale`) list answers `None` here
+    /// rather than handing back an aged value with no way to say how old it is.
+    ///
+    /// That filter used to be a safeguard and is now a trap. Sensors are read as
+    /// their own group on their own cadence (§8.6): every 30 seconds while nobody
+    /// is looking at the Battery screen, which is the state a running monitrs is
+    /// in almost all of the time. Between reads the collectors carry the last list
+    /// forward as `Stale { value, age }`, so `Stale` is the **normal** shape of
+    /// `temperatures` at idle, not an exception — and a caller that reaches for
+    /// this method to show "the hottest temperature" therefore gets `None` for
+    /// most of the run, silently, with nothing in the type to warn it.
+    ///
+    /// Read [`SensorSnapshot::temperatures`] through the metric's own state
+    /// instead — [`MetricState::displayable`] yields the retained value *together
+    /// with its age*, so a reading that is 28 seconds old can be shown and dated
+    /// rather than dropped. `temperature_display` in
+    /// `crates/monitrs-tui/src/views/mod.rs` is that pattern in full: it takes the
+    /// maximum inside `states::describe`, so the age travels with the figure onto
+    /// the screen (`temp 62.5C ~00:28`) instead of being discarded here.
+    ///
+    /// Nothing in this workspace calls it any more. It is kept because 1.0.0
+    /// freezes this crate's API and removal is a major bump; expect it to go in
+    /// 2.0.0 at the earliest.
     #[must_use]
+    #[deprecated(
+        since = "1.0.0",
+        note = "filters to freshly measured readings, so it answers None for the retained \
+                (Stale) temperature list that is normal at idle — read \
+                SensorSnapshot::temperatures through MetricState::displayable instead, which \
+                yields the value together with its age"
+    )]
     pub fn hottest(&self) -> Option<&TemperatureReading> {
         self.temperatures
             .fresh()?
@@ -290,7 +323,24 @@ mod tests {
         assert_eq!(hot.is_critical(), None);
     }
 
+    // The three tests below are the only remaining callers of
+    // `SensorSnapshot::hottest`, which 1.0.0 deprecated *without* changing what it
+    // returns. They still earn their place: they pin the exact behaviour the
+    // deprecation note describes — `fresh()`-only filtering, and `None` for an
+    // empty list — and that behaviour has to keep holding for as long as the method
+    // exists, which is at least one minor cycle (`CONTRIBUTING.md`).
+    //
+    // The lint is expected on each test individually rather than on this module or
+    // the crate. Silencing it wider would also silence a *new* deprecated call
+    // somewhere else in monitrs-core, and `-D warnings` would no longer catch it.
+    // `expect` rather than `allow` so that the day `hottest` goes away, these
+    // attributes report themselves as unnecessary instead of lingering.
+
     #[test]
+    #[expect(
+        deprecated,
+        reason = "pins the deprecated method's own documented behaviour; see the note above"
+    )]
     fn missing_sensors_are_unsupported_not_zero_degrees() {
         let sensors = SensorSnapshot::warming_up();
         assert!(sensors.hottest().is_none());
@@ -298,6 +348,10 @@ mod tests {
     }
 
     #[test]
+    #[expect(
+        deprecated,
+        reason = "pins the deprecated method's own documented behaviour; see the note above"
+    )]
     fn hottest_finds_the_maximum_reading() {
         let sensors = SensorSnapshot {
             temperatures: MetricState::Available(vec![
@@ -312,6 +366,10 @@ mod tests {
     }
 
     #[test]
+    #[expect(
+        deprecated,
+        reason = "pins the deprecated method's own documented behaviour; see the note above"
+    )]
     fn an_empty_sensor_list_has_no_hottest_reading() {
         let sensors = SensorSnapshot {
             temperatures: MetricState::Available(Vec::new()),

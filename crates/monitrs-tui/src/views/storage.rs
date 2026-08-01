@@ -994,7 +994,7 @@ fn draw_history(
     let read = plot_series(ring, HistoryMetric::DiskRead);
     let write = plot_series(ring, HistoryMetric::DiskWrite);
     let caret = selected_sample_offset(state);
-    let note = caret_note(state);
+    let note_segments = caret_note(state, units);
 
     let mut used = 0u16;
     let mut next_row = || -> Option<Rect> {
@@ -1034,7 +1034,7 @@ fn draw_history(
         SparklineCaret::new(presentation, &write, offset)
             .with_label("WRITE")
             .with_label_width(HISTORY_LABEL_WIDTH)
-            .with_note(&note)
+            .with_note_segments(&note_segments)
             .render(rect, buffer);
     }
 }

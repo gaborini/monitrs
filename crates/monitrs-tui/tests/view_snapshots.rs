@@ -959,6 +959,42 @@ fn the_battery_screen_on_a_machine_with_no_battery() {
 }
 
 #[test]
+fn the_battery_screen_with_a_retained_reading() {
+    // The fixture the 1.0.0 review found missing, and the reason the defect it found
+    // could live for a release cycle: both metrics on this screen are read on the sensor
+    // cadence rather than every tick, so `Stale` is the *idle* case on a real host — and
+    // yet no snapshot in the suite had ever rendered one, because `FakeCollector::sensors`
+    // never routed through the scenario's ageing rule.
+    //
+    // What this pins is §4's rule and the design document's A2: a retained value may be
+    // shown only alongside its age. Each panel states that age once, in its own trailing
+    // label, and the fields below it carry the mark. `TEMP`, `POWER`, `CYCLES` and
+    // `TO EMPTY` are the four that were undated — they are the inner struct's own
+    // `Available` fields, unwrapped out of a `Stale` envelope, so nothing about them
+    // looked wrong in isolation.
+    let state = Fixture::new((140, 38), ViewId::Battery)
+        .with_scenario(Scenario {
+            stale_from: Some(6),
+            ..Scenario::default()
+        })
+        .build();
+    let text = text_of(&frame(&state, ascii()));
+    // Both panels date themselves, and the header segment beside them does too.
+    assert!(
+        text.contains("82% discharging ~"),
+        "the pack's own panel label is undated:\n{text}"
+    );
+    assert!(
+        text.contains("2 sensors ~"),
+        "the sensor list's panel label is undated:\n{text}"
+    );
+    // The figures are still there — a retained reading is shown, not dropped.
+    assert!(text.contains("12.4 W"), "{text}");
+    assert!(text.contains("62.5C"), "{text}");
+    insta::assert_snapshot!(text);
+}
+
+#[test]
 fn the_battery_screen_while_charging() {
     // Charging inverts the estimate's meaning, and an unlabelled `49m` would be read
     // as time-to-empty by anyone who glanced at the discharging screen first.
@@ -1126,10 +1162,208 @@ fn a_history_overview_carries_its_offset_and_a_caret() {
     }
     let text = text_of(&frame(&state, ascii()));
     assert!(text.contains("[<HISTORY -"), "{text}");
+    // §2.5: the caret's note is the selected sample's comparison against its
+    // baselines, not merely a repeat of the offset the header already carries.
     assert!(
-        text.contains("selected"),
-        "the caret note is missing:\n{text}"
+        text.contains("cpu prev"),
+        "the caret's comparison is missing:\n{text}"
     );
     assert!(text.contains('^'), "the caret is missing:\n{text}");
     insta::assert_snapshot!(text);
+}
+
+#[test]
+fn a_mid_plot_caret_survives_at_eighty_columns() {
+    // §2.5: a caret parked near "now" sits at the plot's right-hand edge, which
+    // gives the note nearly the whole row on its one usable side. A caret
+    // parked near the *middle* of the visible plot splits that room roughly in
+    // half instead, which is a far tighter budget — and a real one, since
+    // `[` and `Shift+[` can park the Time Lens anywhere in the retained
+    // history, not only a few samples back. Network's inner panel width at 80
+    // columns is 78 cells and its label reserves 5, so the plot is 73 cells
+    // wide; offset 25 is squarely in the middle of that, not at either edge.
+    let mut state = Fixture::new((80, 24), ViewId::Network)
+        .with_samples(60)
+        .build();
+    for _ in 0..25 {
+        let _ = monitrs_tui::app::reduce(
+            &mut state,
+            monitrs_tui::action::Action::SeekHistory(monitrs_tui::action::Seek::Backward(1)),
+        );
+    }
+    let text = text_of(&frame(&state, ascii()));
+    let caret_row = text
+        .lines()
+        .find(|line| line.contains('^'))
+        .expect("a mid-plot caret must still be drawn");
+    assert!(
+        caret_row.contains('Z'),
+        "the wall clock must survive a mid-plot caret, not only one parked at \
+         the row's edge where nearly the whole row is free for the note: \
+         {caret_row:?}"
+    );
+    assert!(
+        caret_row.contains("cpu prev"),
+        "the comparison must survive a mid-plot caret too: {caret_row:?}"
+    );
+}
+
+#[test]
+fn the_network_caret_note_fits_the_eighty_column_panel() {
+    // §2.1's Overview drops its History panel entirely below 100 columns (the
+    // `Compact` band), and Storage's THROUGHPUT HISTORY panel is a fixed
+    // `HISTORY_HEIGHT` of 2 inner rows at every breakpoint — enough for RX and TX
+    // but never a third row, so its caret note is computed but never has a row to
+    // render into. The Network screen's history panel is sized from what is left
+    // over instead, so at 80 columns it is the narrowest place a caret note
+    // actually reaches the screen — the binding case for §2.5's comparisons, and
+    // for the sample's wall clock, fitting beside it. At `Compact` the caret note
+    // is that wall clock's *only* carrier (see `caret_note`'s doc comment), so
+    // this checks for it by name rather than only for the comparison.
+    let mut state = Fixture::new((80, 24), ViewId::Network).build();
+    for _ in 0..4 {
+        let _ = monitrs_tui::app::reduce(
+            &mut state,
+            monitrs_tui::action::Action::SeekHistory(monitrs_tui::action::Seek::Backward(1)),
+        );
+    }
+    let text = text_of(&frame(&state, ascii()));
+    let caret_row = text
+        .lines()
+        .find(|line| line.contains('^'))
+        .expect("the caret row must be present at 80 columns");
+    // Every row `text_of` prints is wrapped in one synthetic `|` marker on each
+    // end (not part of the rendered buffer), so the true rendered width is the
+    // state's own column count.
+    let (width, _) = state.size();
+    assert_eq!(
+        monitrs_core::units::display_width(caret_row),
+        usize::from(width) + 2,
+        "the caret row must fill its 80-column panel without wrapping or being \
+         cut short: {caret_row:?}"
+    );
+    assert!(
+        caret_row.contains("cpu prev"),
+        "the comparison must reach the caret at 80 columns too: {caret_row:?}"
+    );
+    assert!(
+        caret_row.contains('Z'),
+        "the wall clock is unrecoverable anywhere else at this breakpoint \
+         (Compact's summary strip reads the live snapshot, never the \
+         selection), so it must still lead the note here: {caret_row:?}"
+    );
+    assert!(
+        !caret_row.trim_end_matches('|').trim_end().is_empty(),
+        "a note that does not fit must never render as a blank row: {caret_row:?}"
+    );
+}
+
+#[test]
+fn the_caret_note_survives_a_three_digit_swing_at_eighty_columns() {
+    // The values in the test above are convenient, not adversarial: a delta of
+    // `+4 points` says little about whether the row actually has room. CpuBusy
+    // is documented `0..=100` (crates/monitrs-core/src/history/sample.rs), so an
+    // idle-to-saturated swing within a single tick is a realistic input, and it
+    // is exactly the moment a reader most wants the comparison on screen.
+    // `SparklineCaret::row` (crates/monitrs-tui/src/widgets/sparkline.rs) does
+    // not truncate a note that does not fit — it drops the whole thing — so a
+    // margin proven only against small numbers is not a margin at all.
+    //
+    // A `Spike` pattern peaking on the newest of 35 samples puts a full 0→100
+    // swing one sample back (the previous-sample baseline) and again roughly
+    // 30 seconds back (every other sample is the pattern's `base`), so both
+    // comparisons render their extreme, longest form at once.
+    let scenario = Scenario {
+        cpu: Pattern::Spike {
+            base: 0.0,
+            peak: 100.0,
+            at: 34,
+        },
+        ..Scenario::default()
+    };
+    let state = Fixture::new((80, 24), ViewId::Network)
+        .with_scenario(scenario)
+        .with_samples(35)
+        .paused()
+        .build();
+    let text = text_of(&frame(&state, ascii()));
+    let caret_row = text
+        .lines()
+        .find(|line| line.contains('^'))
+        .expect("the caret row must survive a three-digit swing at 80 columns");
+    // Whole segments, not fragments: `join_fitting` only ever includes a
+    // complete segment, so if either of these appears at all it appears in
+    // full — a clipped `+10` reading as a different number is what this
+    // guards against.
+    assert!(
+        caret_row.contains("cpu prev +100 points"),
+        "a three-digit previous-sample delta must render whole, not clipped \
+         or dropped: {caret_row:?}"
+    );
+    assert!(
+        caret_row.contains("30s +100 points"),
+        "a three-digit thirty-second delta must render whole, not clipped \
+         or dropped: {caret_row:?}"
+    );
+    let (width, _) = state.size();
+    assert_eq!(
+        monitrs_core::units::display_width(caret_row),
+        usize::from(width) + 2,
+        "the row must still fill exactly its panel width: {caret_row:?}"
+    );
+}
+
+#[test]
+fn the_caret_note_survives_a_three_digit_swing_mid_plot_at_eighty_columns() {
+    // The test above puts its three-digit swing at offset 0, which is the
+    // caret's *best* position: parked at the plot's right-hand edge, nearly
+    // the whole row is free for the note on its one usable side. That is not
+    // the worst case in either dimension. This test combines both: a caret
+    // mid-plot (offset 25 of a ~73-cell plot, splitting the row roughly in
+    // half) *and* a three-digit swing at exactly the selected sample, so the
+    // note has the least room and the longest possible text at the same time.
+    //
+    // The `Spike` sits on the sample 25 back from the newest of 70, rather
+    // than on the newest sample itself, so both the previous-sample and the
+    // thirty-second baselines (indices 24 and roughly 34 samples earlier,
+    // neither of which is the spike) read the pattern's `base`, giving both
+    // comparisons their full `+100 points` against the selected sample.
+    let scenario = Scenario {
+        cpu: Pattern::Spike {
+            base: 0.0,
+            peak: 100.0,
+            at: 44,
+        },
+        ..Scenario::default()
+    };
+    let mut state = Fixture::new((80, 24), ViewId::Network)
+        .with_scenario(scenario)
+        .with_samples(70)
+        .build();
+    for _ in 0..25 {
+        let _ = monitrs_tui::app::reduce(
+            &mut state,
+            monitrs_tui::action::Action::SeekHistory(monitrs_tui::action::Seek::Backward(1)),
+        );
+    }
+    let text = text_of(&frame(&state, ascii()));
+    let caret_row = text
+        .lines()
+        .find(|line| line.contains('^'))
+        .expect("the caret row must survive a mid-plot three-digit swing");
+    assert!(
+        caret_row.contains('Z'),
+        "the wall clock is the highest-priority segment; it must be the last \
+         thing to go, even in the tightest realistic case: {caret_row:?}"
+    );
+    assert!(
+        caret_row.contains("cpu prev +100 points"),
+        "whole segment or nothing, never a clipped number, even mid-plot: \
+         {caret_row:?}"
+    );
+    assert!(
+        caret_row.contains("30s +100 points"),
+        "whole segment or nothing, never a clipped number, even mid-plot: \
+         {caret_row:?}"
+    );
 }

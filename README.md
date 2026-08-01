@@ -24,14 +24,30 @@ terminal monitors, what it was doing thirty seconds ago. Pause the timeline,
 scrub back to a spike, and see which processes were most strongly correlated
 with it.
 
-> **Status: `0.2.0`, and marked a pre-release.** It is on
+> **Status: `1.0.0`, a stability promise with a machine behind it.** It is on
 > [crates.io](https://crates.io/crates/monitrs) and
-> [GitHub](https://github.com/gaborini/monitrs/releases/tag/v0.2.0). The pre-release
-> flag is not modesty: one of §16.1's budgets is not met — idle self-CPU at the 95th
-> percentile — and the twelve-hour soak has not been run, both of which are stated in
-> [`CHANGELOG.md`](CHANGELOG.md) and in the table below. `0.2.0` also changes the
-> library API and the JSON export schema; the changelog lists every break. Where a claim
-> has a caveat, the caveat is next to it rather than left out.
+> [GitHub](https://github.com/gaborini/monitrs/releases/tag/v1.0.0). Four surfaces are
+> frozen — the public API of the three library crates, the JSON export, the configuration
+> keys, and the default keymap — and each has a guard that fails a build rather than a
+> paragraph that asks nicely: the inventories in [`docs/schema/`](docs/schema/) with the
+> contract tests that read them, the keymap's own tests, and `cargo-semver-checks` for
+> the API, which this release's own commit turned from advisory into a gate.
+> [`CONTRIBUTING.md`](CONTRIBUTING.md) states the terms. **What is not frozen is how it
+> looks**: layout, wording, colour, glyph choice and panel arrangement are presentation,
+> and a cosmetic change is not a breaking one.
+>
+> **The caveat that survives the `1.0` label**, because relabelling it would not fix it:
+> one of §16.1's budgets is still not met — idle self-CPU at the 95th percentile,
+> 4.30–9.50% against 2%, with the median passing — and the twelve-hour soak has not been
+> run on either platform. That second one is a **blocking gate deferred past this tag by
+> a written decision**, not one that lapsed: `docs/release-checklist.md`'s step 5 names
+> who deferred it, on what date, on what evidence, and the seven days inside which the
+> runs are owed. The table below carries the first;
+> [`CHANGELOG.md`](CHANGELOG.md)'s *Known limitations* carries both, and says — because
+> it is the useful part — that the cause this release was built around turned out to be
+> the wrong one. `1.0.0` also breaks the library API on its way to freezing it; the
+> changelog lists every break. Where a claim has a caveat, the caveat is next to it
+> rather than left out.
 
 ## The screens
 
@@ -185,7 +201,7 @@ surprises you.
 
 ### From a release archive
 
-[The `v0.2.0` release](https://github.com/gaborini/monitrs/releases/tag/v0.2.0) has one
+[The `v1.0.0` release](https://github.com/gaborini/monitrs/releases/tag/v1.0.0) has one
 archive per target — `x86_64` and `aarch64` for Linux glibc, Linux musl, and macOS —
 each carrying the binary, both licences, this README, the changelog excerpt for that
 version, shell completions for bash, zsh, fish, PowerShell and elvish, and a manpage.
@@ -196,8 +212,8 @@ Installing one means verifying it and putting the binary somewhere on your `PATH
 # The release carries one SHA256SUMS for all six archives, not a file per archive, so
 # --ignore-missing is what lets you check the one you actually downloaded.
 shasum -a 256 --check --ignore-missing SHA256SUMS     # sha256sum on Linux
-tar xzf monitrs-0.2.0-aarch64-apple-darwin.tar.gz
-install -m 755 monitrs-0.2.0-aarch64-apple-darwin/monitrs ~/.local/bin/monitrs
+tar xzf monitrs-1.0.0-aarch64-apple-darwin.tar.gz
+install -m 755 monitrs-1.0.0-aarch64-apple-darwin/monitrs ~/.local/bin/monitrs
 ```
 
 Releases also carry a build attestation, so `gh attestation verify
@@ -336,8 +352,8 @@ just bench     # criterion benchmarks
 ```
 
 `just --list` shows every recipe with the underlying cargo command. `just` is a
-convenience only; nothing requires it. See
-[`CONTRIBUTING.md`](CONTRIBUTING.md).
+convenience only; nothing requires it. See [`CONTRIBUTING.md`](CONTRIBUTING.md),
+which also states what `1.0.0` froze and what it deliberately did not.
 
 ## Performance
 
@@ -350,16 +366,19 @@ workload, so read them as a hard case rather than a flattering one:
 |---|---|
 | frame render below 16 ms at 160×48 | median 200 µs, p95 353 µs |
 | input-to-visible-response below 50 ms | median 417 µs, p95 486 µs |
-| sample collection below 200 ms p95 | p95 15–21 ms for the ordinary tick; 121–161 ms for the every-fifth one |
+| sample collection below 200 ms p95 | p95 12.63 ms for the ordinary fast-only tick (four in five), 40.90 ms when the medium tier joins it (every fifth), 134.78 ms for the every-thirtieth tick that also reads sensors |
 | resident memory below 50 MiB | median 24.5–26.7 MiB, peak 27.2 MiB |
 | no unbounded growth | 30-minute soak: resident size fell, descriptors flat, nothing dropped |
-| idle self CPU below 1% median, 2% p95 | median 0.5–1.1% — met; **p95 6–11% — fails** |
+| idle self CPU below 1% median, 2% p95 | median 0.60–0.85% — met; **p95 4.30–9.50% — fails** |
 
-The last row is the honest one. monitrs' own computation is about 35 µs per tick;
-the cost is OS reads, and on this host the process table and the disk counters cost
-29 ms and 34 ms respectively every second. `docs/benchmarks.md` breaks it down read
-by read and says what would close it. A twelve-hour soak has not been run, and no
-soak has been run on Linux.
+The last row is the honest one, and where the cost sits is now measured rather than
+guessed. monitrs' own computation is about 35 µs per tick; the rest is OS reads. The
+process table and the disk counters used to cost 29 ms and 34 ms of it every second and
+no longer do — both were fixed. What remains is the medium tier's filesystem-capacity
+work, at **13.2–35.0 ms of CPU per tick** against a whole-tick budget of roughly 16 ms;
+which of its two reads carries that is not yet separated. `docs/benchmarks.md` breaks it
+down read by read and says what would close it. A twelve-hour soak has not been run, and
+no soak has been run on Linux.
 
 Two component results worth knowing: history seeking is constant time regardless of
 how far back you scrub, and the sampling loop is bound by OS reads rather than by

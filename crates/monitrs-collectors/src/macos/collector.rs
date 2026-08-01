@@ -23,13 +23,15 @@
 //! # Tiers
 //!
 //! Fast: CPU ticks, memory statistics, the process table, per-process counters.
-//! Medium: battery, and filesystem inode counts — beside the byte capacity the
-//! baseline reads on the same tier, because they come from the same `statfs` data and
-//! neither belongs in a one-second loop. Slow: machine facts, interface link state
-//! and speed. Nothing expensive is read more often than §8.6 asks for.
+//! Medium: filesystem inode counts — beside the byte capacity the baseline reads on
+//! the same tier, because they come from the same `statfs` data and neither belongs
+//! in a one-second loop. The sensor group, on its own cadence: the battery, which
+//! §8.6 groups with the temperatures the baseline reads there. Slow: machine facts,
+//! interface link state and speed. Nothing expensive is read more often than §8.6
+//! asks for.
 
 use core::time::Duration;
-use std::time::SystemTime;
+use std::time::{Instant, SystemTime};
 
 use monitrs_core::SystemSnapshot;
 use monitrs_core::model::{
@@ -196,8 +198,11 @@ pub struct MacosCollector {
     swap_in: CounterTracker,
     swap_out: CounterTracker,
     capabilities: monitrs_core::model::CapabilitySnapshot,
-    /// Battery, refreshed on the medium tier (§8.6).
+    /// Battery, refreshed with the sensor group §8.6 puts it in.
     cached_battery: MetricState<monitrs_core::model::BatterySnapshot>,
+    /// When [`Self::cached_battery`] was actually measured, so a carried-over
+    /// reading can state its age (§4). `None` until the first read.
+    battery_read_at: Option<Instant>,
     /// Interface link state and speed, refreshed on the slow tier (§8.6).
     cached_links: std::collections::HashMap<Box<str>, network::InterfaceLink>,
     /// Inode counts per mount, refreshed on the medium tier with the capacity it
@@ -270,6 +275,7 @@ impl MacosCollector {
             swap_out: CounterTracker::new(CounterWidth::Bits64),
             capabilities,
             cached_battery: MetricState::WarmingUp,
+            battery_read_at: None,
             cached_links: std::collections::HashMap::new(),
             cached_inodes: Vec::new(),
             mount_buffer: Vec::new(),
@@ -319,14 +325,31 @@ impl MacosCollector {
         };
     }
 
-    /// Refreshes the medium-tier native data.
-    fn refresh_medium(&mut self) {
+    /// The battery half of the sensor group (§8.6 groups it with temperatures).
+    ///
+    /// Deliberately not on the medium tier: leaving it there would keep an IOKit read
+    /// at five seconds while the temperatures beside it on the Battery screen are read
+    /// every thirty, and one panel showing two cadences is a difference the reader
+    /// cannot see the reason for (§4).
+    fn refresh_sensors(&mut self, tick: &SampleTick) {
         self.cached_battery = power::read_battery();
+        // Stamped here, where the read happens, rather than by the caller: the age of
+        // a carried reading is measured from this moment, and a timestamp set anywhere
+        // else can disagree with the value it describes. Taken from the tick rather
+        // than from `Instant::now()` so it is on the same clock as the snapshot (§8.1).
+        self.battery_read_at = Some(tick.captured_at);
+        // Derived from the reading this method just took, never from the value
+        // `sample` publishes: that one is stale-marked on a carried tick, and a
+        // capability derived from it would flip to unsupported every few seconds.
         self.capabilities.battery = match self.cached_battery {
             MetricState::Available(_) => CapabilityState::Available,
             MetricState::PermissionDenied => CapabilityState::PermissionDenied,
             _ => CapabilityState::Unsupported,
         };
+    }
+
+    /// Refreshes the medium-tier native data.
+    fn refresh_medium(&mut self) {
         // A failed read leaves the previous readings in place rather than clearing
         // them: the mount table does not change between medium ticks nearly as often
         // as `getfsstat` could transiently fail, and the merge would otherwise flip
@@ -491,6 +514,9 @@ impl SnapshotSource for MacosCollector {
         if tick.due.contains(Tier::Medium) {
             self.refresh_medium();
         }
+        if tick.due.sensors() {
+            self.refresh_sensors(tick);
+        }
 
         // Deliberately not gated on the fast tier. The tiers are scheduled
         // independently, so a tick can carry Medium or Slow without Fast — and on
@@ -511,7 +537,11 @@ impl SnapshotSource for MacosCollector {
         // `n/a` for the rest (§4: a state must not flicker for a reason the reader
         // cannot see).
         crate::inodes::merge_into(&mut snapshot.filesystems, &self.cached_inodes);
-        snapshot.sensors.battery = self.cached_battery;
+        // The baseline published its own (stale-marked) sensors and leaves the battery
+        // to this layer. The replacement goes through the same rule, so the two halves
+        // of the Battery screen answer "how old is this?" identically (§4, §8.1).
+        snapshot.sensors.battery =
+            crate::common::published_sensor(self.cached_battery, tick, self.battery_read_at);
         // macOS has no PSI, and the baseline leaves the field `WarmingUp` because on
         // Linux it is filled in by the enrichment. Left alone, the radar's three PSI
         // rows would read `warming` for the entire session — a promise that the value
@@ -1052,6 +1082,83 @@ mod tests {
             "enriching {} processes took {elapsed:?}",
             snapshot.processes.len()
         );
+    }
+
+    #[test]
+    #[ignore = "platform smoke: reads the live system (§17.6)"]
+    fn the_battery_read_follows_the_sensor_group_not_the_medium_tier() {
+        let mut collector = MacosCollector::new().expect("a macOS collector");
+        let start = Instant::now();
+        let first_tick = SampleTick::first(start, SystemTime::now());
+        let first = collector.sample(&first_tick).expect("first sample");
+
+        // A medium tick without sensors: filesystems and inodes are re-read, the
+        // battery is not, and what is published says how old it is.
+        //
+        // `elapsed` is deliberately *not* the gap since the battery was read. It is
+        // the measured interval since the last fast tick, and an implementation that
+        // reached for it instead of for the read time would report one second here —
+        // which is the mistake §8.1 forbids, and it would pass unnoticed if the two
+        // numbers were equal.
+        let medium = SampleTick {
+            sequence: 1,
+            captured_at: start + Duration::from_secs(5),
+            wall_time: SystemTime::now(),
+            elapsed: Duration::from_secs(1),
+            due: DueTiers::fast_and_medium(),
+        };
+        let snapshot = collector.sample(&medium).expect("second sample");
+        // Keyed off the *first* snapshot rather than off the second, so on a machine
+        // with a battery this cannot pass by taking the desktop branch: a Mac that
+        // measured a charge on the first tick must publish a stale one on the second.
+        if first.sensors.battery.is_available() {
+            let MetricState::Stale { age, .. } = snapshot.sensors.battery else {
+                panic!(
+                    "a battery reading carried across a tick must be stale, not measured: {:?}",
+                    snapshot.sensors.battery
+                );
+            };
+            assert_eq!(
+                age,
+                Duration::from_secs(5),
+                "the age is the real gap since the read, not the tick interval (§8.1)"
+            );
+        } else {
+            // A desktop Mac, or one that refused the read. Neither may acquire a
+            // reading by being carried across a tick (§4, §26).
+            assert!(
+                !snapshot.sensors.battery.is_available(),
+                "a machine with no battery reading must not gain one: {:?}",
+                snapshot.sensors.battery
+            );
+            assert!(
+                !snapshot.sensors.battery.is_stale(),
+                "only a value that was once measured can go stale: {:?}",
+                snapshot.sensors.battery
+            );
+        }
+        // A Mac does not stop being able to report its battery between two ticks. If
+        // the capability were derived from the *published* value it would flip to
+        // unsupported on every carried tick, which §4 forbids.
+        assert_eq!(
+            snapshot.capabilities.battery, first.capabilities.battery,
+            "the battery capability changed because a reading was carried"
+        );
+        // The inode count is a filesystem metric and stays on the medium tier, so
+        // this tick measured it rather than carrying it.
+        if first
+            .filesystems
+            .iter()
+            .any(|filesystem| filesystem.inodes.is_available())
+        {
+            assert!(
+                snapshot
+                    .filesystems
+                    .iter()
+                    .any(|filesystem| filesystem.inodes.is_available()),
+                "the inode read must stay on the medium tier"
+            );
+        }
     }
 
     #[test]

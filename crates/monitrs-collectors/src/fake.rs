@@ -328,6 +328,14 @@ pub struct Scenario {
     pub fail_at: Option<u64>,
     /// A sequence from which metrics go stale rather than fresh, to exercise the
     /// stale-marking requirement (§4, §17.3).
+    ///
+    /// Every metric the scenario can age, the sensor group included. That last part was
+    /// missing until the 1.0.0 review: `sensors()` built its states without going through
+    /// `FakeCollector::age`, so no fixture in the suite had ever rendered a stale
+    /// sensor and the Battery screen printed the fields of a retained pack undated
+    /// without a snapshot noticing. Sensors are also the metrics a real host is *most*
+    /// likely to show retained, because they are read on their own cadence rather than
+    /// every tick.
     pub stale_from: Option<u64>,
 }
 
@@ -945,31 +953,43 @@ impl FakeCollector {
         ]
     }
 
+    /// The sensor group, which unlike the other metrics is *expected* to be retained.
+    ///
+    /// Both fields go through [`FakeCollector::age`] like every other metric. They were
+    /// the two that did not, and the consequence was that no fixture in the suite had
+    /// ever rendered a stale sensor: the Battery screen unwrapped a `Stale` envelope and
+    /// printed its inner fields undated for a whole release cycle without a snapshot
+    /// noticing. Sensors are the metrics *most* likely to be stale on a real host, since
+    /// they are read on their own cadence rather than every tick, so a fake that could
+    /// not produce one was missing the case that matters most.
     fn sensors(&self, sequence: u64) -> SensorSnapshot {
         SensorSnapshot {
             temperatures: if self.scenario.temperatures {
-                counter_state(
+                self.age(
+                    counter_state(
+                        sequence,
+                        vec![
+                            TemperatureReading {
+                                label: "performance".into(),
+                                celsius: 62.5,
+                                peak_celsius: Some(95.0),
+                                critical_celsius: Some(105.0),
+                            },
+                            TemperatureReading {
+                                label: "efficiency".into(),
+                                celsius: 44.0,
+                                peak_celsius: Some(95.0),
+                                critical_celsius: Some(105.0),
+                            },
+                        ],
+                    ),
                     sequence,
-                    vec![
-                        TemperatureReading {
-                            label: "performance".into(),
-                            celsius: 62.5,
-                            peak_celsius: Some(95.0),
-                            critical_celsius: Some(105.0),
-                        },
-                        TemperatureReading {
-                            label: "efficiency".into(),
-                            celsius: 44.0,
-                            peak_celsius: Some(95.0),
-                            critical_celsius: Some(105.0),
-                        },
-                    ],
                 )
             } else {
                 MetricState::Unsupported
             },
             battery: if self.scenario.battery {
-                counter_state(sequence, self.battery())
+                self.age(counter_state(sequence, self.battery()), sequence)
             } else {
                 // §4: a machine with no battery reports the fact, not a flat pack.
                 MetricState::Unsupported

@@ -786,7 +786,12 @@ fn enrich_parse_error(message: &str) -> String {
 }
 
 /// Every key name a configuration file may contain.
-fn known_keys() -> BTreeSet<&'static str> {
+///
+/// Hand-maintained, and used only to suggest a correction for a misspelled key —
+/// which is why `crates/monitrs/tests/config_contract.rs` asserts that it still
+/// matches the serde structs. A suggestion list that has drifted proposes a key the
+/// parser will reject next.
+pub(crate) fn known_keys() -> BTreeSet<&'static str> {
     [
         "config_version",
         "sampling",
@@ -1208,9 +1213,11 @@ config_version = {version}
 interval = "{interval}"
 # How much history Time Lens retains. Range: 30s to 1h.
 history = "{history}"
-# Filesystem capacity, device state, and sensors.
+# Filesystem capacity and static device state. The sensor group borrows this
+# interval too, but only while the Battery screen is the one on screen.
 medium_interval = "{medium}"
-# Users, device lists, and static metadata.
+# Users, device lists, static metadata — and the sensor group (temperatures and
+# the battery) at every other time, which is nearly always.
 slow_interval = "{slow}"
 # Ceiling for the history ring. If interval and history would need more than
 # this, history is shortened and monitrs tells you it was clamped.

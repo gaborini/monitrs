@@ -191,3 +191,26 @@ jobs:
         with:
           tool: cargo-udeps
       - run: cargo +nightly udeps --workspace --all-targets --all-features
+
+  # B2 of the 1.0.0 design (docs/superpowers/specs/2026-07-31-road-to-1.0.0-design.md):
+  # compares the workspace's public API against the last published release and
+  # fails on a breaking change that was not paired with a major bump. `monitrs`
+  # itself is a `[[bin]]` crate with no library target, so `--workspace` only ever
+  # checks `monitrs-core`, `monitrs-collectors` and `monitrs-tui` — exactly the
+  # three crates CONTRIBUTING.md's freeze policy names as API.
+  semver:
+    name: semver compatibility
+    needs: fmt
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: dtolnay/rust-toolchain@4cda84d5c5c54efe2404f9d843567869ab1699d4 # stable
+      # Installed from source rather than through a pinned third-party action:
+      # unlike cargo-deny and cargo-udeps above, nothing in this workflow already
+      # depends on an install action that carries this tool, and this repository
+      # would rather pay the build time than add a new pinned dependency for it.
+      - name: install cargo-semver-checks
+        run: cargo install cargo-semver-checks --locked
+      - name: public API must not break without a major bump
+        run: cargo semver-checks check-release --workspace

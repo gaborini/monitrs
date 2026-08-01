@@ -349,9 +349,18 @@ the stall itself rather than inferring it from a utilization number.
 
 ## Sensors and battery
 
-Both are optional on every platform, and both are read on the medium (5 s) tier: a
+Both are optional on every platform, and both are read as one **sensor group** on a
+cadence of its own rather than on the medium tier: **every 30 s**, or every 5 s while
+the Battery screen is visible, and immediately when that screen is opened (§8.6). A
 pack's charge moves in whole percentage points over minutes, and reading it every
-second would be a dozen file opens to watch a number that has not changed.
+second would be a dozen file opens to watch a number that has not changed — while on
+macOS the temperature read alone blocks for about 85 ms, which is why it is not on the
+5-second schedule the rest of the secondary metrics share.
+
+The consequence on screen: between reads the last value is carried forward and shown
+**with its age** rather than dropped, so a temperature or a charge level can be up to
+30 seconds old and says so (`62.5C`, panel label `2 sensors ~00:28`). A retained
+reading is never presented as a fresh one.
 
 ### A machine with no battery
 
@@ -365,7 +374,7 @@ The states are distinguished, because they call for different responses:
 | Reading | Meaning |
 |---|---|
 | `n/a` | This machine has no battery. Nothing to fix. |
-| `warming up` | The medium tier has not read `/sys/class/power_supply` yet. |
+| `warming up` | The sensor group has not read `/sys/class/power_supply` yet. Opening the Battery screen asks for a read straight away, so this is normally gone within a tick or two. |
 | `permission denied` | A power source is present but unreadable at this privilege level. |
 
 ### Battery fields

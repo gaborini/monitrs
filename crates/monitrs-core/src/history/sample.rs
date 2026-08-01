@@ -15,7 +15,12 @@ use super::{ContributorSet, most_representative, propagate_unavailable};
 /// The set is deliberately small and fixed: §8.5 budgets 300 samples by default,
 /// so every field added here costs memory on every one of them. Anything a user
 /// can only want for the *live* view stays out.
+///
+/// `#[non_exhaustive]`: the retained aggregate set is expected to grow within
+/// 1.x — the pressure event log deferred to 1.1.0 is a likely source — and a new
+/// metric must not force a major version bump.
 #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
+#[non_exhaustive]
 pub enum HistoryMetric {
     /// Aggregate machine CPU utilization, `0..=100` (§8.3).
     CpuBusy,

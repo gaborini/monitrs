@@ -1,4 +1,5 @@
-//! What monitrs itself costs: our own resident memory and descriptor count.
+//! What monitrs itself costs: our own resident memory, descriptor count, and the
+//! CPU time we burn.
 //!
 //! §26 ends with "a system monitor must measure and expose its own overhead", and
 //! §16.1 sets two budgets that cannot be checked any other way:
@@ -14,6 +15,12 @@
 //! both figures periodically and compares the last quartile of a run against the
 //! first.
 //!
+//! [`thread_cpu_time`] and [`process_cpu_time`] are readings of a different kind.
+//! §16.1's idle self-CPU budget is not a trend but an instrument problem: the
+//! budget is about CPU, and the only figure the measurement runs had was
+//! wall-clock, which for a blocking read is a different number entirely. They
+//! answer that, and `docs/benchmarks.md` records what they answered.
+//!
 //! # Why this lives here rather than in the collectors' sampling path
 //!
 //! Nothing in this module is called from [`crate::SnapshotSource::sample`]. It
@@ -24,16 +31,22 @@
 //!
 //! # What each platform can answer
 //!
-//! | Platform | Resident bytes | Open descriptors |
-//! |---|---|---|
-//! | Linux | `VmRSS` from `/proc/self/status` | entries in `/proc/self/fd` |
-//! | macOS, `macos-native` | `pti_resident_size` from `proc_pidinfo` | `PROC_PIDLISTFDS` byte count |
-//! | anything else | `Unsupported` | `Unsupported` |
+//! | Platform | Resident bytes | Open descriptors | CPU time, thread and process |
+//! |---|---|---|---|
+//! | Linux | `VmRSS` from `/proc/self/status` | entries in `/proc/self/fd` | `clock_gettime` and `getrusage`, and only with `linux-native` |
+//! | macOS, `macos-native` | `pti_resident_size` from `proc_pidinfo` | `PROC_PIDLISTFDS` byte count | `clock_gettime` and `getrusage` |
+//! | anything else | `Unsupported` | `Unsupported` | `Unsupported` |
 //!
 //! Unsupported rather than zero, for the reason the whole codebase repeats: a
 //! figure nobody measured is not a figure of nought (§4, §26).
 //!
-//! # Two caveats worth knowing before trusting a number from here
+//! The last column is the one that needs `libc` on Linux as well as on macOS,
+//! which is why it has its own predicate ([`CPU_TIME_COMPILED`]) rather than
+//! sharing [`SELF_MEASUREMENT_COMPILED`]: the first two columns deliberately avoid
+//! `libc` there, and there is no documented way to read either CPU clock without
+//! it.
+//!
+//! # Three caveats worth knowing before trusting a number from here
 //!
 //! * **Resident size is a whole-process figure.** In a test binary it includes the
 //!   test harness and every other test thread. Comparing two readings from the
@@ -45,6 +58,17 @@
 //!   it cannot manufacture or hide a trend, and it is not silently corrected here
 //!   because a corrected count that was wrong by one in the other direction would
 //!   be harder to explain than the raw one.
+//! * **Thread CPU time belongs to the calling thread and to no other.** Two
+//!   readings taken on the same thread subtract into the CPU that thread spent
+//!   between them; two readings taken on different threads subtract into nothing,
+//!   because each thread's clock starts near zero when it does. That narrowness is
+//!   the feature and also the trap: work a call pushes onto a helper thread is real
+//!   CPU that [`thread_cpu_time`] cannot see, which is why [`process_cpu_time`]
+//!   sits beside it. Read them as a pair. Measured, the two agree closely for most
+//!   of the sampling tick shapes and diverge materially for the one that reads the
+//!   sensors, so the gap is not hypothetical; `docs/benchmarks.md` has the figures.
+
+use std::time::Duration;
 
 use monitrs_core::model::MetricState;
 
@@ -108,6 +132,68 @@ pub fn resident_bytes() -> MetricState<u64> {
 #[must_use]
 pub fn open_descriptors() -> MetricState<u32> {
     imp::open_descriptors()
+}
+
+/// Whether this build can read either CPU-time figure.
+///
+/// Narrower than [`SELF_MEASUREMENT_COMPILED`] and deliberately so: the two CPU
+/// readings need `libc` on Linux too, so they need `linux-native` there as well as
+/// `macos-native` on macOS. Both are default features, so a default build on
+/// either platform can answer. Exposed for the same reason as its sibling — a
+/// caller should be able to say "not measured here" without restating a `cfg`
+/// predicate and getting it subtly wrong.
+pub const CPU_TIME_COMPILED: bool = cfg!(any(
+    all(target_os = "linux", feature = "linux-native"),
+    all(target_os = "macos", feature = "macos-native")
+));
+
+/// How much CPU time the calling thread has consumed since it started.
+///
+/// The quantity §16.1's idle self-CPU budget is actually about, and the one a
+/// stopwatch cannot take. A read that *blocks* — `getfsstat`, a `CFURL` capacity
+/// query — costs wall-clock time and very little CPU, so an `Instant::elapsed()`
+/// around it measures something the budget does not budget; `docs/benchmarks.md`
+/// ("Where the idle CPU goes") records this project making exactly that mistake
+/// once already. Two of these readings, subtracted, give what a piece of work
+/// really cost on the meter.
+///
+/// *Thread* rather than process, because that is what makes the subtraction
+/// attributable: the difference across one call on this thread contains that
+/// call's CPU and no other thread's, so it can be charged to the call.
+///
+/// The price of that narrowness is the reason [`process_cpu_time`] exists beside
+/// it: work the call causes on *another* thread is real CPU that this reading
+/// cannot see. Read the pair, not either alone.
+///
+/// Monotonic within a thread. Across threads it is not a clock at all — see the
+/// third caveat in the module docs.
+#[must_use]
+pub fn thread_cpu_time() -> MetricState<Duration> {
+    cpu::thread_cpu_time()
+}
+
+/// How much CPU time this whole process has consumed, on every thread.
+///
+/// The companion [`thread_cpu_time`] needs to be trustworthy rather than merely
+/// narrow. A thread clock charges a call only for what the calling thread ran, so
+/// a call that hands work to a helper thread — an IOKit or CoreFoundation reply,
+/// a framework's own worker — reads as cheaper than it is, and there is no way to
+/// tell that from the thread reading alone. The difference between the two figures
+/// across the same call is how much of its CPU went somewhere else.
+///
+/// That is not a theoretical worry: measured per tick shape, the two agree to a
+/// few tens of microseconds for a fast or a fast-plus-medium tick and diverge by
+/// several milliseconds for a tick that reads the sensors, which is exactly the
+/// case where the thread figure alone would have understated the cost. See
+/// `docs/benchmarks.md` for the numbers and the machine they came from.
+///
+/// `ru_utime + ru_stime` from `getrusage(RUSAGE_SELF)`: POSIX, documented on both
+/// platforms, and reported in whole microseconds rather than nanoseconds — ample
+/// for a millisecond-scale tick, and worth knowing before quoting it for anything
+/// finer.
+#[must_use]
+pub fn process_cpu_time() -> MetricState<Duration> {
+    cpu::process_cpu_time()
 }
 
 /// Maps an I/O failure onto the state the affected metric takes.
@@ -374,6 +460,138 @@ mod imp {
     }
 }
 
+#[cfg(any(
+    all(target_os = "linux", feature = "linux-native"),
+    all(target_os = "macos", feature = "macos-native")
+))]
+mod cpu {
+    //! Two POSIX clocks, the same calls on both targets: `clock_gettime` with
+    //! `CLOCK_THREAD_CPUTIME_ID` for the thread, `getrusage(RUSAGE_SELF)` for the
+    //! process.
+    //!
+    //! One documented interface per reading rather than two apiece. The clock id is
+    //! POSIX (`clock_getcpuclockid`'s per-thread sibling), present on Linux since
+    //! 2.6.12 and on macOS since 10.12, and `libc` exposes both the function and the
+    //! constant for Linux and Apple alike — so §9.3's ban on private and
+    //! undocumented interfaces is satisfied without a per-platform branch.
+    //!
+    //! The Mach alternative, `thread_info(mach_thread_self(), THREAD_BASIC_INFO, …)`
+    //! with `user_time` and `system_time` summed, is equally documented and equally
+    //! permitted. It was not used because it answers on one of the two platforms,
+    //! would need its own code path and its own `time_value_t` conversion, and
+    //! reports microseconds where the portable call reports nanoseconds. There is no
+    //! reading the portable call cannot give us that would justify either cost.
+
+    use core::mem::MaybeUninit;
+    use std::time::Duration;
+
+    use monitrs_core::model::{MetricState, UnavailableReason};
+
+    /// Reads the CPU time consumed by the thread that calls it.
+    ///
+    /// `clock_gettime` signals failure with `-1` and `errno`, so unlike the
+    /// `proc_pidinfo` calls above the return value is the success test directly.
+    pub(super) fn thread_cpu_time() -> MetricState<Duration> {
+        // Zeroed rather than uninitialised, and via `MaybeUninit` rather than a
+        // struct literal: `libc::timespec` carries `cfg`-gated padding fields on
+        // some targets, so naming its fields would compile here and break there.
+        let mut when = MaybeUninit::<libc::timespec>::zeroed();
+        // SAFETY: the buffer is a whole zeroed `timespec` and the pointer is valid
+        // for the single `timespec`-sized write the call makes, so the kernel
+        // cannot write past it. `CLOCK_THREAD_CPUTIME_ID` is a documented clock id
+        // on both targets and needs no further arguments.
+        let outcome =
+            unsafe { libc::clock_gettime(libc::CLOCK_THREAD_CPUTIME_ID, when.as_mut_ptr()) };
+        if outcome != 0 {
+            return super::unavailable_from(std::io::Error::last_os_error().kind());
+        }
+        // SAFETY: the call reported success, so it wrote a whole `timespec`; the
+        // buffer was zeroed beforehand in any case, and `timespec` is two integers
+        // with no invalid bit patterns.
+        let when = unsafe { when.assume_init() };
+        // A negative field cannot be a consumed duration. §26's rule applies to our
+        // own instrument as much as to a sensor: a figure that does not parse says
+        // so rather than being clamped into something plausible.
+        let (Ok(seconds), Ok(nanoseconds)) =
+            (u64::try_from(when.tv_sec), u64::try_from(when.tv_nsec))
+        else {
+            return MetricState::TemporarilyUnavailable(UnavailableReason::ParseFailed);
+        };
+        Duration::from_secs(seconds)
+            .checked_add(Duration::from_nanos(nanoseconds))
+            .map_or(
+                MetricState::TemporarilyUnavailable(UnavailableReason::ParseFailed),
+                MetricState::Available,
+            )
+    }
+
+    /// Sums `ru_utime` and `ru_stime` from `getrusage(RUSAGE_SELF)`.
+    ///
+    /// User and system time added together because the budget is about CPU burned,
+    /// and a syscall's time in the kernel on our behalf is our cost as much as our
+    /// own arithmetic is. `RUSAGE_SELF` covers every thread of this process,
+    /// including ones a framework started, which is the whole point of having this
+    /// beside the thread clock.
+    pub(super) fn process_cpu_time() -> MetricState<Duration> {
+        let mut usage = MaybeUninit::<libc::rusage>::zeroed();
+        // SAFETY: the buffer is a whole zeroed `rusage` and the pointer is valid for
+        // the single `rusage`-sized write the call makes, so the kernel cannot write
+        // past it. `RUSAGE_SELF` is the documented constant for this process.
+        let outcome = unsafe { libc::getrusage(libc::RUSAGE_SELF, usage.as_mut_ptr()) };
+        if outcome != 0 {
+            return super::unavailable_from(std::io::Error::last_os_error().kind());
+        }
+        // SAFETY: the call reported success, so it wrote a whole `rusage`; the buffer
+        // was zeroed beforehand in any case, and every field is an integer with no
+        // invalid bit patterns.
+        let usage = unsafe { usage.assume_init() };
+        match (timeval(usage.ru_utime), timeval(usage.ru_stime)) {
+            (Some(user), Some(system)) => user.checked_add(system).map_or(
+                MetricState::TemporarilyUnavailable(UnavailableReason::ParseFailed),
+                MetricState::Available,
+            ),
+            _ => MetricState::TemporarilyUnavailable(UnavailableReason::ParseFailed),
+        }
+    }
+
+    /// One `timeval` as a duration, or `None` if it cannot be one.
+    ///
+    /// Negative in either field means the reading is not a consumed duration, and
+    /// §26's rule applies to our own instrument too: say so rather than clamp it
+    /// into something that looks like a measurement.
+    fn timeval(value: libc::timeval) -> Option<Duration> {
+        let seconds = u64::try_from(value.tv_sec).ok()?;
+        let microseconds = u64::try_from(value.tv_usec).ok()?;
+        Duration::from_secs(seconds).checked_add(Duration::from_micros(microseconds))
+    }
+}
+
+#[cfg(not(any(
+    all(target_os = "linux", feature = "linux-native"),
+    all(target_os = "macos", feature = "macos-native")
+)))]
+mod cpu {
+    //! No CPU clock in this build: Windows, the BSDs, and either platform built
+    //! without its `libc` feature.
+    //!
+    //! `Unsupported` rather than a zero, because a tick that was never timed must
+    //! not read as a tick that cost nothing.
+
+    use std::time::Duration;
+
+    use monitrs_core::model::MetricState;
+
+    /// No documented reading is compiled into this build.
+    pub(super) const fn thread_cpu_time() -> MetricState<Duration> {
+        MetricState::Unsupported
+    }
+
+    /// No documented reading is compiled into this build.
+    pub(super) const fn process_cpu_time() -> MetricState<Duration> {
+        MetricState::Unsupported
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -404,6 +622,27 @@ mod tests {
             .fresh()
             .expect("a build that compiled self-measurement must produce a descriptor count");
         Some((resident, descriptors))
+    }
+
+    /// Both CPU readings, or `None` on a build that compiled neither.
+    ///
+    /// The `expect`s are the whole point, and they mirror [`measured`]'s. Without them
+    /// every CPU test below opens with a `let Some(…) = … else { return }`, so if both
+    /// clocks regressed to `Unsupported` on Linux *and* macOS at once this suite would
+    /// stay entirely green while `capture.rs`'s tick-shape measurement quietly printed
+    /// "CPU not measured on this build". A test that only runs when the instrument is
+    /// absent is not a test of the instrument.
+    fn cpu_measured() -> Option<(Duration, Duration)> {
+        if !CPU_TIME_COMPILED {
+            return None;
+        }
+        let thread = *thread_cpu_time()
+            .fresh()
+            .expect("a build that compiled the CPU clock must produce a thread reading");
+        let process = *process_cpu_time()
+            .fresh()
+            .expect("a build that compiled the CPU clock must produce a process reading");
+        Some((thread, process))
     }
 
     #[test]
@@ -525,6 +764,100 @@ mod tests {
         assert!(
             after <= before.saturating_add(CONCURRENT_SLACK),
             "{readings} readings raised the descriptor count from {before} to {after}"
+        );
+    }
+
+    #[test]
+    fn a_build_without_a_cpu_clock_says_so_rather_than_reporting_zero() {
+        if CPU_TIME_COMPILED {
+            return;
+        }
+        // The same §26 rule the resident-size test states: a tick that was never
+        // timed must not read as a tick that cost nothing.
+        assert_eq!(thread_cpu_time(), MetricState::Unsupported);
+        assert_eq!(process_cpu_time(), MetricState::Unsupported);
+    }
+
+    #[test]
+    fn the_process_figure_is_never_below_this_threads_own() {
+        let Some((thread, process)) = cpu_measured() else {
+            return;
+        };
+        // The invariant that makes the pair readable: the process total contains
+        // this thread's share, so it cannot be smaller. If it ever were, one of the
+        // two is in the wrong unit — the failure mode that matters here, since
+        // `getrusage` reports microseconds and `clock_gettime` nanoseconds, and the
+        // measurement they feed subtracts one class of reading from the other.
+        assert!(
+            process >= thread,
+            "the process total must include this thread's: {thread:?} vs {process:?}"
+        );
+    }
+
+    #[test]
+    fn process_cpu_time_advances_when_this_thread_burns_cpu() {
+        let Some((_, before)) = cpu_measured() else {
+            return;
+        };
+        // Spinning on this thread is CPU this process spent, so the process figure
+        // must move too. A `getrusage` wired to the wrong field — maximum resident
+        // size, say — would sit still through this.
+        let mut sink = 0u64;
+        let spin_until = std::time::Instant::now() + Duration::from_millis(50);
+        while std::time::Instant::now() < spin_until {
+            sink = sink.wrapping_add(1);
+        }
+        assert!(sink > 0, "the spin must not be optimised away");
+        let after = process_cpu_time()
+            .fresh()
+            .copied()
+            .expect("the same platform answered a moment ago");
+        assert!(
+            after > before,
+            "50 ms of spinning must show as CPU time: {before:?} -> {after:?}"
+        );
+    }
+
+    #[test]
+    fn thread_cpu_time_advances_when_this_thread_burns_cpu() {
+        // A platform that cannot answer says so, and this test has nothing to prove
+        // there — the same shape `resident_bytes`'s tests use. A platform that *can*
+        // answer must, which is what `cpu_measured` asserts.
+        let Some((before, _)) = cpu_measured() else {
+            return;
+        };
+        // Deliberately not a sleep: sleeping is precisely what this must NOT count.
+        let mut sink = 0u64;
+        let spin_until = std::time::Instant::now() + Duration::from_millis(50);
+        while std::time::Instant::now() < spin_until {
+            sink = sink.wrapping_add(1);
+        }
+        assert!(sink > 0, "the spin must not be optimised away");
+        let after = thread_cpu_time()
+            .fresh()
+            .copied()
+            .expect("the same platform answered a moment ago");
+        assert!(
+            after > before,
+            "50 ms of spinning must show as CPU time: {before:?} -> {after:?}"
+        );
+    }
+
+    #[test]
+    fn thread_cpu_time_does_not_count_sleeping() {
+        let Some((before, _)) = cpu_measured() else {
+            return;
+        };
+        std::thread::sleep(Duration::from_millis(100));
+        let after = thread_cpu_time()
+            .fresh()
+            .copied()
+            .expect("the same platform answered a moment ago");
+        // The whole point of this instrument: a blocking read costs wall-clock and
+        // not CPU, and telling those apart is what Task 7 could not do.
+        assert!(
+            after.saturating_sub(before) < Duration::from_millis(20),
+            "sleeping must not read as CPU time: {before:?} -> {after:?}"
         );
     }
 

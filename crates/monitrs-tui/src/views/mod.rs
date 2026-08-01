@@ -62,9 +62,10 @@ pub mod storage;
 use core::time::Duration;
 use std::time::SystemTime;
 
-use monitrs_core::history::{HistoricalSample, HistoryMetric, HistoryRing};
+use monitrs_core::history::{HistoricalSample, HistoryMetric, HistoryRing, MetricComparison};
 use monitrs_core::model::{
-    BatterySnapshot, LoadSnapshot, MeasuredValue, MetricState, SystemSnapshot, TemperatureReading,
+    BatterySnapshot, LoadSnapshot, MeasuredValue, MetricState, SensorSnapshot, SystemSnapshot,
+    TemperatureReading,
 };
 use monitrs_core::units::{
     ByteUnits, Percent, Rate, display_width, format_age, format_bytes_compact, format_duration,
@@ -80,6 +81,7 @@ use crate::action::{Action, ViewId};
 use crate::app::AppState;
 use crate::layout::{Breakpoint, Layout, unusable_notice};
 use crate::theme::Token;
+use crate::widgets::painter::{SEGMENT_GAP, join_fitting};
 use crate::widgets::states::{self, MetricDisplay};
 use crate::widgets::{Meter, Painter, Panel, Presentation, RowBuilder};
 
@@ -92,9 +94,6 @@ const HEADER_LABEL_WIDTH: u16 = 4;
 /// useful bar all have to survive whatever the note asks for (§5.4: the bar is
 /// reserved from geometry, never from the note's current length).
 const HEADER_NOTE_RESERVE: u16 = HEADER_LABEL_WIDTH + 1 + 4 + 6;
-
-/// Cells between two segments of a one-line summary or hint strip.
-const SEGMENT_GAP: usize = 2;
 
 /// Cells kept clear at the right-hand end of a panel's top rule, matching the
 /// `--- 218 total ---+` form of §5.5.
@@ -548,8 +547,8 @@ fn cpu_note_segments(snapshot: &SystemSnapshot) -> Vec<String> {
     if let Some(text) = cgroup_cpu_text(snapshot) {
         segments.push(text);
     }
-    if let Some(reading) = snapshot.sensors.hottest() {
-        segments.push(temperature_text(reading));
+    if let Some(display) = temperature_display(&snapshot.sensors) {
+        segments.push(display.annotated());
     }
     segments
 }
@@ -563,8 +562,8 @@ fn memory_note_segments(snapshot: &SystemSnapshot, units: ByteUnits) -> Vec<Stri
     if let Some(text) = cgroup_limit_text(snapshot, units) {
         segments.push(text);
     }
-    if let Some((battery, _)) = snapshot.sensors.battery.displayable() {
-        segments.push(battery_text(battery));
+    if let Some(display) = battery_display(&snapshot.sensors) {
+        segments.push(display.annotated());
     }
     segments
 }
@@ -634,9 +633,47 @@ fn temperature_text(reading: &TemperatureReading) -> String {
     format!("temp{flag}{:.1}C", reading.celsius)
 }
 
+/// The hottest sensor reading as a display, so a retained one carries its age.
+///
+/// Goes through the metric's own state rather than through
+/// [`SensorSnapshot::hottest`], which filters to freshly measured lists: since
+/// sensors moved to their own cadence a reading can legitimately be 30 seconds
+/// old, and a header that dropped it would be less informative than one that
+/// dates it (§4, and the design document's A2).
+fn temperature_display(sensors: &SensorSnapshot) -> Option<MetricDisplay> {
+    let has_reading = sensors
+        .temperatures
+        .displayable()
+        .is_some_and(|(readings, _)| !readings.is_empty());
+    if !has_reading {
+        return None;
+    }
+    Some(states::describe(&sensors.temperatures, |readings| {
+        readings
+            .iter()
+            .max_by(|left, right| left.celsius.total_cmp(&right.celsius))
+            .map_or_else(String::new, temperature_text)
+    }))
+}
+
 /// `bat 82%-`, where the trailing character is the charge state's own cue (§5.2).
 fn battery_text(battery: &BatterySnapshot) -> String {
     format!("bat {}{}", battery.charge, battery.state.symbol())
+}
+
+/// The pack summary as a display, so a retained one carries its age.
+///
+/// [`temperature_display`]'s counterpart, and here for the same reason: the battery moved
+/// onto the sensor cadence with the temperatures, so at idle the header's `bat 82%-` is a
+/// value that was measured up to thirty seconds ago. Reading it out of the envelope and
+/// discarding the age presented it as a reading taken this tick (§4, and the design
+/// document's A2).
+fn battery_display(sensors: &SensorSnapshot) -> Option<MetricDisplay> {
+    sensors
+        .battery
+        .displayable()
+        .is_some()
+        .then(|| states::describe(&sensors.battery, battery_text))
 }
 
 /// The load average as one display, so its availability travels with its text.
@@ -751,11 +788,11 @@ fn summary_segments(
     if let Some(text) = cgroup_limit_text(snapshot, units) {
         segments.push((text, Token::Muted));
     }
-    if let Some(reading) = snapshot.sensors.hottest() {
-        segments.push((temperature_text(reading), Token::Muted));
+    if let Some(display) = temperature_display(&snapshot.sensors) {
+        segments.push((display.annotated(), Token::Muted));
     }
-    if let Some((battery, _)) = snapshot.sensors.battery.displayable() {
-        segments.push((battery_text(battery), Token::Muted));
+    if let Some(display) = battery_display(&snapshot.sensors) {
+        segments.push((display.annotated(), Token::Muted));
     }
     segments
 }
@@ -821,7 +858,12 @@ pub fn render_status_footer(
     painter.write_right(0, 0, width, &hints, presentation.style(Token::Muted));
 }
 
-/// The tab strip's segments, condensed to bare digits when the titles do not fit.
+/// The tab strip's segments: every title where they all fit, otherwise bare digits
+/// for the inactive screens and the full title for the active one.
+///
+/// The active screen never loses its name. That is the whole point of the narrow
+/// form — see the comment inside — so "condensed to bare digits" is true of six of
+/// the seven segments and never of the seventh.
 fn tab_segments(state: &AppState, room: u16) -> Vec<(String, Token)> {
     let full: usize = ViewId::ALL
         .iter()
@@ -833,7 +875,22 @@ fn tab_segments(state: &AppState, room: u16) -> Vec<(String, Token)> {
         .map(|view| {
             let active = view == state.view();
             let (open, close) = if active { ('[', ']') } else { (' ', ' ') };
-            let body = if titled {
+            // Below the width that fits all seven names the inactive screens
+            // degrade to their digit — but the active one keeps its title. Losing
+            // every name at once also lost the one piece of chrome that says where
+            // the reader currently is (§5.4).
+            //
+            // `room` is the width left after the footer's key hints, not the
+            // terminal's: all seven names need 76 cells, so the threshold is 76 plus
+            // whatever the hints take. With the two hints that show while the view is
+            // live (`/ filter  ? help`, 16 cells) that is **92 columns** — the figure
+            // 0.2.0 recorded. Frozen, a third hint (`live`) appears and the threshold
+            // moves up with it, which is why this is computed against `room` rather
+            // than compared against a constant. The widest this can get is six bare
+            // digits plus the longest title (`Processes`, 13 cells with its digit,
+            // space, and brackets) — 31 cells, comfortably inside the 80-column
+            // floor.
+            let body = if titled || active {
                 format!("{} {}", view.digit(), view.title())
             } else {
                 view.digit().to_string()
@@ -1121,30 +1178,6 @@ pub(crate) fn scroll_offset(selected: Option<usize>, visible: usize, total: usiz
         .min(max_scroll)
 }
 
-/// Joins `segments` with two spaces while the total stays inside `budget`.
-///
-/// Segments are considered in order and a segment that does not fit ends the
-/// line, rather than being skipped in favour of a shorter one behind it: the
-/// order *is* the priority, and a strip whose fields reordered themselves as
-/// values changed would be unreadable (§5.4).
-pub(crate) fn join_fitting(segments: &[String], budget: usize) -> String {
-    let mut out = String::new();
-    let mut used = 0usize;
-    for segment in segments {
-        let width = display_width(segment);
-        let gap = if out.is_empty() { 0 } else { SEGMENT_GAP };
-        if used + gap + width > budget {
-            break;
-        }
-        for _ in 0..gap {
-            out.push(' ');
-        }
-        out.push_str(segment);
-        used += gap + width;
-    }
-    out
-}
-
 /// A row builder for `width` cells in `presentation`'s glyph mode.
 pub(crate) fn row_builder(presentation: Presentation<'_>, width: u16) -> RowBuilder {
     RowBuilder::new(width, presentation.glyphs())
@@ -1285,22 +1318,80 @@ pub(crate) fn selected_sample_offset(state: &AppState) -> Option<usize> {
     usize::try_from(newest.saturating_sub(selected)).ok()
 }
 
-/// The caret note for the Time Lens: `-00:37 selected 22:14:07Z`.
+/// The caret's note, as segments in priority order — the sample's wall clock,
+/// then how it compares to its baselines (§2.5), then the relative offset —
+/// for [`SparklineCaret::with_note_segments`] to fit as many of them as its own
+/// row has room for.
 ///
-/// Both figures are in the note on purpose. §2.1 fixes the relative offset as the
-/// header's form, and §5.6 shows the absolute sample time beside the timeline; a
-/// reader correlating monitrs with a log needs the second one.
-pub(crate) fn caret_note(state: &AppState) -> String {
+/// This used to return one already-joined string, sized against the row's
+/// total width. That was wrong: [`SparklineCaret::row`] can only place the
+/// note in a single contiguous run on *one* side of the caret glyph, and a
+/// caret parked mid-plot splits the row roughly in half, leaving each side
+/// far less room than the row's full width suggested — so a note built
+/// against the wrong budget either overflowed the side it landed on or, since
+/// the widget never truncates, vanished outright. Only [`SparklineCaret::row`]
+/// knows which side the caret is on and how much of the row that side
+/// actually has, so the fitting decision belongs there now, not here.
+///
+/// # The priority order, and why
+///
+/// 1. **The sample's wall clock**, `22:14:07Z`. This is the segment worth
+///    protecting most. At the `Standard` and `Wide` breakpoints it is *also*
+///    shown in [`historical_notes`]'s header meter rows (`sample 22:14:07Z`),
+///    so losing it here would cost nothing there — but at `Compact` (80-99
+///    columns) the header collapses to one row with no space for
+///    `historical_notes` (`Chrome::resolve`, `Layout::fill_compact`), and the
+///    one-line strip it draws instead reads the *live* snapshot, never the
+///    selection (§7.1's `render_summary_strip`). **At** `Compact`, on the
+///    screens that keep a history panel there, this caret note is the only
+///    place the selected sample's wall clock is shown at all — which is why it
+///    now leads rather than trails. (Not "below `Compact`": below it there is
+///    no history panel and so no caret, and `Compact` is the narrowest band
+///    where this note exists at all.)
+/// 2. **`cpu prev …`**, the previous-sample comparison — §2.5's nearer
+///    baseline, and the more actionable one.
+/// 3. **`30s …`**, the thirty-second comparison — §2.5's other baseline.
+/// 4. **`-00:37 selected`**, the relative offset. Lowest priority on purpose:
+///    it is the one segment that is genuinely redundant everywhere, since the
+///    header's `[<HISTORY -MM:SS]` badge carries the same figure at every
+///    breakpoint including `Compact` (§2.1), and `historical_notes` repeats it
+///    again (`-00:08 behind live`) wherever that panel has room.
+///
+/// [`HistoryView::comparisons`] has existed since 0.1.0 with nothing calling
+/// it; this is where §2.5 reaches the interface.
+pub(crate) fn caret_note(state: &AppState, units: ByteUnits) -> Vec<String> {
     let ring = state.history();
-    let offset = state.timeline().view().offset_from_live(ring);
+    let view = state.timeline().view();
+    let offset = view.offset_from_live(ring);
     let sample = state.timeline().selected_sample(ring);
-    match sample {
-        Some(sample) => format!(
-            "-{} selected {}",
-            format_age(offset),
-            wall_clock_of(sample.wall_time)
-        ),
-        None => format!("-{} selected", format_age(offset)),
+    let comparisons = view.comparisons(ring, HistoryMetric::CpuBusy);
+
+    [
+        sample.map(|sample| wall_clock_of(sample.wall_time)),
+        Some(format!(
+            "cpu prev {}",
+            baseline_delta(comparisons.previous_sample.as_ref(), units)
+        )),
+        Some(format!(
+            "30s {}",
+            baseline_delta(comparisons.thirty_seconds_ago.as_ref(), units)
+        )),
+        Some(format!("-{} selected", format_age(offset))),
+    ]
+    .into_iter()
+    .flatten()
+    .collect()
+}
+
+/// One baseline's rendered delta, or the word that replaces a missing one.
+///
+/// A baseline history cannot reach is `no baseline`, never `+0`: §2.5 asks for a
+/// comparison "when history permits", and a zero delta would say the metric did
+/// not change when the truth is that nothing was there to compare with (§26).
+fn baseline_delta(comparison: Option<&MetricComparison>, units: ByteUnits) -> String {
+    match comparison {
+        Some(comparison) => comparison.render_delta(units),
+        None => "no baseline".to_owned(),
     }
 }
 
@@ -1413,23 +1504,6 @@ mod tests {
     }
 
     #[test]
-    fn joining_fields_keeps_the_priority_order_and_the_budget() {
-        let segments = vec![
-            "load 4.12".to_owned(),
-            "8 cpu".to_owned(),
-            "temp 62C".to_owned(),
-        ];
-        assert_eq!(join_fitting(&segments, 0), "");
-        assert_eq!(join_fitting(&segments, 9), "load 4.12");
-        assert_eq!(join_fitting(&segments, 16), "load 4.12  8 cpu");
-        assert_eq!(join_fitting(&segments, 100), "load 4.12  8 cpu  temp 62C");
-        // A field that does not fit ends the line; a shorter one behind it does
-        // not jump the queue, because the order is the priority.
-        let wide_then_narrow = vec!["a".repeat(40), "b".to_owned()];
-        assert_eq!(join_fitting(&wide_then_narrow, 10), "");
-    }
-
-    #[test]
     fn the_scroll_offset_always_keeps_the_selection_visible() {
         for total in [0usize, 1, 5, 200] {
             for visible in [0usize, 1, 4, 30] {
@@ -1515,11 +1589,69 @@ mod tests {
     }
 
     #[test]
-    fn a_narrow_footer_condenses_the_tabs_to_digits() {
+    fn a_narrow_footer_condenses_the_inactive_tabs_to_digits() {
         let state = state_of(80, 24);
         let condensed = tab_segments(&state, 20);
-        assert!(condensed.iter().any(|(text, _)| text == "[1]"));
-        assert!(condensed.iter().all(|(text, _)| display_width(text) == 3));
+        // Overview is the default active view (§7.1) and keeps its title even in
+        // a room this narrow — that is Task 11's whole point.
+        assert!(condensed.iter().any(|(text, _)| text == "[1 Overview]"));
+        assert!(
+            condensed
+                .iter()
+                .filter(|(text, _)| text.as_str() != "[1 Overview]")
+                .all(|(text, _)| display_width(text) == 3),
+            "every inactive tab still condenses to its bare digit: {condensed:?}"
+        );
+    }
+
+    /// The status footer's own row, read back from a real rendered frame.
+    ///
+    /// A hand-computed "room" value for [`tab_segments`] would have to
+    /// re-derive `render_status_footer`'s hint-width subtraction (mod.rs:808-810)
+    /// inline, which is exactly the kind of restated arithmetic that drifts out
+    /// of step with the code it is supposed to pin. Rendering the real frame and
+    /// reading its footer row back exercises the actual wiring instead.
+    fn footer_row_text(buffer: &Buffer, area: Rect) -> String {
+        let status = Chrome::resolve(area)
+            .layout
+            .status
+            .expect("an 80x24 frame or larger always has a footer");
+        (status.x..status.x.saturating_add(status.width))
+            .filter_map(|x| {
+                buffer
+                    .cell((x, status.y))
+                    .map(|cell| cell.symbol().to_owned())
+            })
+            .collect()
+    }
+
+    #[test]
+    fn the_active_screens_name_survives_every_width() {
+        for width in [80u16, 92, 100, 160] {
+            let mut state = state_of(width, 24);
+            let _ = crate::app::reduce(&mut state, Action::ChangeView(ViewId::Battery));
+            let area = state.area();
+            let buffer = render_into(&state, Presentation::default(), (width, 24), area);
+            let strip = footer_row_text(&buffer, area);
+            assert!(
+                strip.contains(ViewId::Battery.title()),
+                "at {width} columns the strip lost the label saying where the reader \
+                 is: {strip:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_narrow_strip_degrades_the_inactive_screens_to_their_digits() {
+        let mut state = state_of(80, 24);
+        let _ = crate::app::reduce(&mut state, Action::ChangeView(ViewId::Battery));
+        let area = state.area();
+        let buffer = render_into(&state, Presentation::default(), (80, 24), area);
+        let strip = footer_row_text(&buffer, area);
+        assert!(
+            !strip.contains(ViewId::Processes.title()),
+            "80 columns has no room for seven names; the inactive ones are digits: {strip:?}"
+        );
     }
 
     #[test]
@@ -1623,6 +1755,55 @@ mod tests {
     }
 
     #[test]
+    fn a_retained_temperature_is_shown_with_its_age_rather_than_disappearing() {
+        // Sensors now have their own cadence, so a reading can legitimately be up
+        // to 30 seconds old. Before this fix `hottest()` filtered to `fresh()` and
+        // the header simply dropped the field for that window — worse than the
+        // problem this release set out to fix.
+        let mut snapshot =
+            SystemSnapshot::warming_up(std::time::Instant::now(), SystemTime::UNIX_EPOCH, 8);
+        snapshot.sensors.temperatures = MetricState::Stale {
+            value: vec![TemperatureReading {
+                label: "performance".into(),
+                celsius: 62.0,
+                peak_celsius: None,
+                critical_celsius: Some(100.0),
+            }],
+            age: Duration::from_secs(28),
+        };
+
+        let segments = cpu_note_segments(&snapshot);
+        let temperature = segments
+            .iter()
+            .find(|segment| segment.contains("62.0C"))
+            .expect("the hottest reading must still be shown");
+        // format_age renders 28 seconds as `00:28`, not `28s`; a test that only
+        // looked for `62.0C` would pass even if the age were silently dropped.
+        assert!(
+            temperature.contains("~00:28"),
+            "a retained reading must carry its age (§4), got {temperature}"
+        );
+    }
+
+    #[test]
+    fn a_measured_temperature_carries_no_age_marker() {
+        let mut snapshot =
+            SystemSnapshot::warming_up(std::time::Instant::now(), SystemTime::UNIX_EPOCH, 8);
+        snapshot.sensors.temperatures = MetricState::Available(vec![TemperatureReading {
+            label: "performance".into(),
+            celsius: 62.0,
+            peak_celsius: None,
+            critical_celsius: Some(100.0),
+        }]);
+
+        let temperature = cpu_note_segments(&snapshot)
+            .into_iter()
+            .find(|segment| segment.contains("62.0C"))
+            .expect("the hottest reading");
+        assert!(!temperature.contains('~'), "got {temperature}");
+    }
+
+    #[test]
     fn the_header_truncates_the_host_name_rather_than_dropping_the_badge() {
         // §2.1 requires the header to display the timeline state, so the badge is
         // reserved and the host name — which is data — gives way.
@@ -1670,6 +1851,54 @@ mod tests {
     fn the_history_span_label_reads_as_a_duration() {
         let state = state_of(140, 38);
         assert_eq!(history_span_label(state.history()), "5m");
+    }
+
+    #[test]
+    fn the_caret_note_compares_the_selected_sample_with_its_baselines() {
+        // A ring with a rising CPU curve, then a pause that pins the caret on the
+        // newest sample. Sequence 0 is always `WarmingUp` regardless of pattern
+        // (§8.2, §26), so a `Spike` lands the peak on the newest of three samples
+        // and its `base` on the one before it — exactly the previous-sample
+        // comparison this test is after.
+        let scenario = monitrs_collectors::fake::Scenario {
+            cpu: monitrs_collectors::fake::Pattern::Spike {
+                base: 20.0,
+                peak: 61.0,
+                at: 2,
+            },
+            ..monitrs_collectors::fake::Scenario::default()
+        };
+        let mut state = fake_state(scenario, 3, (160, 48), ViewId::Overview);
+        let _ = crate::app::reduce(&mut state, Action::TogglePause);
+
+        let segments = caret_note(&state, ByteUnits::Iec);
+        assert!(
+            segments.iter().any(|segment| segment.contains("cpu")),
+            "the caret says what was selected; §2.5 asks it to say what changed: {segments:?}"
+        );
+        assert!(
+            segments.iter().any(|segment| segment.contains("+41")),
+            "the delta against the previous sample belongs in the note: {segments:?}"
+        );
+    }
+
+    #[test]
+    fn a_baseline_history_cannot_reach_is_named_rather_than_shown_as_zero() {
+        // Two samples, one second apart: nowhere near the 30-second look-back.
+        let mut state = fake_state(
+            monitrs_collectors::fake::Scenario::default(),
+            2,
+            (160, 48),
+            ViewId::Overview,
+        );
+        let _ = crate::app::reduce(&mut state, Action::TogglePause);
+
+        let segments = caret_note(&state, ByteUnits::Iec);
+        assert!(
+            segments.iter().any(|segment| segment == "30s no baseline"),
+            "two samples cannot reach thirty seconds back, and a missing baseline is \
+             a word rather than a zero (§4, §26): {segments:?}"
+        );
     }
 
     // -----------------------------------------------------------------------
