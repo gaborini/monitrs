@@ -167,11 +167,18 @@ this release itself leaves open. Every figure below comes from that file.
   process count beside its verdict so it cannot call a mismatched host a reference
   measurement. The run is owed; `docs/benchmarks.md` says in advance what each outcome
   means.
-* **No twelve-hour soak is on record, on either platform.** A 30-minute run with the
-  shipped collector is, and shows no growth: resident size fell, retained history stayed
-  bounded, nothing was dropped. File descriptors were flat at 3 across that half hour, and
-  §16.1 asks for twelve. **Nothing has been soaked on Linux**, which is also the only
-  configuration in which the descriptor budget is exercised at all.
+* **The twelve-hour soak was deferred until after this release, by decision.** It is a
+  blocking gate, and it did not lapse: on 2026-08-01 the maintainer decided to tag `1.0.0`
+  first and run the soak after, and `docs/release-checklist.md`'s step 5 records the
+  decision, its reasoning, and the deadline — all three runs within seven days of the tag.
+  What exists instead is a 30-minute run with the shipped collector, which shows no growth:
+  resident size fell, retained history stayed bounded, file descriptors were flat at 3, and
+  nothing was dropped. §16.1 asks for twelve hours, so that is the right shape rather than
+  the gate. The trade being made is that a leak is a `1.0.1` patch and cannot touch what
+  this release froze. What the trade does **not** cover is that **nothing has been soaked
+  on Linux at all**, which is also the only configuration in which the descriptor budget is
+  exercised — so the Linux run is the one carrying real unknown. If the soak finds
+  something, it will appear in `1.0.1`'s notes and in `docs/soak-testing.md`.
 * **Two of the seven screens have never been seen on Linux.** The Battery screen's Linux
   collector is tested from captured `/sys/class/power_supply` fixtures and the inode reader
   from `statfs` errno cases, both on macOS; no Linux machine has drawn either. Every frame

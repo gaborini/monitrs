@@ -40,7 +40,10 @@ with it.
 > **The caveat that survives the `1.0` label**, because relabelling it would not fix it:
 > one of §16.1's budgets is still not met — idle self-CPU at the 95th percentile,
 > 4.30–9.50% against 2%, with the median passing — and the twelve-hour soak has not been
-> run on either platform. The table below carries the first;
+> run on either platform. That second one is a **blocking gate deferred past this tag by
+> a written decision**, not one that lapsed: `docs/release-checklist.md`'s step 5 names
+> who deferred it, on what date, on what evidence, and the seven days inside which the
+> runs are owed. The table below carries the first;
 > [`CHANGELOG.md`](CHANGELOG.md)'s *Known limitations* carries both, and says — because
 > it is the useful part — that the cause this release was built around turned out to be
 > the wrong one. `1.0.0` also breaks the library API on its way to freezing it; the

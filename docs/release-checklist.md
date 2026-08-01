@@ -36,7 +36,10 @@ is what a user actually reads. What is still owed:
   full, and nothing was dropped even with the channel saturated. That is evidence,
   not the gate — §16.1 says twelve hours. (The 90 ms worst-case input latency that run
   reported turned out to be the harness measuring two thread wake-ups rather than
-  monitrs; see [`soak-testing.md`](soak-testing.md).)
+  monitrs; see [`soak-testing.md`](soak-testing.md).) For `1.0.0` specifically, that
+  gate was **deferred past the tag by a written decision** rather than met or skipped:
+  [step 5](#5-soak) names who decided, on what date, on what evidence, what the
+  deferral does not cover, and the seven days inside which the runs are owed.
 * **The idle self-CPU budget of §16.1 is half met.** Measured on a 12-core Mac with
   about a thousand processes: median **0.60–0.85%** against a 1% budget, which passes, and
   p95 **4.30–9.50%** against 2%, which does not. The remaining cost is measured rather
@@ -90,8 +93,11 @@ written. The [§23 gate](#the-23-gate) at the bottom is the record of what has b
 proven, and it still has unticked boxes — the idle-CPU p95 and the soak. Two releases
 have gone out over those boxes, deliberately and with the pre-release flag the workflow
 applies to every `0.x`, and each one repeats the open items in its own changelog section
-under *Known limitations*. That is the arrangement: a box may be shipped over, but not
-quietly, and never by editing the box.
+under *Known limitations*. `1.0.0` ships over the soak box as well, and it is the first
+release to do so **without** that flag, which is why [step 5](#5-soak) carries a dated,
+attributed decision with a deadline instead of one more repetition of this paragraph.
+That is the arrangement: a box may be shipped over, but not quietly, and never by
+editing the box.
 
 ## 0. Prerequisites
 
@@ -363,8 +369,15 @@ than a follow-up to it.
 
 ## 5. Soak
 
-Blocking. [`soak-testing.md`](soak-testing.md) has the invocations, how to read the
-report, and what to record. In short:
+**Blocking** — and for `1.0.0`, and `1.0.0` only, **deliberately deferred until after
+the tag**, by Gabor Lepsenyi (`@gaborini`) on **2026-08-01**. The boxes below are not
+ticked and are not removed: they are still owed, on the deadline further down. For
+every release after this one, read the first word of this section as though the rest
+of it were not here — no soak, no tag. Moving a gate costs a written decision each
+time, which is the only thing that stops it from becoming a habit.
+
+[`soak-testing.md`](soak-testing.md) has the invocations, how to read the report, and
+what to record. In short:
 
 * [ ] twelve-hour release-profile run, report kept;
 * [ ] one-hour 10,000-process run, report kept;
@@ -373,6 +386,57 @@ report, and what to record. In short:
       no files;
 * [ ] all three reports attached to the release record, with machine, toolchain, and
       profile.
+
+### Why the deferral was defensible, and what it does not cover
+
+**There is evidence, and it is not the gate.** One soak is on record
+([`soak-testing.md`](soak-testing.md#runs-on-record), 2026-07-30): the shipped
+collector, thirty minutes, `--release`, on an Apple M4 Pro under rustc 1.97.1 with
+about a thousand other processes on the machine. Over 2212 snapshots resident size
+*fell* — `first quartile 30880 KiB, last quartile 29192 KiB`, peak 31,184 KiB —
+descriptors were "flat at 3", retained history did not rise — 2,009,802 B at the
+start and 1,998,685 B at the end, against the ring's own 5,512,800 B worst case, with
+the ring full at 300 of 300 samples so that is the steady state and not a ring still
+filling — and nothing was dropped even when the stall
+probe filled the channel to 64 of 64. That is a flat half hour where §16.1 asks for
+twelve, and the difference is not rhetorical: it is enough to say the curve has the
+right shape, not enough to say it holds.
+
+**And what the deferral risks is cheap to fix forward.** If the twelve hours turn up
+a leak or a descriptor climb, that is a behavioural defect, not an API break — none
+of the four surfaces `1.0.0` froze can move because of it. The vehicle is a `1.0.1`
+patch under the ordinary [Rollback](#rollback) procedure, and the freeze is
+unaffected either way. That asymmetry is the whole argument for tagging first: the
+promise this release actually makes is the one no soak result can touch.
+
+**What the argument does not cover: Linux.** Nothing has been soaked on Linux at all,
+and the descriptor budget is only meaningfully exercised there. The macOS collector
+reads through `sysctl`, `libproc`, mach routines and `getifaddrs` and opens no file,
+so `flat at 3` on macOS is flat by construction — it confirms the runtime holds
+nothing open and says nothing about the collector that reads `/proc` constantly. So
+of the three runs above, **the one-hour Linux real-collector run is the one carrying
+real unknown**; the other two extend a measurement that already looks right on a
+platform where it has been taken. If only one of the three can be run, run that one
+first.
+
+### The deadline
+
+**All three runs and their records within seven days of the `v1.0.0` tag — by
+2026-08-08.** Seven days because the three runs are fourteen hours of machine time on
+a host [step 6](#6-verify-by-hand-on-real-machines) already provisions for the
+reference-workload reading, which leaves the week as provisioning plus room for one
+run to fail and be repeated — and because a defect found inside a week still reaches
+roughly the people who installed `1.0.0`, where one found in a month reaches
+strangers.
+
+If a run fails, the report goes into
+[`soak-testing.md`](soak-testing.md#runs-on-record) with the series that produced it,
+the `v1.0.0` release gets the warning [Rollback](#rollback) step 2 describes, and the
+fix ships as `1.0.1`. If the window passes with nothing run, **that is itself the
+failure and is reported as one**: the next release section says the deferral went
+overdue, naming this date, rather than restoring "the twelve-hour run is still owed"
+to the list it came from. That sentence has been true since `0.1.0`; repeating it
+once more would be exactly the quiet erosion this decision was written down to avoid.
 
 ## 6. Verify by hand, on real machines
 
@@ -714,7 +778,9 @@ owes, carried into each release's *Known limitations* rather than resolved by ti
 - [ ] **default settings remain below the memory and CPU budgets on the reference
       workload.** Frame time, input latency, collection p95, resident memory **and the
       idle-CPU median** are measured and pass; descriptor growth passes over half an
-      hour, and §16.1's twelve-hour run is still owed. The **idle-CPU p95 does not
+      hour, and §16.1's twelve-hour run is still owed — deferred past the `1.0.0` tag
+      by the decision recorded at [step 5](#5-soak) on 2026-08-01, which sets seven
+      days from the tag as the deadline. The **idle-CPU p95 does not
       pass**: 4.30–9.50% against a 2% budget. The cause is the medium tier's two
       filesystem-capacity reads, at 13.2–35.0 ms of CPU per tick against a whole-tick
       budget of roughly 16 ms — *not* the 85 ms temperature read this list previously
