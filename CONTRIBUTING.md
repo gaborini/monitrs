@@ -136,17 +136,46 @@ Adding a field is not a break. Removing one, or changing what one means, is a
 one — the old file stays, so a consumer can see exactly what changed between the
 two.
 
-**Two guards, two surfaces, and neither covers the other's blind spot.**
+**Configuration keys.** `docs/schema/config-v1.json` lists every key path a
+configuration file may contain, and `crates/monitrs/tests/config_contract.rs`
+fails if one of them stops existing — derived by serialising a `Config` and
+walking it, so the keys come out of the serde structs rather than out of a second
+list. Adding a key is not a break; removing or renaming one is a `config_version`
+bump with a new `docs/schema/config-v{N+1}.json` beside the old file. Note what
+`#[serde(deny_unknown_fields)]` does and does not do: it rejects a key the *user*
+invented, and it cannot notice monitrs itself deleting one. The same test also
+asserts that `known_keys()` — the hand-maintained typo-suggestion list in
+`config.rs` — still matches the structs, because a suggestion list that has
+drifted points at a key the parser will reject next.
+
+**The default keymap.** `every_global_binding_from_the_spec_resolves_in_normal_mode`
+and `every_list_binding_from_the_spec_resolves_in_normal_mode`
+(`crates/monitrs-tui/src/keymap.rs`) assert exact key→action pairs, so a rebound
+default key fails a test rather than a bug report. A binding may be added; an
+existing one does not change meaning without a major bump.
+
+**Four guards, four surfaces, and no guard covers another's blind spot.** Three of
+them fail a build today; the semver job is the one that only reports until the tag
+flips it, as described above.
 `cargo-semver-checks` reads the Rust API; it cannot see a `#[serde(rename)]`,
 which reshapes the JSON export while leaving every Rust signature untouched. The
 schema inventory reads the JSON wire format; it cannot see a Rust signature
-change that never reaches serialisation. A renamed export field is caught only by
-the schema test; a removed public function is caught only by the semver job.
-Treat them as complementary, not redundant — dropping either one reopens a
-different way to break the freeze silently.
+change that never reaches serialisation. The configuration inventory reads TOML
+key paths; it sees neither of those, and neither of them sees a deleted
+configuration key. The keymap tests read the built-in keymap and nothing else. A
+renamed export field is caught only by the schema test; a removed public function
+only by the semver job; a renamed configuration key only by the configuration
+test; a rebound `q` only by the keymap tests. Treat them as complementary, not
+redundant — dropping any one reopens a different way to break the freeze
+silently.
 
-**Configuration keys** and their meanings, and the **default keymap**: a binding
-may be added, but an existing one does not change meaning without a major bump.
+**What none of the four can see is a *meaning* that changes while every name stays
+put.** `sampling.slow_interval` taking over the sensor read from
+`sampling.medium_interval` going into 1.0.0 is the worked example: no key was
+added, removed or renamed, so no inventory moved, and the only record of it is
+`docs/configuration.md`. Changing what a frozen key or field *does* is therefore
+a documentation change as much as a code change, and the documentation is the
+part a reviewer has to check by reading.
 
 **Not frozen:** layouts, wording, colours, glyph choices and panel arrangement.
 These are presentation. A cosmetic improvement is not a breaking change, and this

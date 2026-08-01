@@ -94,6 +94,13 @@ arithmetic, so `1.5GiB` is exactly 1610612736 bytes.
 
 ## Every key
 
+Every key path listed below is also recorded in
+[`schema/config-v1.json`](schema/config-v1.json), and
+`crates/monitrs/tests/config_contract.rs` fails if one of them stops existing.
+`1.0.0` froze these keys: a new one may appear in a minor release, but one that is
+already here does not vanish or get renamed without a major bump and a new
+`config-v{N+1}.json` beside the old file.
+
 ### Top level
 
 | Key | Default | Meaning |
@@ -106,8 +113,8 @@ arithmetic, so `1.5GiB` is exactly 1610612736 bytes.
 |---|---|---|---|
 | `interval` | `"1s"` | 250ms–1m | Fast tier: CPU, memory, processes, network and disk counters. |
 | `history` | `"5m"` | 30s–1h | How far back Time Lens can scrub. Must be at least one `interval`. |
-| `medium_interval` | `"5s"` | ≥ `interval` | Filesystem capacity, static device state. |
-| `slow_interval` | `"30s"` | ≥ `interval` | Users, device lists, static metadata. |
+| `medium_interval` | `"5s"` | ≥ `interval` | Filesystem capacity, static device state. Also the sensor group, but *only* while the Battery screen is open. |
+| `slow_interval` | `"30s"` | ≥ `interval` | Users, device lists, static metadata — and the sensor group (temperatures and the battery) at every other time, which is nearly always. |
 | `max_history_memory` | `"32MiB"` | ≥ 1MiB | Ceiling for the history ring. If `interval` and `history` would need more, history is shortened and monitrs tells you it was clamped. |
 
 Shortening `interval` makes the machine work harder for finer resolution; 250 ms
@@ -120,6 +127,17 @@ the Battery screen is visible, and immediately when that screen is opened. So
 `medium_interval` and `slow_interval` bound the sensor group as well, from either end
 (§8.6, and [`metrics.md`](metrics.md#sensors-and-battery) for why the group is
 scheduled this way).
+
+**This is a change in 1.0.0, and it moved what two keys govern.** Sensors used to
+ride the medium tier, so `medium_interval` set their cadence whatever was on screen.
+It no longer does: unless the Battery screen is open, the sensor read now follows
+`slow_interval` — 30 s by default instead of 5 s. Neither key's name, range, or
+default changed, so a file written before 1.0.0 still loads and still means what it
+says about the tiers; what changed is how often a temperature or a charge level is
+re-read when nobody is looking at one, and that a retained reading is shown with its
+age rather than dropped. If you want the old behaviour everywhere, lower
+`slow_interval` (it sets the other slow-tier reads too) — the sensor read costs
+about 85 ms on macOS, which is why the default no longer pays it every five seconds.
 
 ### `[display]`
 
