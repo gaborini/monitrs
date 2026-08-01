@@ -28,9 +28,11 @@ with it.
 > [crates.io](https://crates.io/crates/monitrs) and
 > [GitHub](https://github.com/gaborini/monitrs/releases/tag/v1.0.0). Four surfaces are
 > frozen — the public API of the three library crates, the JSON export, the configuration
-> keys, and the default keymap — and each has a guard that fails a build rather than a
-> paragraph that asks nicely: `cargo-semver-checks`, and the inventories in
-> [`docs/schema/`](docs/schema/) with the contract tests that read them.
+> keys, and the default keymap — and each has a guard rather than a paragraph that asks
+> nicely: the inventories in [`docs/schema/`](docs/schema/) with the contract tests that
+> read them, and the keymap's own tests, all of which fail a build today — and
+> `cargo-semver-checks` for the API, which reports without blocking until the commit
+> that tags `v1.0.0` flips it.
 > [`CONTRIBUTING.md`](CONTRIBUTING.md) states the terms. **What is not frozen is how it
 > looks**: layout, wording, colour, glyph choice and panel arrangement are presentation,
 > and a cosmetic change is not a breaking one.
