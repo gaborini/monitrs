@@ -1113,7 +1113,7 @@ dependencies = [
 
 [[package]]
 name = "monitrs"
-version = "1.0.0"
+version = "1.0.1"
 dependencies = [
  "clap",
  "clap_complete",
@@ -1140,7 +1140,7 @@ dependencies = [
 
 [[package]]
 name = "monitrs-collectors"
-version = "1.0.0"
+version = "1.0.1"
 dependencies = [
  "criterion",
  "libc",
@@ -1151,7 +1151,7 @@ dependencies = [
 
 [[package]]
 name = "monitrs-core"
-version = "1.0.0"
+version = "1.0.1"
 dependencies = [
  "proptest",
  "serde",
@@ -1161,7 +1161,7 @@ dependencies = [
 
 [[package]]
 name = "monitrs-tui"
-version = "1.0.0"
+version = "1.0.1"
 dependencies = [
  "crossterm",
  "insta",
