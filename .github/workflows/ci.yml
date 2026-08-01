@@ -203,12 +203,6 @@ jobs:
     needs: fmt
     runs-on: ubuntu-24.04
     timeout-minutes: 20
-    # Advisory until v1.0.0 is tagged: there is no published 1.x release yet for
-    # the workspace to be compatible with, so a failure here would be noise. Flip
-    # `continue-on-error` to false and delete this comment in the same commit
-    # that tags v1.0.0 — from that point on, a semver break without a major bump
-    # is exactly what this job exists to catch.
-    continue-on-error: true
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: dtolnay/rust-toolchain@4cda84d5c5c54efe2404f9d843567869ab1699d4 # stable

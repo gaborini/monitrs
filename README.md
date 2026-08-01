@@ -28,11 +28,10 @@ with it.
 > [crates.io](https://crates.io/crates/monitrs) and
 > [GitHub](https://github.com/gaborini/monitrs/releases/tag/v1.0.0). Four surfaces are
 > frozen — the public API of the three library crates, the JSON export, the configuration
-> keys, and the default keymap — and each has a guard rather than a paragraph that asks
-> nicely: the inventories in [`docs/schema/`](docs/schema/) with the contract tests that
-> read them, and the keymap's own tests, all of which fail a build today — and
-> `cargo-semver-checks` for the API, which reports without blocking until the commit
-> that tags `v1.0.0` flips it.
+> keys, and the default keymap — and each has a guard that fails a build rather than a
+> paragraph that asks nicely: the inventories in [`docs/schema/`](docs/schema/) with the
+> contract tests that read them, the keymap's own tests, and `cargo-semver-checks` for
+> the API, which this release's own commit turned from advisory into a gate.
 > [`CONTRIBUTING.md`](CONTRIBUTING.md) states the terms. **What is not frozen is how it
 > looks**: layout, wording, colour, glyph choice and panel arrangement are presentation,
 > and a cosmetic change is not a breaking one.
@@ -202,7 +201,7 @@ surprises you.
 
 ### From a release archive
 
-[The `v0.2.0` release](https://github.com/gaborini/monitrs/releases/tag/v0.2.0) has one
+[The `v1.0.0` release](https://github.com/gaborini/monitrs/releases/tag/v1.0.0) has one
 archive per target — `x86_64` and `aarch64` for Linux glibc, Linux musl, and macOS —
 each carrying the binary, both licences, this README, the changelog excerpt for that
 version, shell completions for bash, zsh, fish, PowerShell and elvish, and a manpage.
@@ -213,8 +212,8 @@ Installing one means verifying it and putting the binary somewhere on your `PATH
 # The release carries one SHA256SUMS for all six archives, not a file per archive, so
 # --ignore-missing is what lets you check the one you actually downloaded.
 shasum -a 256 --check --ignore-missing SHA256SUMS     # sha256sum on Linux
-tar xzf monitrs-0.2.0-aarch64-apple-darwin.tar.gz
-install -m 755 monitrs-0.2.0-aarch64-apple-darwin/monitrs ~/.local/bin/monitrs
+tar xzf monitrs-1.0.0-aarch64-apple-darwin.tar.gz
+install -m 755 monitrs-1.0.0-aarch64-apple-darwin/monitrs ~/.local/bin/monitrs
 ```
 
 Releases also carry a build attestation, so `gh attestation verify

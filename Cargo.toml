@@ -8,7 +8,7 @@ members = [
 ]
 
 [workspace.package]
-version = "0.2.0"
+version = "1.0.0"
 edition = "2024"
 # MSRV. Raised to 1.95 by `sysinfo` 0.39, which is the highest floor in the
 # resolved graph. Verified by the `msrv` CI job, not by assumption.
@@ -22,9 +22,9 @@ categories = ["command-line-utilities"]
 
 [workspace.dependencies]
 # --- internal ---
-monitrs-core = { version = "0.2.0", path = "crates/monitrs-core" }
-monitrs-collectors = { version = "0.2.0", path = "crates/monitrs-collectors" }
-monitrs-tui = { version = "0.2.0", path = "crates/monitrs-tui" }
+monitrs-core = { version = "1.0.0", path = "crates/monitrs-core" }
+monitrs-collectors = { version = "1.0.0", path = "crates/monitrs-collectors" }
+monitrs-tui = { version = "1.0.0", path = "crates/monitrs-tui" }
 
 # --- terminal ---
 # `crossterm_0_29` is ratatui 0.30's compatibility feature. Pinning it here is
