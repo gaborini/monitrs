@@ -72,9 +72,8 @@
 //! is the same age.
 //!
 //! So the age is stated **once per panel, in the panel's own trailing label** —
-//! `82% discharging ~00:28`, `2 sensors ~00:28` — and the fields inside carry the stale
-//! mark without repeating the figure. Two reasons it goes there rather than on each
-//! field:
+//! `82% discharging ~00:28`, `2 sensors ~00:28` — and that label is the only place any
+//! of it appears as *text*. Two reasons it goes there rather than on each field:
 //!
 //! * `~00:28` printed six times down a three-row panel is one fact rendered as six,
 //!   and the trailing label is already where each panel describes itself.
@@ -83,16 +82,30 @@
 //!   80 columns, permanently, to make room for a suffix that is usually absent.
 //!
 //! The fields are still routed through [`states::describe`] with the envelope's
-//! staleness pushed into them (`retained_field`), because that is what makes their
-//! [`Token::Stale`] styling and their `~` cue honest: a 28-second-old instantaneous
-//! wattage must not be *drawn* as a fresh measurement either (§5.2, §5.3). A field that
-//! is unavailable in its own right keeps its own reason, since
-//! [`MetricState::into_stale`] only touches `Available`.
+//! staleness pushed into them (`retained_field`), because a 28-second-old instantaneous
+//! wattage must not be *drawn* as a fresh measurement either. **What that buys them is a
+//! style and not a character:** `push_field` renders
+//! [`MetricDisplay::fitted`], which emits the text alone — [`MetricDisplay::flagged`] is
+//! the form that prefixes the symbol, and no field on this screen uses it. So each
+//! retained field is [`Token::Stale`], which is `DIM | ITALIC` and therefore survives
+//! [`ColorDepth::Off`] (`theme::Token::emphasis`), and the `~` itself appears only in the
+//! panel label above. Colour is not the only carrier (§5.2, §5.3), but the redundant cue
+//! here is an attribute rather than a glyph, and the text that names the age is one row
+//! away rather than in the cell.
+//!
+//! A field that is unavailable in its own right keeps its own reason and its own symbol,
+//! since [`MetricState::into_stale`] only touches `Available`.
+//!
+//! One consequence worth knowing before editing: because the cells differ only by style,
+//! a snapshot taken through `text_of` cannot see the difference, which is why
+//! `a_retained_pack_is_styled_stale_at_the_call_site_and_not_only_in_the_helper`
+//! inspects spans instead.
 //!
 //! The one place the age is repeated is the charge meter, which annotates its own value
 //! ([`Meter`] does this for every metric it draws) — that is the widget's rule, not this
 //! screen's, and it is right there beside the figure it dates.
 //!
+//! [`ColorDepth::Off`]: crate::theme::ColorDepth::Off
 //! [`SensorSnapshot::battery`]: monitrs_core::model::SensorSnapshot::battery
 //! [`TemperatureReading::share_of_critical`]: monitrs_core::model::TemperatureReading::share_of_critical
 //! [`TemperatureReading::peak_celsius`]: monitrs_core::model::TemperatureReading::peak_celsius
@@ -779,6 +792,24 @@ mod tests {
             .collect()
     }
 
+    /// The style of the first span whose text contains `needle`.
+    ///
+    /// The styles are exactly what [`text_of`] throws away, and on this screen they are
+    /// the *only* thing separating a retained field from a freshly measured one: the
+    /// cells are byte-identical either way, because `push_field` renders
+    /// `MetricDisplay::fitted` and that never emits the `~`. So a test — or a snapshot —
+    /// that reads only text cannot fail when `retained_field` is dropped from a call
+    /// site, which is the hole this exists to close.
+    fn style_of(line: &Line<'static>, needle: &str) -> ratatui::style::Style {
+        line.spans
+            .iter()
+            .find(|span| span.content.contains(needle))
+            .map_or_else(
+                || panic!("no span containing {needle:?} in {:?}", text_of(line)),
+                |span| span.style,
+            )
+    }
+
     fn battery() -> BatterySnapshot {
         BatterySnapshot {
             charge: Percent::new(82.0).expect("finite"),
@@ -1092,6 +1123,78 @@ mod tests {
         assert_eq!(display.text(), "permission denied");
         assert_eq!(display.symbol(), '!');
         assert_eq!(display.age(), None);
+    }
+
+    /// The regression test for C1's own fix, at the call sites rather than the helper.
+    ///
+    /// `every_field_of_a_retained_pack_is_styled_as_retained_rather_than_as_measured`
+    /// exercises `retained_field` directly, and the Battery snapshot fixtures compare
+    /// text — so between them, all three `retained_field` call sites could be deleted
+    /// while the `retained` parameters stayed in place, the four vitals fields would fall
+    /// back to `Token::Text`, and every other test in the workspace would still pass.
+    /// That is the same shape of hole C1 existed to close: a correct rendering with
+    /// nothing able to observe it. This asserts the styles the cells actually carry.
+    #[test]
+    fn a_retained_pack_is_styled_stale_at_the_call_site_and_not_only_in_the_helper() {
+        let presentation = presentation();
+        let stale = presentation.style(Token::Stale);
+        let measured = presentation.style(Token::Text);
+        let age = Some(Duration::from_secs(28));
+        // Every value on the vitals row, by the text a reader sees in it.
+        const VITALS: [&str; 4] = ["4h 00m", "214", "31.4C", "12.4 W"];
+
+        let retained = vitals_line(&battery(), age, presentation, 140);
+        for value in VITALS {
+            assert_eq!(
+                style_of(&retained, value),
+                stale,
+                "{value} is drawn as a fresh measurement"
+            );
+        }
+        // And the other half of §4: a fresh reading is not decorated, so this test fails
+        // if `retained_field` ever marks unconditionally.
+        let fresh = vitals_line(&battery(), None, presentation, 140);
+        for value in VITALS {
+            assert_eq!(
+                style_of(&fresh, value),
+                measured,
+                "{value} is marked retained on a freshly measured pack"
+            );
+        }
+
+        let capacity = capacity_line(&battery(), age, presentation, 140);
+        assert_eq!(style_of(&capacity, "48.2 Wh"), stale);
+        assert_eq!(
+            style_of(&capacity, "92%"),
+            stale,
+            "HEALTH is derived from the \
+             capacities beside it, so it is exactly as old as they are"
+        );
+        let capacity_fresh = capacity_line(&battery(), None, presentation, 140);
+        assert_eq!(style_of(&capacity_fresh, "48.2 Wh"), measured);
+        assert_eq!(style_of(&capacity_fresh, "92%"), measured);
+
+        let thermal = thermal_line(
+            &reading("performance", 62.5, Some(105.0)),
+            age,
+            presentation,
+            140,
+            false,
+        );
+        assert_eq!(style_of(&thermal, "62.5C"), stale);
+        let thermal_fresh = thermal_line(
+            &reading("performance", 62.5, Some(105.0)),
+            None,
+            presentation,
+            140,
+            false,
+        );
+        assert_eq!(style_of(&thermal_fresh, "62.5C"), measured);
+
+        // The cells are byte-identical across both, which is why this test reads styles
+        // and the snapshot fixtures cannot.
+        assert_eq!(text_of(&retained), text_of(&fresh));
+        assert_eq!(text_of(&thermal), text_of(&thermal_fresh));
     }
 
     #[test]
