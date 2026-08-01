@@ -10,7 +10,39 @@ work yet, regardless of what the source contains.
 
 ## [Unreleased]
 
-Nothing yet.
+### Fixed
+
+* **`monitrs snapshot --format json | head` no longer reports an error.** Closing the
+  pipe is the reader's decision, and monitrs treated it as a failure: it printed
+  `monitrs: Broken pipe (os error 32)` and exited non-zero, so under the
+  `set -o pipefail` that careful scripts use, an ordinary pipeline failed. It now exits
+  quietly and successfully, and records the reason in `--debug-log` at debug level.
+  Only `snapshot` could reach this in practice — its export is about 800 KB, larger than
+  any pipe buffer, so it is still writing after the reader has gone. `completions`
+  (17 KB), `manpage` (4 KB) and `config` (under 100 bytes) fit in the buffer and finish
+  writing first, which is why nobody had seen it there. Their handling is fixed too:
+  `config` printed with `println!` and `completions` used a helper that writes straight
+  to stdout, and both of those *panic* rather than return an error when the write fails,
+  so had the pipe ever broken the result would have been a panic report. Both now route
+  through the same path as `snapshot`.
+
+  The recognition is deliberately narrow — the failure must itself be the broken pipe.
+  A broken pipe reachable only as some other error's cause is still reported and still
+  exits non-zero, because that one did not come from writing monitrs' own output, and
+  silently exiting 0 on a run that really failed would be worse than the message this
+  replaces.
+
+### Documentation
+
+* **`docs/soak-testing.md`'s independent memory check was measuring the wrong process.**
+  The page asks for a resident-size reading taken from outside the soak, so the figure
+  does not rest solely on monitrs' own measurement, and then gave `pgrep -f soak-` —
+  which also matches the `tee` the same page tells you to pipe through. It is not a coin
+  flip: `pgrep` prints ascending PIDs, `head -1` takes the first, the `tee` exists from
+  the moment the pipeline starts, and cargo spawns the test binary minutes later once
+  the build finishes. So the corroborating reading was of the one process guaranteed not
+  to grow. The pattern is now anchored to `^[^ ]*/deps/soak-`, verified on Amazon Linux
+  2023 and macOS, and the page says how to confirm it matched exactly one process.
 
 ## [1.0.0] - 2026-08-01
 

@@ -74,6 +74,19 @@ fn main() -> ExitCode {
 
     let code = match run(&cli, deferred) {
         Ok(code) => code,
+        // Whoever was reading stdout closed it — `monitrs snapshot | head -3`, and
+        // every other pipeline whose reader has seen enough. That is the reader's
+        // decision, not a failure of ours, so it earns silence and a successful
+        // status rather than an error message and `ExitCode::FAILURE`. Reporting it
+        // was worse than noisy: under the `set -o pipefail` any careful script
+        // sets, it turned an ordinary pipeline into a failed one.
+        Err(error) if is_broken_pipe(&error) => {
+            // Recorded, because `--debug-log` should still explain why a run ended
+            // with less output than the reader asked for — but at debug level, since
+            // nothing went wrong.
+            tracing::debug!("stdout was closed by the reader; exiting quietly");
+            ExitCode::SUCCESS
+        }
         Err(error) => {
             let reason = format!("{error:#}");
             // Recorded as well as printed, so a bug report that includes the log
@@ -95,6 +108,35 @@ fn main() -> ExitCode {
         log.shutdown();
     }
     code
+}
+
+/// Whether this failure is only "the reader of our stdout went away".
+///
+/// Deliberately narrow: the error itself must *be* the broken pipe. Every write to
+/// stdout in this binary is a bare `write_all(..)?` or `writeln!(..)?`, so that is
+/// the shape a closed reader actually produces, and `eyre`'s downcast already looks
+/// through the context a `wrap_err` adds — so adding a context line above one of
+/// those writes would not break this.
+///
+/// What it will *not* do is search an error's `source()` chain, and that is the
+/// point rather than an omission. A `BrokenPipe` reachable only as some other
+/// error's cause did not come from writing our own output; treating it as "the
+/// reader left" would exit 0 and print nothing on a run that genuinely failed. The
+/// cost of being wrong in that direction is a silently swallowed failure, which is
+/// worse than the noisy message this replaces.
+///
+/// Rust's runtime sets `SIGPIPE` to `SIG_IGN` before `main`, which is why this is a
+/// recoverable `io::Error` at all: without that the process would simply die of the
+/// signal, the way `yes | head` does. Restoring the default disposition would match
+/// that convention more exactly, but it is not available here — it means calling
+/// `libc::signal`, and this crate carries `#![forbid(unsafe_code)]`. It would also
+/// apply to the interactive path, where dying mid-frame would leave the terminal in
+/// whatever state the alternate screen left it. Recognising the error is both the
+/// narrower change and the only one the crate's own lints permit.
+fn is_broken_pipe(error: &color_eyre::Report) -> bool {
+    error
+        .downcast_ref::<std::io::Error>()
+        .is_some_and(|io| io.kind() == std::io::ErrorKind::BrokenPipe)
 }
 
 /// Which sinks the debug log may use on the path this invocation will take (§14.2).
@@ -124,7 +166,14 @@ fn run(cli: &Cli, log_notices: Vec<String>) -> color_eyre::Result<ExitCode> {
             // completions cannot drift from the real flags (§21 M6).
             let mut command = Cli::command();
             let name = command.get_name().to_owned();
-            clap_complete::generate(*shell, &mut command, name, &mut std::io::stdout());
+            // Rendered into a buffer first, like `manpage` below, because
+            // `clap_complete::generate` writes straight to the sink and *panics* if
+            // that write fails. Handing it a `Vec` makes the only fallible write a
+            // plain `?`, so a closed pipe reaches the handler in `main` as an error
+            // to be recognised rather than a panic report.
+            let mut buffer = Vec::new();
+            clap_complete::generate(*shell, &mut command, name, &mut buffer);
+            std::io::stdout().write_all(&buffer)?;
             Ok(ExitCode::SUCCESS)
         }
 
@@ -256,6 +305,16 @@ fn restrict_to_user(_path: &std::path::Path) -> std::io::Result<()> {
     Ok(())
 }
 
+/// `println!` panics when its write fails, which turns a reader closing the pipe
+/// into a panic report. Every line this subcommand prints goes through here
+/// instead, so the failure arrives as an `io::Error` that [`is_broken_pipe`] can
+/// recognise — the same route `snapshot`, `manpage` and `completions` take.
+macro_rules! outln {
+    ($($arg:tt)*) => {
+        writeln!(std::io::stdout(), $($arg)*)?
+    };
+}
+
 fn run_config(command: &ConfigCommand) -> color_eyre::Result<ExitCode> {
     match command {
         ConfigCommand::Path => {
@@ -273,7 +332,7 @@ fn run_config(command: &ConfigCommand) -> color_eyre::Result<ExitCode> {
             } else {
                 "not present"
             };
-            println!("{} ({state})", path.display());
+            outln!("{} ({state})", path.display());
             Ok(ExitCode::SUCCESS)
         }
 
@@ -288,8 +347,8 @@ fn run_config(command: &ConfigCommand) -> color_eyre::Result<ExitCode> {
                 })?,
             };
             config::init_file(&target)?;
-            println!("wrote {}", target.display());
-            println!("every value in it is the built-in default, so nothing changed yet");
+            outln!("wrote {}", target.display());
+            outln!("every value in it is the built-in default, so nothing changed yet");
             Ok(ExitCode::SUCCESS)
         }
 
@@ -299,7 +358,7 @@ fn run_config(command: &ConfigCommand) -> color_eyre::Result<ExitCode> {
                 None => match config::default_path() {
                     Some(path) if path.is_file() => path,
                     Some(path) => {
-                        println!(
+                        outln!(
                             "{} is not present; built-in defaults are valid",
                             path.display()
                         );
@@ -314,9 +373,9 @@ fn run_config(command: &ConfigCommand) -> color_eyre::Result<ExitCode> {
                 },
             };
             let (_, warnings) = config::read_and_validate(&target)?;
-            println!("{} is valid", target.display());
+            outln!("{} is valid", target.display());
             for warning in &warnings {
-                println!("warning: {warning}");
+                outln!("warning: {warning}");
             }
             Ok(ExitCode::SUCCESS)
         }
@@ -604,5 +663,85 @@ mod tests {
             page.contains("system cockpit"),
             "the description should reach the man page"
         );
+    }
+
+    /// An error type that merely *carries* a broken pipe as its cause, standing in
+    /// for anything monitrs might one day wrap around an inner failure.
+    #[derive(Debug)]
+    struct Carrying(std::io::Error);
+
+    impl std::fmt::Display for Carrying {
+        fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+            write!(f, "the collector could not be reached")
+        }
+    }
+
+    impl std::error::Error for Carrying {
+        fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+            Some(&self.0)
+        }
+    }
+
+    /// `tests/broken_pipe.rs` proves the behaviour against a real pipe; these pin the
+    /// judgement, in both directions.
+    #[test]
+    fn the_reader_leaving_is_recognised_through_a_context_line() {
+        let bare: color_eyre::Report =
+            std::io::Error::new(std::io::ErrorKind::BrokenPipe, "Broken pipe (os error 32)").into();
+        assert!(
+            is_broken_pipe(&bare),
+            "the error exactly as `write_all` returns it — the shape every stdout \
+             write in this binary produces"
+        );
+
+        assert!(
+            is_broken_pipe(&bare.wrap_err("could not write the export")),
+            "`eyre`'s downcast looks through context, so describing the write does \
+             not stop the pipe being recognised"
+        );
+    }
+
+    #[test]
+    fn a_broken_pipe_that_is_only_some_other_failure_s_cause_is_still_a_failure() {
+        // The narrowness is the safety property: swallowing this would exit 0 and
+        // print nothing on a run that really did fail, which is worse than the noisy
+        // message this whole change removes.
+        let carried: color_eyre::Report = Carrying(std::io::Error::new(
+            std::io::ErrorKind::BrokenPipe,
+            "Broken pipe (os error 32)",
+        ))
+        .into();
+        assert!(
+            carried
+                .chain()
+                .any(|cause| cause.downcast_ref::<std::io::Error>().is_some()),
+            "the pipe really is in the chain, so this test would pass vacuously if \
+             the fixture were wrong"
+        );
+        assert!(
+            !is_broken_pipe(&carried),
+            "it is reachable only as a cause, so it did not come from writing our \
+             own stdout and must keep its message and its non-zero exit"
+        );
+    }
+
+    #[test]
+    fn other_write_failures_are_still_failures() {
+        // The neighbouring kind most likely to be confused with a closed reader, and
+        // the one that must keep its message and its non-zero exit: a full disk while
+        // writing `snapshot --output`.
+        let full: color_eyre::Report =
+            std::io::Error::new(std::io::ErrorKind::StorageFull, "No space left on device").into();
+        assert!(!is_broken_pipe(&full));
+
+        let denied: color_eyre::Report =
+            std::io::Error::new(std::io::ErrorKind::PermissionDenied, "denied").into();
+        assert!(!is_broken_pipe(
+            &denied.wrap_err("could not write the export")
+        ));
+
+        // An error with no `io::Error` in it at all must not be swallowed either.
+        let plain = color_eyre::eyre::eyre!("--samples must be at least 1");
+        assert!(!is_broken_pipe(&plain));
     }
 }
