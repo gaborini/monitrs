@@ -24,14 +24,26 @@ terminal monitors, what it was doing thirty seconds ago. Pause the timeline,
 scrub back to a spike, and see which processes were most strongly correlated
 with it.
 
-> **Status: `0.2.0`, and marked a pre-release.** It is on
+> **Status: `1.0.0`, a stability promise with a machine behind it.** It is on
 > [crates.io](https://crates.io/crates/monitrs) and
-> [GitHub](https://github.com/gaborini/monitrs/releases/tag/v0.2.0). The pre-release
-> flag is not modesty: one of §16.1's budgets is not met — idle self-CPU at the 95th
-> percentile — and the twelve-hour soak has not been run, both of which are stated in
-> [`CHANGELOG.md`](CHANGELOG.md) and in the table below. `0.2.0` also changes the
-> library API and the JSON export schema; the changelog lists every break. Where a claim
-> has a caveat, the caveat is next to it rather than left out.
+> [GitHub](https://github.com/gaborini/monitrs/releases/tag/v1.0.0). Four surfaces are
+> frozen — the public API of the three library crates, the JSON export, the configuration
+> keys, and the default keymap — and each has a guard that fails a build rather than a
+> paragraph that asks nicely: `cargo-semver-checks`, and the inventories in
+> [`docs/schema/`](docs/schema/) with the contract tests that read them.
+> [`CONTRIBUTING.md`](CONTRIBUTING.md) states the terms. **What is not frozen is how it
+> looks**: layout, wording, colour, glyph choice and panel arrangement are presentation,
+> and a cosmetic change is not a breaking one.
+>
+> **The caveat that survives the `1.0` label**, because relabelling it would not fix it:
+> one of §16.1's budgets is still not met — idle self-CPU at the 95th percentile,
+> 4.30–9.50% against 2%, with the median passing — and the twelve-hour soak has not been
+> run on either platform. The table below carries the first;
+> [`CHANGELOG.md`](CHANGELOG.md)'s *Known limitations* carries both, and says — because
+> it is the useful part — that the cause this release was built around turned out to be
+> the wrong one. `1.0.0` also breaks the library API on its way to freezing it; the
+> changelog lists every break. Where a claim has a caveat, the caveat is next to it
+> rather than left out.
 
 ## The screens
 

@@ -18,12 +18,15 @@ this section is that the open items travel with the release instead of being for
 they are repeated in each `CHANGELOG.md` release section under *Known limitations*, which
 is what a user actually reads. What is still owed:
 
-* **The API freeze has no mechanism behind it yet.** `.github/workflows/ci.yml`'s
-  `semver compatibility` job runs `continue-on-error: true`, so it reports a break
-  and CI stays green. Flipping it to `false` is a step of the `1.0.0` release commit
-  ([step 2](#2-bump-the-version)) and is the *only* thing that makes
-  CONTRIBUTING.md's freeze enforceable rather than aspirational. It is called out
-  here as well as there because nothing fails if it is skipped.
+* **One of the four freeze guards does not block yet, and it is the API one.**
+  `.github/workflows/ci.yml`'s `semver compatibility` job runs
+  `continue-on-error: true`, so it reports a break and CI stays green. Flipping it to
+  `false` is a step of the `1.0.0` release commit ([step 2](#2-bump-the-version)) and
+  is the only thing that makes the *API* half of CONTRIBUTING.md's freeze enforceable
+  rather than aspirational. The other three surfaces — the JSON export, the
+  configuration keys and the default keymap — are each guarded by a test that already
+  fails a build ([step 4](#and-the-four-freeze-guards)). This one is called out here
+  as well as there because nothing fails if it is skipped.
 * **No twelve-hour soak is on record**, and it is not going to be produced from a
   workstation: the gate is twelve uninterrupted hours, and a laptop that sleeps does not
   yield one. It is being moved to a dedicated EC2 host under its own project. A 30-minute
@@ -140,7 +143,7 @@ prints the command it runs, and this checklist gives the underlying commands so
 > `false` and delete the comment above it that says to.
 >
 > This is the **only blocking mechanism the API freeze has**. Everything
-> CONTRIBUTING.md's "What 1.0.0 freezes" section promises about the public API is,
+> CONTRIBUTING.md's "What 1.0.0 froze" section promises about the public API is,
 > until this flip, a policy that nothing enforces — the job reports and CI stays
 > green. It is also the single most forgettable step in the release, because
 > nothing fails if you skip it: CI passes, the tag ships, and the freeze is
@@ -302,6 +305,62 @@ so the first two commands passed while the release gate would not have. Run all 
 `--all-features` matters here too: the native layers are behind `linux-native` and
 `macos-native`, so omitting it checks the `sysinfo` baseline and nothing else.
 
+### And the four freeze guards
+
+`1.0.0` froze four surfaces and gave each one a guard. Three of them already ran in
+the `cargo test` above; the fourth runs locally only if you run it yourself.
+
+| Frozen surface | Guard | Where it runs |
+|---|---|---|
+| the public API of `monitrs-core`, `monitrs-collectors`, `monitrs-tui` | `cargo-semver-checks` | the `semver compatibility` CI job — and locally, below |
+| the JSON export | `docs/schema/v2.json` (292 field paths) + `crates/monitrs/tests/schema_contract.rs` | `cargo test` |
+| the configuration keys | `docs/schema/config-v1.json` (32 key paths) + `crates/monitrs/tests/config_contract.rs` | `cargo test` |
+| the default keymap | `every_global_binding_from_the_spec_resolves_in_normal_mode` and its list-binding sibling, `crates/monitrs-tui/src/keymap.rs` | `cargo test` |
+
+Run the semver check by hand before you tag. CI's copy stays advisory until the
+`1.0.0` release commit flips it (step 2), and a job that reports without blocking
+looks exactly like a job that passed:
+
+```sh
+cargo install cargo-semver-checks --locked      # once
+cargo semver-checks check-release --workspace
+```
+
+`monitrs` itself declares a `[[bin]]` and no `[lib]`, so `--workspace` checks exactly
+the three crates CONTRIBUTING.md's freeze names as API.
+
+**Then look at what the two inventory tests printed**, which the run above hid.
+Removing a path fails the test and says so loudly; *adding* one is deliberately only
+printed, because a consumer reading by name cannot be broken by a field it has never
+heard of. `cargo test` captures the stdout of a passing test, so the additions are
+invisible unless you ask:
+
+```sh
+cargo test -p monitrs --test schema_contract --test config_contract -- --nocapture \
+  | grep '^new '
+```
+
+Every line it prints is a field path or configuration key this release adds and the
+inventory does not yet record. Add them to `docs/schema/v2.json` or
+`docs/schema/config-v1.json` — deliberately, having read them, which is why the test
+prints rather than regenerates. An unrecorded path is not a broken promise, but it is
+a promise nobody wrote down, and the next release cannot notice it disappearing.
+
+**A guard that fails is a decision, not an obstacle.** Adding a field, a key or a
+binding is not a break. Removing or renaming one is, and each has its own price:
+`SCHEMA_VERSION` bumped with a new `docs/schema/v{N+1}.json` written *beside* the old
+file; `SUPPORTED_VERSION` bumped with a new `docs/schema/config-v{N+1}.json` beside
+the old one, plus `docs/configuration.md`; a major version for the API; a major
+version for a rebound default key. The old inventory file always stays, so a consumer
+can diff the two. Each test's own failure message spells its rule out.
+
+**And the one thing none of the four can see:** a frozen key or field whose *meaning*
+changes while every name stays put. `sampling.slow_interval` taking over the sensor
+read in `1.0.0` is the worked example — no inventory moved, and nothing failed. If a
+release changes what a frozen name *does*, `CHANGELOG.md` and the relevant document
+are the only record there will ever be, and writing them is part of the release rather
+than a follow-up to it.
+
 ## 5. Soak
 
 Blocking. [`soak-testing.md`](soak-testing.md) has the invocations, how to read the
@@ -340,6 +399,23 @@ is read on the workload it names.
 * [ ] Both figures — median and p95 — recorded in `benchmarks.md`, beside the
       existing ~1000-process numbers, and this list's own idle-CPU item above
       updated to say which workload each figure is.
+
+**Two rows, not one**, every time this measurement is taken — on the reference host
+and on whatever the development machine is. Since `1.0.0` the sensor group's cadence
+follows what is on screen (§8.6), so idle self-CPU is two different numbers and
+publishing one of them alone hides which:
+
+* [ ] **Overview visible, untouched.** This is the row §16.1's budget is about, and
+      the only one a pass or a fail is read from. Three runs of 60 s.
+* [ ] **The Battery screen visible**, where the sensors return to `medium_interval`.
+      Three runs of 60 s. This row is not a gate — it is the evidence that the
+      cadence switch is doing something, and `benchmarks.md`'s two-row table is
+      where it goes, with a sentence saying which of the two the budget names.
+* [ ] Read the **medians** against each other and treat a p95 comparison between the
+      two rows with suspicion: a p95 over ~74 samples is the fourth-largest value in
+      the window, and the two rows' p95 ranges have already overlapped once across
+      three runs each while their medians separated cleanly. `benchmarks.md`'s "Why
+      there are two idle rows" explains the instrument; do not re-derive it.
 
 Terminal behaviour. The first two are now **automated** —
 `python3 scripts/verify-terminal-restoration.py` runs the release binary on a real pty,
