@@ -12,6 +12,23 @@ work yet, regardless of what the source contains.
 
 ### Fixed
 
+* **The twelve-hour soak measured its own bookkeeping and called it monitrs.** `Injector`
+  in `crates/monitrs/tests/soak.rs` kept every acknowledged keypress — a triple of
+  `Duration`s, 48 bytes — so it could compute latency percentiles at the end. Over the
+  twelve-hour run on 2026-08-01 that was 856 644 keypresses and 40 155 KiB, against
+  §16.1's allowance of 16 384 KiB. **The gate failed on the harness alone, and could
+  never have passed at any realistic input rate.** The sample is now bounded at 32 768
+  triples, decimated so it stays spread evenly across the run, with the keypress count
+  and the worst case kept exactly — the latter because it is the stall detector, and a
+  stall the decimation skipped would be a stall the harness failed to see.
+
+  Subtracting the harness from the 2026-08-01 measurements leaves **21 KiB of growth
+  over twelve hours on x86_64 and 785 KiB on aarch64**, against the same 16 384 KiB
+  allowance. The history ring held one size for all 720 measurements and the descriptor
+  count held at 4. So monitrs' own resident memory is flat over twelve hours on both
+  Tier 1 Linux architectures — which is what the run was asked to establish, and what
+  *Known limitations* said was unmeasured.
+
 * **`monitrs snapshot --format json | head` no longer reports an error.** Closing the
   pipe is the reader's decision, and monitrs treated it as a failure: it printed
   `monitrs: Broken pipe (os error 32)` and exited non-zero, so under the
