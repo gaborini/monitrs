@@ -302,7 +302,7 @@ reads are where the cost is.
 | Input to visible response | < 50 ms when no collector result is needed | median 417 µs, p95 486 µs |
 | Frame render at 160×48 | < 16 ms | median 200 µs, p95 353 µs |
 | Sample collection at 200 processes | < 200 ms p95 | at 1000 processes: p95 12.63 ms for a fast-only tick, 40.90 ms when the medium tier joins every fifth, 134.78 ms for the every-thirtieth tick that also reads sensors |
-| 12-hour run | no unbounded memory or file-descriptor growth | Ran 2026-08-01 on both Tier 1 Linux architectures and **failed — in the harness, not the program**: the injector kept every keypress and grew 40 155 KiB doing it, against a 16 384 KiB allowance, so the gate could not have passed at any input rate. Subtracting it leaves 21 KiB of growth on x86_64 and 785 KiB on aarch64, but that is arithmetic on a broken run. A re-run against the fixed harness decides it. The 1-hour 10,000-process and real-collector runs both passed, and descriptors held at 4 |
+| 12-hour run | no unbounded memory or file-descriptor growth | **Met.** Run 2026-08-02 on both Tier 1 Linux architectures: resident memory 14 490 → 15 083 KiB (x86_64) and 16 097 → 16 212 KiB (aarch64), first quartile to last, against a 16 384 KiB allowance, with the history ring at one size across all 720 measurements and descriptors at 4. An independent sampler outside the process agrees. The 2026-08-01 attempt against `v1.0.0` failed in the test harness, not the program — the injector kept every keypress and grew 40 155 KiB doing it |
 | Redraw | no busy loop | not measured as such |
 
 The idle-CPU failure is not in monitrs' own computation, which is about 35 µs per

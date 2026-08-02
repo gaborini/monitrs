@@ -40,6 +40,16 @@ is what a user actually reads. What is still owed:
   gate was **deferred past the tag by a written decision** rather than met or skipped:
   [step 5](#5-soak) names who decided, on what date, on what evidence, what the
   deferral does not cover, and the seven days inside which the runs are owed.
+
+  **The debt was paid on 2026-08-02, inside the window, and the gate is met.** Twelve
+  hours on both Tier 1 Linux architectures: resident memory 14 490 → 15 083 KiB on
+  x86_64 and 16 097 → 16 212 KiB on aarch64, first quartile to last, against a 16 384 KiB
+  allowance, with the history ring at one size across all 720 measurements and
+  descriptors at 4. The first attempt, on 2026-08-01, failed — in this repository's own
+  test harness rather than in monitrs, and by enough that the gate could not have passed
+  at any input rate. If you are about to run this for a release, read
+  [`soak-testing.md`](soak-testing.md) first: two of the traps in that document were only
+  found by running it for real.
 * **The idle self-CPU budget of §16.1 is not met, and on its own reference workload
   neither half of it is.** On 8-vCPU Linux at 199–200 processes — the workload the budget
   names — median **2.66%** against 1% and p95 **3.99%** against 2%, on both Tier 1

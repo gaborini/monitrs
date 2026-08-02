@@ -89,14 +89,18 @@ unchanged, and one is new.
   medium tier's two filesystem-capacity reads are still the measured cost at 13.2–35.0 ms
   of CPU per tick. Nothing in this release addresses it, and the Linux figures above do
   not separate the two reads either.
-* **The twelve-hour soak ran, and found a defect in its own harness rather than in
-  monitrs.** See *Fixed* above. Subtracting the harness's accumulation from the
-  2026-08-01 measurements leaves 21 KiB of growth over twelve hours on x86_64 and 785 KiB
-  on aarch64, against a 16 384 KiB allowance — but that is arithmetic on a broken run, not
-  a reading. **A re-run against the fixed harness is in flight and this section will not
-  claim the gate is met until it lands.** `soak-10k` and `soak-real` both passed on
-  2026-08-01, so load, the real collector and the descriptor budget are clean; the real
-  collector had never been exercised on Linux before that run.
+* **Closed: §16.1's twelve-hour soak is met.** Run 2026-08-02 against the fixed harness,
+  on both Tier 1 Linux architectures, and it passes with room to spare: resident memory
+  moves **14 490 → 15 083 KiB on x86_64 and 16 097 → 16 212 KiB on aarch64**, first
+  quartile to last, against an allowance of 16 384 KiB. Growth of 593 KiB and 115 KiB
+  over twelve hours. The history ring held one size across all 720 measurements and the
+  descriptor count held at 4, and an independent sampler reading `/proc/<pid>/status`
+  from outside the process agrees. Peak resident size fell from 54 724 KiB to 15 688 KiB
+  for the same work — 857 476 keypresses and 2 646 520 snapshots — which is the forty
+  megabytes the harness had been accumulating and calling monitrs'.
+
+  The first attempt, on 2026-08-01 against `v1.0.0`, failed. It failed in the harness; see
+  *Fixed* above. `soak-10k` passed in both attempts.
 
 ## [1.0.0] - 2026-08-01
 
