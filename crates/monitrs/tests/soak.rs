@@ -359,6 +359,17 @@ struct SoakReport {
     /// Near-zero unless the channel is full, which is exactly when it stops being
     /// near-zero — and it was previously invisible inside the total.
     send_costs: Vec<Duration>,
+    /// Every acknowledged keypress, counted exactly.
+    ///
+    /// Not `latencies.len()`: that is a bounded sample of at most
+    /// [`LATENCY_SAMPLE_CAP`], while this is a fact about the run.
+    keys: u64,
+    /// The worst latency, round trip and send cost over *every* keypress.
+    ///
+    /// Exact rather than taken from the sample, because [`Self::max_latency`] is a
+    /// stall detector: a stall the decimation happened to skip would be one this
+    /// harness failed to see.
+    worst: (Duration, Duration, Duration),
     /// Keypresses that were never acknowledged.
     unanswered: u64,
     /// The deepest the event channel was ever observed.
@@ -457,11 +468,7 @@ impl SoakReport {
 
     /// The worst observed input latency, kept as a stall detector.
     fn max_latency(&self) -> Duration {
-        self.latencies
-            .iter()
-            .copied()
-            .max()
-            .unwrap_or(Duration::ZERO)
+        self.worst.0
     }
 }
 
@@ -509,7 +516,7 @@ impl fmt::Display for SoakReport {
             f,
             "input:          {} keys, median {:?}, p95 {:?}, p99 {:?}, worst {:?}, \
              {} unanswered",
-            self.latencies.len(),
+            self.keys,
             self.median_latency(),
             Self::quantile(&self.latencies, 0.95),
             self.p99_latency(),
@@ -520,7 +527,7 @@ impl fmt::Display for SoakReport {
             f,
             "  send:         median {:?}, worst {:?}    (grows only when the channel is full)",
             Self::quantile(&self.send_costs, 0.5),
-            self.send_costs.iter().copied().max().unwrap_or_default()
+            self.worst.2
         )?;
         writeln!(
             f,
@@ -572,11 +579,68 @@ impl fmt::Display for SoakReport {
 // ----------------------------------------------------------------- the injector
 
 /// Everything the injector thread shares with the UI thread.
+/// How many keypress samples the harness keeps for its percentiles.
+///
+/// 32 768 triples of three `Duration`s is 1.5 MiB, and it is reached inside the
+/// first half hour of a twelve-hour run, after which the harness stops growing.
+/// Before this cap existed it kept every sample: the 2026-08-01 twelve-hour run
+/// pushed 856 644 of them and grew 40 155 KiB doing it, against §16.1's 16 384 KiB
+/// allowance — so the harness alone failed the gate it exists to enforce, and the
+/// growth it reported was its own.
+const LATENCY_SAMPLE_CAP: usize = 32_768;
+
+/// Keypress timings: a bounded, uniform-in-time sample for the percentiles, and
+/// exact figures for the two things a sample must not approximate.
+///
+/// The count is exact because the report states it as a fact about the run, and the
+/// worst case is exact because [`SoakReport::max_latency`] is the stall detector
+/// asserted against `MAX_LATENCY_CEILING` — a stall that a decimated sample happened
+/// to skip would be a stall this harness failed to see.
+#[derive(Debug, Default)]
+struct LatencySamples {
+    /// Every `stride`-th sample, never more than [`LATENCY_SAMPLE_CAP`] of them.
+    kept: Vec<(Duration, Duration, Duration)>,
+    /// Doubles each time `kept` fills, halving what is retained — so the sample stays
+    /// spread evenly across the whole run rather than favouring its start.
+    stride: u64,
+    /// Every acknowledged keypress, counted whether or not it was kept.
+    seen: u64,
+    /// The worst of each series, over every sample rather than the kept ones.
+    worst: (Duration, Duration, Duration),
+}
+
+impl LatencySamples {
+    fn record(&mut self, latency: Duration, round_trip: Duration, send: Duration) {
+        if self.stride == 0 {
+            self.stride = 1;
+        }
+        self.worst.0 = self.worst.0.max(latency);
+        self.worst.1 = self.worst.1.max(round_trip);
+        self.worst.2 = self.worst.2.max(send);
+
+        if self.seen.is_multiple_of(self.stride) {
+            self.kept.push((latency, round_trip, send));
+            if self.kept.len() >= LATENCY_SAMPLE_CAP {
+                // Keep every other one and take half as many from here on. Retaining
+                // in place means no second allocation, and the survivors stay evenly
+                // spaced in time.
+                let mut index: usize = 0;
+                self.kept.retain(|_| {
+                    index += 1;
+                    !index.is_multiple_of(2)
+                });
+                self.stride *= 2;
+            }
+        }
+        self.seen += 1;
+    }
+}
+
 #[derive(Debug)]
 struct Injector {
     /// Send-to-reducer-answer latency of every acknowledged keypress, the full round
     /// trip back to this thread, and the cost of the send itself.
-    latencies: Arc<std::sync::Mutex<Vec<(Duration, Duration, Duration)>>>,
+    latencies: Arc<std::sync::Mutex<LatencySamples>>,
     /// Keypresses the UI never acknowledged.
     unanswered: Arc<AtomicU64>,
     /// Set when the thread has left its loop, so the UI can wait for it before
@@ -588,7 +652,7 @@ impl Injector {
     /// The shared state, before the thread exists.
     fn new() -> Self {
         Self {
-            latencies: Arc::new(std::sync::Mutex::new(Vec::new())),
+            latencies: Arc::new(std::sync::Mutex::new(LatencySamples::default())),
             unanswered: Arc::new(AtomicU64::new(0)),
             finished: Arc::new(AtomicBool::new(false)),
         }
@@ -632,7 +696,7 @@ fn spawn_input_injector(
                     let latency = acked_at.saturating_duration_since(sent_at);
                     let round_trip = sent_at.elapsed();
                     if let Ok(mut latencies) = latencies.lock() {
-                        latencies.push((latency, round_trip, sent_cost));
+                        latencies.record(latency, round_trip, sent_cost);
                     }
                 }
                 Err(_) => {
@@ -941,11 +1005,14 @@ fn run_soak(config: SoakConfig) -> SoakReport {
     let history = (state.history().len(), state.history().capacity());
     let history_ceiling = state.history().limits().estimated_capacity_bytes();
     let failed = workers.join_all();
-    let samples = injector
-        .latencies
-        .lock()
-        .map(|guard| guard.clone())
-        .unwrap_or_default();
+    let (samples, keys, worst) = match injector.latencies.lock() {
+        Ok(guard) => (guard.kept.clone(), guard.seen, guard.worst),
+        Err(_) => (
+            Vec::new(),
+            0,
+            (Duration::ZERO, Duration::ZERO, Duration::ZERO),
+        ),
+    };
     let latencies: Vec<Duration> = samples.iter().map(|(latency, _, _)| *latency).collect();
     let round_trips: Vec<Duration> = samples.iter().map(|(_, trip, _)| *trip).collect();
     let send_costs: Vec<Duration> = samples.iter().map(|(_, _, send)| *send).collect();
@@ -961,6 +1028,8 @@ fn run_soak(config: SoakConfig) -> SoakReport {
         latencies,
         round_trips,
         send_costs,
+        keys,
+        worst,
         unanswered: injector.unanswered.load(Ordering::Relaxed),
         peak_queue,
         coalesced: health.coalesced(),
@@ -1210,4 +1279,89 @@ fn a_long_run_soaks_the_shipped_history_configuration() {
         HistoryConfig::default(),
         "the smoke-run ring must actually be smaller than the shipped one"
     );
+}
+
+/// The harness must not be the thing that grows.
+///
+/// Until 2026-08-02 `Injector` kept every keypress triple for its percentiles. The
+/// twelve-hour run on 2026-08-01 pushed 856 644 of them and grew 40 155 KiB doing
+/// it — against §16.1's 16 384 KiB allowance, so the harness alone failed the gate,
+/// and the "resident memory trended upward" it reported was its own bookkeeping
+/// rather than anything monitrs did. Subtracting it left 21 KiB of real growth over
+/// twelve hours on x86_64.
+#[test]
+fn the_latency_sample_stays_bounded_however_long_the_run() {
+    let mut samples = LatencySamples::default();
+    let pushes = LATENCY_SAMPLE_CAP * 10 + 7;
+    for i in 0..pushes {
+        let micros = u64::try_from(i % 1_000).expect("small");
+        samples.record(
+            Duration::from_micros(micros),
+            Duration::from_micros(micros * 2),
+            Duration::from_micros(micros / 2),
+        );
+    }
+
+    assert!(
+        samples.kept.len() <= LATENCY_SAMPLE_CAP,
+        "the sample is the harness's whole memory footprint and must stay bounded; \
+         kept {} of {pushes}",
+        samples.kept.len()
+    );
+    assert!(
+        samples.kept.len() > LATENCY_SAMPLE_CAP / 4,
+        "and it must not decimate itself down to nothing, or the percentiles stop \
+         meaning anything; kept {}",
+        samples.kept.len()
+    );
+    assert_eq!(
+        samples.seen,
+        u64::try_from(pushes).expect("small"),
+        "the count the report states is a fact about the run, not the sample size"
+    );
+}
+
+/// The worst case is a stall detector, so decimation must not be able to hide one.
+#[test]
+fn the_worst_keypress_survives_even_when_the_sample_drops_it() {
+    let mut samples = LatencySamples::default();
+    // Fill past the cap so `stride` has doubled and most samples are being skipped.
+    for _ in 0..LATENCY_SAMPLE_CAP * 4 {
+        samples.record(
+            Duration::from_micros(10),
+            Duration::from_micros(20),
+            Duration::from_micros(5),
+        );
+    }
+
+    // A stall, placed at an index the decimation discards.
+    let stall = Duration::from_millis(900);
+    let mut offset = 0;
+    loop {
+        let would_keep = samples.seen.is_multiple_of(samples.stride);
+        if !would_keep {
+            break;
+        }
+        samples.record(
+            Duration::from_micros(10),
+            Duration::from_micros(20),
+            Duration::from_micros(5),
+        );
+        offset += 1;
+        assert!(
+            offset < 1_000,
+            "a skipped position should arrive immediately"
+        );
+    }
+    samples.record(stall, stall, stall);
+
+    assert!(
+        !samples.kept.iter().any(|(latency, _, _)| *latency == stall),
+        "the fixture is only meaningful if the sample really did drop the stall"
+    );
+    assert_eq!(
+        samples.worst.0, stall,
+        "a stall the sample skipped is still a stall the harness must report"
+    );
+    assert_eq!(samples.worst.2, stall, "and the same for the send cost");
 }

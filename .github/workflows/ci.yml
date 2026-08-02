@@ -2,7 +2,12 @@ name: CI
 
 on:
   push:
-    branches: [main, "feat/**"]
+    # `release/**` is here because the `semver compatibility` job below is the only
+    # thing enforcing the API freeze, and a release branch that never runs CI defers
+    # that check until after the merge — which is after the decision it exists to
+    # inform. Noticed on `release/1.0.1`, the first patch release under the freeze:
+    # the branch was pushed and nothing ran.
+    branches: [main, "feat/**", "release/**"]
   pull_request:
   workflow_dispatch:
 

@@ -340,15 +340,33 @@ different proposition from a laptop at one second. `--history` costs memory in
 proportion to its span; both are clamped to supported ranges and any clamp is
 reported rather than applied silently.
 
-Both are measured now, and one of them **misses half its budget**: on a 12-core Mac with
-about a thousand processes, monitrs costs a median 0.60–0.85% of one core at rest against
-a 1% target — which passes — but a p95 of 4.30–9.50% against 2%, which does not. Resident
-memory sits at 24.5–26.7 MiB against 50 MiB and a frame renders in 200 µs against 16 ms.
-If your machine runs many processes, expect the CPU figure rather than the budget:
+Both are measured now, and the CPU one **misses its budget** — on Linux, both halves of
+it. Resident memory sits at 24.5–26.7 MiB against 50 MiB and a frame renders in 200 µs
+against 16 ms, so memory and frame time are not the problem. Idle CPU is:
+
+| Measured on | Processes | Median (budget 1%) | p95 (budget 2%) |
+|---|---|---|---|
+| 12-core Mac | ~1000 | 0.60–0.85% — passes | 4.30–9.50% — **misses** |
+| 8-vCPU Linux, §16.1's reference workload | 199–200 | 2.66% — **misses** | 3.99% — **misses** |
+
+The Linux row is the one §16.1's budget was actually written for, and it is the worse of
+the two: fewer processes, and a median that no longer passes. It was taken on both Tier 1
+Linux architectures, three runs each, twice over on two independent runs — twelve
+measurements agreeing to the digit, so the spread that made the Mac figures hard to read
+is absent here.
+
+Two things to know before you compare your own machine against these. If yours runs many
+processes, expect the CPU figure rather than the budget:
 [`benchmarks.md`](benchmarks.md#where-the-idle-cpu-goes) breaks the cost down read by
 read — none of it is anything monitrs computes, and the part still over budget is the
 medium tier's filesystem-capacity work, at 13.2–35.0 ms of CPU per tick against a
 whole-tick budget of roughly 16 ms.
+
+And the measurement is **quantised in steps of 1.33%** — one 10 ms scheduler tick per
+poll. The Linux readings are 0, 1.33, 2.66, 3.99 and nothing in between, so a median
+"below 1%" is not a value this instrument can report at all: the only reading under 1.33%
+is 0.00%. Do not read a difference of one step as a real difference, and do not expect a
+figure between the steps.
 
 `scripts/measure-overhead.py` takes the same measurement on your machine, from
 outside the process, if you want to compare.

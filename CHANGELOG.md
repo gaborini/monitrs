@@ -12,6 +12,104 @@ work yet, regardless of what the source contains.
 
 Nothing yet.
 
+## [1.0.1] - 2026-08-02
+
+The soak `1.0.0` deferred, run and passed — after the first attempt found that the fault
+was in the test harness rather than the program. Plus two small fixes that only surfaced
+by using the released binary and the released documentation for real.
+
+### Fixed
+
+* **The twelve-hour soak measured its own bookkeeping and called it monitrs.** `Injector`
+  in `crates/monitrs/tests/soak.rs` kept every acknowledged keypress — a triple of
+  `Duration`s, 48 bytes — so it could compute latency percentiles at the end. Over the
+  twelve-hour run on 2026-08-01 that was 856 644 keypresses and 40 155 KiB, against
+  §16.1's allowance of 16 384 KiB. **The gate failed on the harness alone, and could
+  never have passed at any realistic input rate.** The sample is now bounded at 32 768
+  triples, decimated so it stays spread evenly across the run, with the keypress count
+  and the worst case kept exactly — the latter because it is the stall detector, and a
+  stall the decimation skipped would be a stall the harness failed to see.
+
+  Subtracting the harness analytically from the failed run predicted a residual of 21 KiB
+  on x86_64 and 785 KiB on aarch64. The re-run measured 593 KiB and 115 KiB — the right
+  magnitude, the wrong split, because at that scale a measurement minus a model is
+  noise-dominated. Good enough to conclude there was no leak; not good enough to publish
+  a figure, which is why the run was repeated rather than the arithmetic reported. The
+  measured result is under *Known limitations* below.
+
+* **`monitrs snapshot --format json | head` no longer reports an error.** Closing the
+  pipe is the reader's decision, and monitrs treated it as a failure: it printed
+  `monitrs: Broken pipe (os error 32)` and exited non-zero, so under the
+  `set -o pipefail` that careful scripts use, an ordinary pipeline failed. It now exits
+  quietly and successfully, and records the reason in `--debug-log` at debug level.
+  Only `snapshot` could reach this in practice — its export is about 800 KB, larger than
+  any pipe buffer, so it is still writing after the reader has gone. `completions`
+  (17 KB), `manpage` (4 KB) and `config` (under 100 bytes) fit in the buffer and finish
+  writing first, which is why nobody had seen it there. Their handling is fixed too:
+  `config` printed with `println!` and `completions` used a helper that writes straight
+  to stdout, and both of those *panic* rather than return an error when the write fails,
+  so had the pipe ever broken the result would have been a panic report. Both now route
+  through the same path as `snapshot`.
+
+  The recognition is deliberately narrow — the failure must itself be the broken pipe.
+  A broken pipe reachable only as some other error's cause is still reported and still
+  exits non-zero, because that one did not come from writing monitrs' own output, and
+  silently exiting 0 on a run that really failed would be worse than the message this
+  replaces.
+
+### Documentation
+
+* **`docs/soak-testing.md`'s independent memory check was measuring the wrong process.**
+  The page asks for a resident-size reading taken from outside the soak, so the figure
+  does not rest solely on monitrs' own measurement, and then gave `pgrep -f soak-` —
+  which also matches the `tee` the same page tells you to pipe through. It is not a coin
+  flip: `pgrep` prints ascending PIDs, `head -1` takes the first, the `tee` exists from
+  the moment the pipeline starts, and cargo spawns the test binary minutes later once
+  the build finishes. So the corroborating reading was of the one process guaranteed not
+  to grow. The pattern is now anchored to `^[^ ]*/deps/soak-`, verified on Amazon Linux
+  2023 and macOS, and the page says how to confirm it matched exactly one process.
+
+### Known limitations
+
+`1.0.0` listed four. **Two are closed by measurement**, one stands unchanged, and one is
+new — and the new one is the reason the first cannot simply be called fixed.
+
+* **Closed: the budget has now been read on §16.1's own reference workload.** `1.0.0` said
+  every idle figure came from a host carrying 981–1007 processes, five times the 200 the
+  budget names, and that the run was owed. It has been taken — on 8-vCPU EC2 instances
+  padded to 199–200 processes, both Tier 1 Linux architectures, three runs per
+  configuration, twice over on two independent applies. Twelve runs agree to the digit.
+  **The result is worse than the macOS figures, not better: Overview median 2.66% against
+  a 1% budget and p95 3.99% against 2%, so on Linux the median misses too**, where on
+  macOS it passed at 0.60–0.85%. The Battery screen reads median 1.33%, p95 2.66–3.99%.
+  The padding was 6–16 synthetic processes against a baseline of 184–194, so this is a
+  97%-real process table, and `measure-overhead.py`'s own gate reported `workload matches
+  §16.1's reference` on every run.
+* **New: the budget asks for more precision than the instrument has.** Every reading above
+  is a multiple of **1.33%** — the observed values are 0, 1.33, 2.66, 3.99, 5.32 and
+  nothing between, because one 10 ms scheduler tick over the script's 0.75 s poll is
+  1.33%. A median "below 1%" is therefore not a value this measurement can report: the
+  only reading under 1.33% is 0.00%. The p95 budget of 2% can be met only at 0.00% or
+  1.33%. Whether the answer is a coarser budget, a longer sample or a finer clock is
+  undecided; what is settled is that the budget as written cannot be evaluated at the
+  resolution it implies.
+* **Unchanged: the cause `1.0.0` was designed around is still the wrong one**, and the
+  medium tier's two filesystem-capacity reads are still the measured cost at 13.2–35.0 ms
+  of CPU per tick. Nothing in this release addresses it, and the Linux figures above do
+  not separate the two reads either.
+* **Closed: §16.1's twelve-hour soak is met.** Run 2026-08-02 against the fixed harness,
+  on both Tier 1 Linux architectures, and it passes with room to spare: resident memory
+  moves **14 490 → 15 083 KiB on x86_64 and 16 097 → 16 212 KiB on aarch64**, first
+  quartile to last, against an allowance of 16 384 KiB. Growth of 593 KiB and 115 KiB
+  over twelve hours. The history ring held one size across all 720 measurements and the
+  descriptor count held at 4, and an independent sampler reading `/proc/<pid>/status`
+  from outside the process agrees. Peak resident size fell from 54 724 KiB to 15 688 KiB
+  for the same work — 857 476 keypresses and 2 646 520 snapshots — which is the forty
+  megabytes the harness had been accumulating and calling monitrs'.
+
+  The first attempt, on 2026-08-01 against `v1.0.0`, failed. It failed in the harness; see
+  *Fixed* above. `soak-10k` passed in both attempts.
+
 ## [1.0.0] - 2026-08-01
 
 The stability promise. Four surfaces are frozen and each has a machine guard behind it.

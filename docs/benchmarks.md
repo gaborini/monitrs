@@ -688,10 +688,43 @@ measured on this repository's own development machine: 12 logical cores and
 roughly a thousand processes, not §16.1's stated 8 logical CPUs and 200 processes.
 That is not a rounding difference: the dominant costs are per-process and
 per-device OS reads, so a host running five times the reference process count
-costs several times what the budget was written against. The budget has never
-actually been read on the workload it names. This is that protocol, for whoever
-next has an 8-vCPU machine to hand — most likely the EC2 instance Task 12 already
-runs the tagged release archives on for the platform smoke tests.
+costs several times what the budget was written against.
+
+**Taken 2026-08-01/02 on 8-vCPU EC2 instances, both Tier 1 Linux architectures.**
+Three runs per configuration, on two independent runs of the whole environment —
+twelve measurements in all, agreeing to the digit:
+
+| Screen | `c7i.2xlarge` (x86_64) | `c7g.2xlarge` (aarch64) | Budget |
+|---|---|---|---|
+| Overview | median **2.66%**, p95 **3.99%** | median **2.66%**, p95 2.66–3.99% | median < 1%, p95 < 2% |
+| Battery | median **1.33%**, p95 2.66–3.99% | median **1.33%**, p95 2.66–3.99% | — |
+
+**Both halves of the budget fail, and the median fails where it passed on the Mac.**
+Fewer processes did not make it cheaper. `measure-overhead.py`'s own gate reported
+`workload matches §16.1's reference` on every run, and the padding needed to reach
+199–200 was 6–16 synthetic `sleep` processes against a baseline of 184–194 — so this
+is a 97%-real process table, not a synthetic one. The design of the environment that
+took it assumed a baseline of 100–130 and was wrong about that, which is why it counts
+the total rather than adding a fixed number.
+
+Two things make this reading more trustworthy than the Mac's, and one makes it less
+useful than it looks.
+
+*More trustworthy:* the spread is gone. Three 60-second runs on the Mac spanned
+4.30–9.50% p95, a factor of 2.2; here every run lands on the same one or two values,
+twice over on two independent applies of a fresh environment.
+
+*Less useful:* the readings are **quantised in steps of 1.33%** — one 10 ms scheduler
+tick over the script's measured 0.75 s poll cadence. Observed values are 0, 1.33, 2.66,
+3.99, 5.32 and nothing between. So "median below 1%" is not a value this instrument can
+report: the only reading under 1.33% is 0.00%, and the 2% p95 budget can be met only at
+0.00% or 1.33%. The budget's precision is finer than the measurement's, and no amount of
+repeating the run fixes that. Whether the answer is a coarser budget, a longer sample or
+a finer clock is undecided.
+
+The protocol below is what produced it, kept so the reading can be repeated. The
+environment that automates it lives in a separate private repository, which also holds
+the raw reports.
 
 **Instance shape.** Any instance advertising 8 vCPUs (an `m5.2xlarge` or
 equivalent) approximates the reference CPU count. Its process count out of the
