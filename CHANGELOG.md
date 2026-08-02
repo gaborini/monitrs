@@ -61,6 +61,43 @@ work yet, regardless of what the source contains.
   to grow. The pattern is now anchored to `^[^ ]*/deps/soak-`, verified on Amazon Linux
   2023 and macOS, and the page says how to confirm it matched exactly one process.
 
+### Known limitations
+
+`1.0.0` listed four. One is closed by measurement, one is closed by a fix, one stands
+unchanged, and one is new.
+
+* **Closed: the budget has now been read on §16.1's own reference workload.** `1.0.0` said
+  every idle figure came from a host carrying 981–1007 processes, five times the 200 the
+  budget names, and that the run was owed. It has been taken — on 8-vCPU EC2 instances
+  padded to 199–200 processes, both Tier 1 Linux architectures, three runs per
+  configuration, twice over on two independent applies. Twelve runs agree to the digit.
+  **The result is worse than the macOS figures, not better: Overview median 2.66% against
+  a 1% budget and p95 3.99% against 2%, so on Linux the median misses too**, where on
+  macOS it passed at 0.60–0.85%. The Battery screen reads median 1.33%, p95 2.66–3.99%.
+  The padding was 6–16 synthetic processes against a baseline of 184–194, so this is a
+  97%-real process table, and `measure-overhead.py`'s own gate reported `workload matches
+  §16.1's reference` on every run.
+* **New: the budget asks for more precision than the instrument has.** Every reading above
+  is a multiple of **1.33%** — the observed values are 0, 1.33, 2.66, 3.99, 5.32 and
+  nothing between, because one 10 ms scheduler tick over the script's 0.75 s poll is
+  1.33%. A median "below 1%" is therefore not a value this measurement can report: the
+  only reading under 1.33% is 0.00%. The p95 budget of 2% can be met only at 0.00% or
+  1.33%. Whether the answer is a coarser budget, a longer sample or a finer clock is
+  undecided; what is settled is that the budget as written cannot be evaluated at the
+  resolution it implies.
+* **Unchanged: the cause `1.0.0` was designed around is still the wrong one**, and the
+  medium tier's two filesystem-capacity reads are still the measured cost at 13.2–35.0 ms
+  of CPU per tick. Nothing in this release addresses it, and the Linux figures above do
+  not separate the two reads either.
+* **The twelve-hour soak ran, and found a defect in its own harness rather than in
+  monitrs.** See *Fixed* above. Subtracting the harness's accumulation from the
+  2026-08-01 measurements leaves 21 KiB of growth over twelve hours on x86_64 and 785 KiB
+  on aarch64, against a 16 384 KiB allowance — but that is arithmetic on a broken run, not
+  a reading. **A re-run against the fixed harness is in flight and this section will not
+  claim the gate is met until it lands.** `soak-10k` and `soak-real` both passed on
+  2026-08-01, so load, the real collector and the descriptor budget are clean; the real
+  collector had never been exercised on Linux before that run.
+
 ## [1.0.0] - 2026-08-01
 
 The stability promise. Four surfaces are frozen and each has a machine guard behind it.

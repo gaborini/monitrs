@@ -40,9 +40,14 @@ is what a user actually reads. What is still owed:
   gate was **deferred past the tag by a written decision** rather than met or skipped:
   [step 5](#5-soak) names who decided, on what date, on what evidence, what the
   deferral does not cover, and the seven days inside which the runs are owed.
-* **The idle self-CPU budget of §16.1 is half met.** Measured on a 12-core Mac with
-  about a thousand processes: median **0.60–0.85%** against a 1% budget, which passes, and
-  p95 **4.30–9.50%** against 2%, which does not. The remaining cost is measured rather
+* **The idle self-CPU budget of §16.1 is not met, and on its own reference workload
+  neither half of it is.** On 8-vCPU Linux at 199–200 processes — the workload the budget
+  names — median **2.66%** against 1% and p95 **3.99%** against 2%, on both Tier 1
+  architectures, twelve runs agreeing. On a 12-core Mac with about a thousand processes
+  the median passes at **0.60–0.85%** while the p95 fails at **4.30–9.50%**, which is
+  where the older "half met" reading came from; fewer processes did not make it cheaper.
+  Note also that the reference-workload readings are quantised in 1.33% steps, so a
+  passing median is only reportable as 0.00%. The remaining cost is measured rather
   than suspected: the medium tier's two filesystem-capacity reads cost **13.2–35.0 ms of
   CPU per tick**, positive in 15 of 15 runs, against a whole-tick budget of roughly 16 ms.
   Which of the two carries it has not been separated. (This list previously quoted

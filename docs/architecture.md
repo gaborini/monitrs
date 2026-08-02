@@ -290,18 +290,19 @@ per-read breakdown are in
 trust — the last column here is a summary and will go stale first.
 
 Reference workload: 8 logical CPUs, 200 processes, 80×24 and 160×48 terminals, 1 s
-interval, 5 min history. **Nothing has been measured on that workload.** Every figure
-below comes from a 12-core Mac running about a thousand processes, which is five times
-the process count the budgets assume, and per-process OS reads are where the cost is.
+interval, 5 min history. **Idle CPU has now been read on that workload; nothing else
+has.** Every other figure below comes from a 12-core Mac running about a thousand
+processes, which is five times the process count the budgets assume, and per-process OS
+reads are where the cost is.
 
 | Budget | Target | Measured (1000 processes, not the reference workload) |
 |---|---|---|
-| Idle self CPU | median < 1%, p95 < 2% | median 0.60–0.85% — met; **p95 4.30–9.50% — fails** |
+| Idle self CPU | median < 1%, p95 < 2% | median 0.60–0.85% — met; **p95 4.30–9.50% — fails**. On the reference workload itself — 8 vCPUs, 199–200 processes, both Tier 1 Linux architectures — **median 2.66% and p95 3.99%, so both fail**, and the readings are quantised in 1.33% steps so a passing median is only reportable as 0.00% |
 | Resident memory | < 50 MiB in the default configuration | median 24.5–26.7 MiB, peak 27.2 MiB |
 | Input to visible response | < 50 ms when no collector result is needed | median 417 µs, p95 486 µs |
 | Frame render at 160×48 | < 16 ms | median 200 µs, p95 353 µs |
 | Sample collection at 200 processes | < 200 ms p95 | at 1000 processes: p95 12.63 ms for a fast-only tick, 40.90 ms when the medium tier joins every fifth, 134.78 ms for the every-thirtieth tick that also reads sensors |
-| 12-hour run | no unbounded memory or file-descriptor growth | 30 minutes: no growth. The 12-hour run is still owed |
+| 12-hour run | no unbounded memory or file-descriptor growth | Ran 2026-08-01 on both Tier 1 Linux architectures and **failed — in the harness, not the program**: the injector kept every keypress and grew 40 155 KiB doing it, against a 16 384 KiB allowance, so the gate could not have passed at any input rate. Subtracting it leaves 21 KiB of growth on x86_64 and 785 KiB on aarch64, but that is arithmetic on a broken run. A re-run against the fixed harness decides it. The 1-hour 10,000-process and real-collector runs both passed, and descriptors held at 4 |
 | Redraw | no busy loop | not measured as such |
 
 The idle-CPU failure is not in monitrs' own computation, which is about 35 µs per
