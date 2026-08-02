@@ -10,6 +10,14 @@ work yet, regardless of what the source contains.
 
 ## [Unreleased]
 
+Nothing yet.
+
+## [1.0.1] - 2026-08-02
+
+The soak `1.0.0` deferred, run and passed — after the first attempt found that the fault
+was in the test harness rather than the program. Plus two small fixes that only surfaced
+by using the released binary and the released documentation for real.
+
 ### Fixed
 
 * **The twelve-hour soak measured its own bookkeeping and called it monitrs.** `Injector`
@@ -22,12 +30,12 @@ work yet, regardless of what the source contains.
   and the worst case kept exactly — the latter because it is the stall detector, and a
   stall the decimation skipped would be a stall the harness failed to see.
 
-  Subtracting the harness from the 2026-08-01 measurements leaves **21 KiB of growth
-  over twelve hours on x86_64 and 785 KiB on aarch64**, against the same 16 384 KiB
-  allowance. The history ring held one size for all 720 measurements and the descriptor
-  count held at 4. So monitrs' own resident memory is flat over twelve hours on both
-  Tier 1 Linux architectures — which is what the run was asked to establish, and what
-  *Known limitations* said was unmeasured.
+  Subtracting the harness analytically from the failed run predicted a residual of 21 KiB
+  on x86_64 and 785 KiB on aarch64. The re-run measured 593 KiB and 115 KiB — the right
+  magnitude, the wrong split, because at that scale a measurement minus a model is
+  noise-dominated. Good enough to conclude there was no leak; not good enough to publish
+  a figure, which is why the run was repeated rather than the arithmetic reported. The
+  measured result is under *Known limitations* below.
 
 * **`monitrs snapshot --format json | head` no longer reports an error.** Closing the
   pipe is the reader's decision, and monitrs treated it as a failure: it printed
@@ -63,8 +71,8 @@ work yet, regardless of what the source contains.
 
 ### Known limitations
 
-`1.0.0` listed four. One is closed by measurement, one is closed by a fix, one stands
-unchanged, and one is new.
+`1.0.0` listed four. **Two are closed by measurement**, one stands unchanged, and one is
+new — and the new one is the reason the first cannot simply be called fixed.
 
 * **Closed: the budget has now been read on §16.1's own reference workload.** `1.0.0` said
   every idle figure came from a host carrying 981–1007 processes, five times the 200 the

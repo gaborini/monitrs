@@ -24,9 +24,9 @@ terminal monitors, what it was doing thirty seconds ago. Pause the timeline,
 scrub back to a spike, and see which processes were most strongly correlated
 with it.
 
-> **Status: `1.0.0`, a stability promise with a machine behind it.** It is on
+> **Status: `1.0.1`, a stability promise with a machine behind it.** It is on
 > [crates.io](https://crates.io/crates/monitrs) and
-> [GitHub](https://github.com/gaborini/monitrs/releases/tag/v1.0.0). Four surfaces are
+> [GitHub](https://github.com/gaborini/monitrs/releases/tag/v1.0.1). Four surfaces are
 > frozen — the public API of the three library crates, the JSON export, the configuration
 > keys, and the default keymap — and each has a guard that fails a build rather than a
 > paragraph that asks nicely: the inventories in [`docs/schema/`](docs/schema/) with the
@@ -36,18 +36,26 @@ with it.
 > looks**: layout, wording, colour, glyph choice and panel arrangement are presentation,
 > and a cosmetic change is not a breaking one.
 >
+> **The twelve-hour soak `1.0.0` deferred has been run, and it passes.** Twelve hours on
+> both Tier 1 Linux architectures, plus an hour at 10,000 processes and an hour on the
+> real collector: resident memory moved 593 KiB and 115 KiB against a 16 MiB allowance,
+> the history ring held one size throughout and descriptors held at 4. The first attempt
+> failed and the failure was in this repository's own test harness, which had been keeping
+> every simulated keypress and reporting its own 40 MiB as monitrs'; `1.0.1` fixes that
+> too.
+>
 > **The caveat that survives the `1.0` label**, because relabelling it would not fix it:
-> one of §16.1's budgets is still not met — idle self-CPU at the 95th percentile,
-> 4.30–9.50% against 2%, with the median passing — and the twelve-hour soak has not been
-> run on either platform. That second one is a **blocking gate deferred past this tag by
-> a written decision**, not one that lapsed: `docs/release-checklist.md`'s step 5 names
-> who deferred it, on what date, on what evidence, and the seven days inside which the
-> runs are owed. The table below carries the first;
-> [`CHANGELOG.md`](CHANGELOG.md)'s *Known limitations* carries both, and says — because
-> it is the useful part — that the cause this release was built around turned out to be
-> the wrong one. `1.0.0` also breaks the library API on its way to freezing it; the
-> changelog lists every break. Where a claim has a caveat, the caveat is next to it
-> rather than left out.
+> §16.1's idle self-CPU budget is not met, and on the reference workload the budget names
+> — 8 CPUs, 200 processes — **neither half of it is**: median 2.66% against 1% and p95
+> 3.99% against 2%, measured on both Tier 1 Linux architectures. On a 12-core Mac with
+> a thousand processes the median passes at 0.60–0.85% and the p95 fails at 4.30–9.50%;
+> fewer processes did not make it cheaper. Those readings are also quantised in 1.33%
+> steps — one scheduler tick per sample — so a passing median is not a value the
+> measurement can report at all. The table below carries the figures;
+> [`CHANGELOG.md`](CHANGELOG.md)'s *Known limitations* carries the rest, and says —
+> because it is the useful part — that the cause `1.0.0` was built around turned out to
+> be the wrong one. Where a claim has a caveat, the caveat is next to it rather than left
+> out.
 
 ## The screens
 
@@ -201,7 +209,7 @@ surprises you.
 
 ### From a release archive
 
-[The `v1.0.0` release](https://github.com/gaborini/monitrs/releases/tag/v1.0.0) has one
+[The `v1.0.1` release](https://github.com/gaborini/monitrs/releases/tag/v1.0.1) has one
 archive per target — `x86_64` and `aarch64` for Linux glibc, Linux musl, and macOS —
 each carrying the binary, both licences, this README, the changelog excerpt for that
 version, shell completions for bash, zsh, fish, PowerShell and elvish, and a manpage.
@@ -212,8 +220,8 @@ Installing one means verifying it and putting the binary somewhere on your `PATH
 # The release carries one SHA256SUMS for all six archives, not a file per archive, so
 # --ignore-missing is what lets you check the one you actually downloaded.
 shasum -a 256 --check --ignore-missing SHA256SUMS     # sha256sum on Linux
-tar xzf monitrs-1.0.0-aarch64-apple-darwin.tar.gz
-install -m 755 monitrs-1.0.0-aarch64-apple-darwin/monitrs ~/.local/bin/monitrs
+tar xzf monitrs-1.0.1-aarch64-apple-darwin.tar.gz
+install -m 755 monitrs-1.0.1-aarch64-apple-darwin/monitrs ~/.local/bin/monitrs
 ```
 
 Releases also carry a build attestation, so `gh attestation verify
