@@ -203,6 +203,42 @@ jobs:
   # itself is a `[[bin]]` crate with no library target, so `--workspace` only ever
   # checks `monitrs-core`, `monitrs-collectors` and `monitrs-tui` — exactly the
   # three crates CONTRIBUTING.md's freeze policy names as API.
+  # Answers "does this release need the twelve-hour soak?" from the files changed
+  # since the last tag. It reports rather than blocks, because CI cannot know whether
+  # a human actually ran the soak — the point is that the question gets answered
+  # mechanically once per release instead of argued each time, and that the answer is
+  # visible on the run page rather than in a log nobody opens.
+  soak-scope:
+    name: soak required?
+    needs: fmt
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          # The script diffs against the last tag, so a shallow clone with no tags
+          # would silently compare against nothing and always answer "not required".
+          fetch-depth: 0
+          fetch-tags: true
+      - name: verdict
+        run: |
+          set -euo pipefail
+          base="$(git describe --tags --abbrev=0 2>/dev/null || true)"
+          if [ -z "$base" ]; then
+            echo "No tag to compare against; treating the soak as required." \
+              | tee -a "$GITHUB_STEP_SUMMARY"
+            exit 0
+          fi
+          {
+            echo "## Soak scope"
+            echo
+            echo "Comparing \`$base\` to \`${GITHUB_SHA::12}\`."
+            echo
+            echo '```'
+            python3 .github/scripts/soak_required.py "$base" "$GITHUB_SHA"
+            echo '```'
+          } | tee -a "$GITHUB_STEP_SUMMARY"
+
   semver:
     name: semver compatibility
     needs: fmt

@@ -384,12 +384,42 @@ than a follow-up to it.
 
 ## 5. Soak
 
-**Blocking** — and for `1.0.0`, and `1.0.0` only, **deliberately deferred until after
-the tag**, by Gabor Lepsenyi (`@gaborini`) on **2026-08-01**. The boxes below are not
-ticked and are not removed: they are still owed, on the deadline further down. For
-every release after this one, read the first word of this section as though the rest
-of it were not here — no soak, no tag. Moving a gate costs a written decision each
-time, which is the only thing that stops it from becoming a habit.
+**Blocking, when the release can reach what it measures.** Moving the gate still costs
+a written decision each time — that is what stops it becoming a habit — but the gate no
+longer applies to every release regardless of content.
+
+### When it applies
+
+The soak protects three properties: no unbounded memory growth, no descriptor leak, no
+stall under sustained load. Those live in a knowable set of places, so run the soak when
+the diff since the last tag touches any of:
+
+* `crates/monitrs-core/src/` — the data model, history ring and rate engine;
+* `crates/monitrs-collectors/` — every per-tick allocation and every descriptor;
+* `crates/monitrs-tui/src/app/` — the reducer, which owns every state transition;
+* `crates/monitrs/src/runtime.rs` — the sampler, the bounded channel, coalescing;
+* `crates/monitrs/src/interactive.rs` — the worker lifecycle and the frame loop;
+* `crates/monitrs/tests/soak.rs` — the harness. On 2026-08-01 the harness *was* the leak;
+* `Cargo.lock` — a dependency moved. Check whether it is on the runtime path.
+
+And run it regardless of the diff for **every minor release, and at least quarterly**,
+because dependency and platform drift arrive without a diff you would notice.
+
+Don't run it for documentation, CI configuration, CLI or configuration parsing, export
+formatting, the schema inventories, or packaging. A rule that demands fourteen hours and
+ten dollars for a README typo gets quietly ignored, and a gate that is quietly ignored is
+worse than a narrower one that is followed.
+
+`.github/scripts/soak_required.py <last-tag> HEAD` answers this mechanically, and CI's
+**soak required?** job prints the verdict into the run summary on every push. It reports
+rather than blocks: nothing in CI can know whether you actually ran the soak. Its purpose
+is that the question is answered once per release instead of argued each time.
+
+> **`1.0.0` was the one exception, and it is settled.** The gate was **deliberately
+> deferred until after the tag** by Gabor Lepsenyi (`@gaborini`) on **2026-08-01**, with a
+> seven-day window. All three runs completed on **2026-08-02** and all three passed; the
+> record is below. The first attempt failed, in this repository's own harness rather than
+> in monitrs — which is why `tests/soak.rs` is on the list above.
 
 [`soak-testing.md`](soak-testing.md) has the invocations, how to read the report, and
 what to record. In short:
