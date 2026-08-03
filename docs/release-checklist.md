@@ -64,15 +64,15 @@ is what a user actually reads. What is still owed:
   1.3–2.7% and 11–15%, and then 0.5–1.1% and 6–11%; both were superseded in
   [`benchmarks.md`](benchmarks.md) before this list was next read.)
   Four of the other five measurable budgets pass outright — frame render, input latency,
-  collection p95, resident memory — and descriptor growth passes **over half an hour
-  only**; §16.1 asks for twelve, and that run is still owed.
+  collection p95, resident memory — and as of 2026-08-02 so does the twelve-hour run,
+  memory and descriptors both, on two Linux architectures.
   [`benchmarks.md`](benchmarks.md#the-161-end-to-end-budgets) has the numbers, the
   per-read breakdown showing where the time goes, and what it would take to fix.
   This is the one item on this list that is a *product* problem rather than a
   procedural one. Every figure quoted for it, on this machine and in every prior
-  release, is against about a thousand processes — five times §16.1's own
-  200-process, 8-CPU reference workload — so the budget has never actually been
-  read on the workload it names. Step 6 below now has that reading as a step, and
+  release before 1.0.1, is against about a thousand processes — five times §16.1's own
+  200-process, 8-CPU reference workload. That reading was taken on 2026-08-02 and is
+  quoted above; it is worse, not better. Step 6 below has it as a step, and
   [`benchmarks.md`](benchmarks.md#reading-the-idle-cpu-budget-on-its-own-reference-workload)
   has the protocol.
 * **A release section's date is the day you tag, not the day you wrote it.** Keep a
@@ -424,13 +424,13 @@ is that the question is answered once per release instead of argued each time.
 [`soak-testing.md`](soak-testing.md) has the invocations, how to read the report, and
 what to record. In short:
 
-* [ ] twelve-hour release-profile run, report kept;
-* [ ] one-hour 10,000-process run, report kept;
-* [ ] one-hour real-collector run **on Linux** — the only configuration in which the
+* [x] twelve-hour release-profile run, report kept — 2026-08-02, both architectures;
+* [x] one-hour 10,000-process run, report kept — 2026-08-02, both architectures;
+* [x] one-hour real-collector run **on Linux** — done 2026-08-02, both architectures; the only configuration in which the
       file-descriptor budget is actually exercised, because the macOS collector opens
       no files;
-* [ ] all three reports attached to the release record, with machine, toolchain, and
-      profile.
+* [x] all three reports attached to the release record, with machine, toolchain, and
+      profile — [`soak-testing.md`](soak-testing.md#2026-08-02--the-three-release-runs-101-and-they-pass).
 
 ### Why the deferral was defensible, and what it does not cover
 
@@ -822,17 +822,21 @@ owes, carried into each release's *Known limitations* rather than resolved by ti
       attestation that `gh attestation verify` accepts.
 - [ ] **default settings remain below the memory and CPU budgets on the reference
       workload.** Frame time, input latency, collection p95, resident memory **and the
-      idle-CPU median** are measured and pass; descriptor growth passes over half an
-      hour, and §16.1's twelve-hour run is still owed — deferred past the `1.0.0` tag
-      by the decision recorded at [step 5](#5-soak) on 2026-08-01, which sets seven
-      days from the tag as the deadline. The **idle-CPU p95 does not
-      pass**: 4.30–9.50% against a 2% budget. The cause is the medium tier's two
+      idle-CPU median on macOS** are measured and pass. **§16.1's twelve-hour run is
+      met** — 2026-08-02, both Tier 1 Linux architectures, memory and descriptors both,
+      inside the seven-day window the [step 5](#5-soak) deferral set. The **idle-CPU
+      budget does not pass, and on §16.1's own reference workload neither half of it
+      does**: median 2.66% against 1% and p95 3.99% against 2%, at 8 CPUs and 199–200
+      processes. On the 12-core Mac at a thousand processes the median passes at
+      0.60–0.85% and the p95 fails at 4.30–9.50%. The cause is the medium tier's two
       filesystem-capacity reads, at 13.2–35.0 ms of CPU per tick against a whole-tick
       budget of roughly 16 ms — *not* the 85 ms temperature read this list previously
       named, which turns out to be almost all blocked wait and to cost a few
-      milliseconds of CPU at most. Nothing
-      has been measured on §16.1's actual reference workload (8 CPUs, 200 processes),
-      where the per-process costs would be about five times smaller. Numbers,
+      milliseconds of CPU at most. This box
+      used to predict that the reference workload would be "about five times smaller".
+      It was read on 2026-08-02 and it is **worse**, not smaller — fewer processes did
+      not make it cheaper, and the readings turn out to be quantised in 1.33% steps, so
+      a passing median is not a value the instrument can report. Numbers,
       breakdown and the commands that produce them are in
       [`benchmarks.md`](benchmarks.md#the-161-end-to-end-budgets). Step 6 above
       now has that reference-workload reading as a step, with the protocol in

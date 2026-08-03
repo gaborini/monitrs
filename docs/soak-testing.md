@@ -180,6 +180,62 @@ passed and was not read.
 
 ## Runs on record
 
+### 2026-08-02 — the three release runs, `1.0.1`, and they pass
+
+§16.1's gate, met. Two 8-vCPU EC2 instances, one per Tier 1 Linux architecture, running
+the whole protocol unattended and terminating themselves: build at the tag, both idle
+measurements, then the twelve-hour run and the two one-hour runs, each report uploaded
+the moment it finished. Fourteen hours and nine minutes, about ten dollars.
+
+| | |
+|---|---|
+| Machines | `c7i.2xlarge` (Intel Xeon 8488C, x86_64) and `c7g.2xlarge` (Graviton, aarch64), 8 vCPUs, 16 GiB, Amazon Linux 2023.12.20260727, kernel 6.1.176 |
+| Toolchain | rustc 1.97.1, `--release` |
+| Ref | `release/1.0.1` at `eb0b067` |
+| Otherwise busy | no — dedicated instances, nothing else on them |
+| Result | `soak-12h` rc 0 · `soak-10k` rc 0 · `soak-real` rc 0, on both |
+
+The twelve-hour run, x86_64:
+
+```text
+run:            43200s requested, 43201.560430068s elapsed (4.890420291s warm-up)
+collector:      fake (4000 processes requested)
+load:           20ms fast tier, history 300 of 300 samples, ceiling 5512800 B
+snapshots:      2646520 processed, last sequence 2646659, 165407 detail replies
+channel:        peak depth 3 of 64, 154 coalesced, 0 dropped
+stall probe:    depth 64 of 64 after the stall, coalesced 140 -> 154
+input:          857476 keys, median 146.552µs, p95 313.906µs, p99 1.305269ms, worst 4.921983ms, 0 unanswered
+resident:       first quartile 14490 KiB, last quartile 15083 KiB, peak 15688 KiB
+descriptors:    first quartile peak 4, last quartile peak 4
+workers:        4 spawned, 0 failed to join
+```
+
+and aarch64, for comparison — `resident: first quartile 16097 KiB, last quartile 16212
+KiB, peak 16212 KiB`, `input: 861605 keys`, `snapshots: 2656504 processed`.
+
+What it establishes:
+
+* **Resident size does not grow over twelve hours.** 593 KiB on x86_64 and 115 KiB on
+  aarch64, quartile to quartile, against a 16,384 KiB allowance. A second measurement
+  taken from *outside* the process — `/proc/<pid>/status` once a minute, 720 samples —
+  agrees and is flat hour by hour.
+* **Descriptors are flat at 4** across 2.65 million snapshots, and the retained history
+  holds one size, 1,562,860 B, in every one of the 720 measurements.
+* **Nothing was dropped** with the channel deliberately stalled, at either architecture.
+* **`soak-real` exercises the descriptor budget and holds it**: first-quartile peak 227 →
+  last-quartile peak 224 on x86_64, 219 → 220 on aarch64. That is the only mode that opens
+  files, and before 2026-08-01 it had never run on Linux at all.
+
+**The first attempt, on 2026-08-01 against `v1.0.0`, failed — and the fault was here, not
+in monitrs.** `Injector` kept every acknowledged keypress as a 48-byte triple, so over
+856,644 keypresses it accumulated 40,155 KiB and reported it as the program's growth. The
+gate could not have passed at any realistic input rate. Peak resident size for the same
+work fell from 54,724 KiB to 15,688 KiB once the sample was bounded. Two lessons worth
+carrying: a harness that measures the process it lives in is measuring itself too, and
+the `pgrep` pattern this document used to corroborate the figure was
+[matching the wrong process](#what-to-record) — it found the `tee` this document
+tells you to pipe through, whose resident size never grows.
+
 ### 2026-07-30 — real collector, 30 minutes, release
 
 Not one of the three release runs, and not the twelve-hour gate. It is here because
