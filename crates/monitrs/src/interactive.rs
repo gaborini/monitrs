@@ -807,7 +807,11 @@ fn draw_overlay(
     match overlay {
         Overlay::Help { scroll } => {
             let sections = state.help();
+            // The binary's own version, not the tui crate's: see
+            // `HelpOverlay::with_version`. They are the same string in this
+            // workspace, and the distinction still belongs at this call site.
             let widget = HelpOverlay::new(presentation, &sections, state.input_mode())
+                .with_version(env!("CARGO_PKG_VERSION"))
                 .with_scroll((*scroll).min(help_line_count(&sections).saturating_sub(1)));
             frame.render_widget(widget, area);
         }

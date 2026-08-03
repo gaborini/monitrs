@@ -161,6 +161,7 @@ struct Regions {
 pub struct OverlayPanel<'a> {
     presentation: Presentation<'a>,
     title: &'a str,
+    title_suffix: Option<String>,
     trailing: Option<String>,
     anchor: Anchor,
     pinned: Vec<Line<'static>>,
@@ -177,6 +178,7 @@ impl<'a> OverlayPanel<'a> {
         Self {
             presentation,
             title,
+            title_suffix: None,
             trailing: None,
             anchor: Anchor::Center,
             pinned: Vec::new(),
@@ -187,10 +189,33 @@ impl<'a> OverlayPanel<'a> {
         }
     }
 
+    /// Appends text to the title, after a space.
+    ///
+    /// The title is the one part of an overlay header that nothing competes for.
+    /// [`Self::with_trailing`]'s label does compete: `header_label` replaces it with
+    /// the scroll indicator whenever the body does not fit, which for a help panel on
+    /// an 80x24 terminal is almost always. So anything that must stay visible while
+    /// the reader scrolls belongs here rather than there.
+    #[must_use]
+    pub fn with_title_suffix(mut self, suffix: impl Into<String>) -> Self {
+        self.title_suffix = Some(suffix.into());
+        self
+    }
+
+    /// The title as drawn: the base title, plus the suffix if there is one.
+    fn header_title(&self) -> String {
+        match &self.title_suffix {
+            None => self.title.to_owned(),
+            Some(suffix) => format!("{} {suffix}", self.title),
+        }
+    }
+
     /// Sets the right-aligned header label, such as `normal mode` or `-00:37`.
     ///
     /// A scrolling panel replaces it with its own `3-14 of 22` indicator: knowing
-    /// there is more to read matters more than any label a caller could supply.
+    /// there is more to read matters more than any label a caller could supply. If a
+    /// caller needs something to survive that, [`Self::with_title_suffix`] is where it
+    /// goes.
     #[must_use]
     pub fn with_trailing(mut self, trailing: impl Into<String>) -> Self {
         self.trailing = Some(trailing.into());
@@ -269,7 +294,7 @@ impl<'a> OverlayPanel<'a> {
     /// horizontals before the right corner, one horizontal between them, and two
     /// corners.
     fn header_width(&self) -> u16 {
-        let title = u16::try_from(display_width(self.title)).unwrap_or(u16::MAX);
+        let title = u16::try_from(display_width(&self.header_title())).unwrap_or(u16::MAX);
         let bare = title.saturating_add(4);
         match &self.trailing {
             None => bare,
@@ -379,7 +404,8 @@ impl Widget for OverlayPanel<'_> {
         // 2. Frame. An open overlay owns the keyboard, so it is the focused panel
         //    (§5.3): the border and title tokens follow from that, not from a
         //    colour choice made here.
-        let mut panel = Panel::new(self.presentation, self.title).focused(true);
+        let title = self.header_title();
+        let mut panel = Panel::new(self.presentation, &title).focused(true);
         let label = self.header_label(regions.visible);
         if let Some(label) = &label {
             panel = panel.with_trailing(label);

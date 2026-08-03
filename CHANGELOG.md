@@ -10,7 +10,26 @@ work yet, regardless of what the source contains.
 
 ## [Unreleased]
 
-Nothing yet.
+### Added
+
+* **The help overlay shows which version is running.** `?` now titles the panel
+  `HELP v1.0.1`. Until now the version was reachable only from `--version` or the JSON
+  export's `tool.version`, neither of which you can consult without leaving the program —
+  and the case that prompted this was two monitrs binaries on one `PATH`, one shadowing
+  the other, with nothing on screen to say which had started.
+
+  It is in the **title** rather than the header's right-hand label, and that is the whole
+  design decision. The label is replaced by the scroll indicator whenever the body does
+  not fit, and 46 help lines do not fit an 80×24 terminal — so a version put there would
+  have been hidden in exactly the situation that sends someone to the help screen. The
+  scroll indicator and the input-mode label are both unchanged.
+
+  `monitrs-tui` gains `HelpOverlay::with_version` and `OverlayPanel::with_title_suffix`;
+  the caller supplies the string rather than the crate reading its own
+  `CARGO_PKG_VERSION`, because a library reporting *its* version in a panel the user
+  reads as the application's would be wrong for anyone depending on it at a different
+  version. Both are additions, and an overlay built without a version renders exactly as
+  before.
 
 ## [1.0.1] - 2026-08-02
 

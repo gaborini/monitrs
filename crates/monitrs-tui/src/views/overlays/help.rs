@@ -53,6 +53,7 @@ pub struct HelpOverlay<'a> {
     sections: &'a [HelpSection],
     mode: InputMode,
     scroll: usize,
+    version: Option<&'a str>,
 }
 
 impl<'a> HelpOverlay<'a> {
@@ -72,7 +73,23 @@ impl<'a> HelpOverlay<'a> {
             sections,
             mode,
             scroll: 0,
+            version: None,
         }
+    }
+
+    /// Shows `version` in the panel's trailing text, beside the input mode.
+    ///
+    /// Optional, and the caller supplies the string rather than this crate reading
+    /// its own `CARGO_PKG_VERSION`: `monitrs-tui` is a library, and a help panel that
+    /// reported the *library's* version while the user read it as the application's
+    /// would be wrong for anyone who depends on this crate at a different version.
+    /// For monitrs itself the two are the same, because every crate in the workspace
+    /// shares one version — but that is a fact about that workspace, not about this
+    /// widget.
+    #[must_use]
+    pub const fn with_version(mut self, version: &'a str) -> Self {
+        self.version = Some(version);
+        self
     }
 
     /// Sets the first visible line (§6.2's list bindings scroll the overlay).
@@ -151,7 +168,16 @@ impl<'a> HelpOverlay<'a> {
         } else {
             lines
         };
-        OverlayPanel::new(self.presentation, OverlayKind::Help.title())
+        // The version goes in the title, not the trailing label. The trailing label
+        // is replaced by the scroll indicator whenever the body does not fit, and a
+        // help panel on an 80x24 terminal effectively always scrolls — so a version
+        // put there would be hidden in exactly the case someone opened help to find
+        // out what they are running.
+        let mut panel = OverlayPanel::new(self.presentation, OverlayKind::Help.title());
+        if let Some(version) = self.version {
+            panel = panel.with_title_suffix(format!("v{version}"));
+        }
+        panel
             .with_trailing(format!("{} mode", self.mode.label()))
             .anchored(Anchor::Center)
             .with_lines(body)
@@ -191,6 +217,70 @@ mod tests {
             ThemeId::DefaultDark.theme(),
             ColorDepth::TrueColor,
         )
+    }
+
+    /// The reason this exists: on 2026-08-02 two monitrs binaries were on one PATH,
+    /// one shadowing the other, and nothing on screen said which was running. The
+    /// version was reachable only from `--version` or the JSON export's `tool.version`
+    /// — neither of which you can consult without leaving the program.
+    #[test]
+    fn the_version_is_in_the_title_where_scrolling_cannot_hide_it() {
+        let keymap = Keymap::default();
+        let sections = keymap.help(InputMode::Normal);
+        let overlay =
+            HelpOverlay::new(presentation(), &sections, InputMode::Normal).with_version("9.9.9");
+        let drawn = render(overlay, 80, 24);
+        assert!(
+            drawn.contains("HELP v9.9.9"),
+            "the version belongs on screen, not only behind --version:\n{drawn}"
+        );
+        // 80x24 cannot show all 46 help lines, so the header shows the scroll range
+        // and the trailing label is gone. That is the whole reason the version is in
+        // the title: this is the ordinary case, not an edge one.
+        assert!(
+            drawn.contains("of 46") && !drawn.contains("normal mode"),
+            "this fixture is only meaningful while the panel really is scrolling:\n{drawn}"
+        );
+    }
+
+    #[test]
+    fn the_trailing_label_still_shows_the_mode_when_nothing_scrolls() {
+        let keymap = Keymap::default();
+        let sections = keymap.help(InputMode::ConfirmProcessAction);
+        let drawn = render(
+            HelpOverlay::new(presentation(), &sections, InputMode::ConfirmProcessAction)
+                .with_version("9.9.9"),
+            80,
+            24,
+        );
+        assert!(
+            drawn.contains("HELP v9.9.9"),
+            "the title carries the version either way:\n{drawn}"
+        );
+        assert!(
+            drawn.contains("confirm mode"),
+            "and a body that fits keeps the label it always had:\n{drawn}"
+        );
+    }
+
+    /// The method is an addition, so every existing caller must render exactly as it
+    /// did. Without this, "shows the version" could be satisfied by always showing one.
+    #[test]
+    fn without_a_version_the_panel_is_unchanged() {
+        let keymap = Keymap::default();
+        let sections = keymap.help(InputMode::Normal);
+        let before = render(
+            HelpOverlay::new(presentation(), &sections, InputMode::Normal),
+            80,
+            24,
+        );
+        // Anchored to the title rather than searching the whole frame: the help body
+        // is full of descriptions like "Go to the Overview view", so a bare " v" hits
+        // one of those and the assertion passes for the wrong reason.
+        assert!(
+            before.contains("HELP") && !before.contains("HELP v"),
+            "the title gains a suffix only from with_version:\n{before}"
+        );
     }
 
     fn render(overlay: HelpOverlay<'_>, width: u16, height: u16) -> String {
