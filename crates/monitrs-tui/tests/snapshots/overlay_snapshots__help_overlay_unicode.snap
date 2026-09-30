@@ -1,8 +1,9 @@
 ---
 source: crates/monitrs-tui/tests/overlay_snapshots.rs
+assertion_line: 332
 expression: text_of(&buffer)
 ---
-|                   ┌ HELP ─────────────────────────────────────────── 1-38 of 46 ───┐                   |
+|                   ┌ HELP ─────────────────────────────────────────── 1-38 of 47 ───┐                   |
 |                   │Global                                                          │                   |
 |                   │ q                  Quit                                        │                   |
 |                   │ Ctrl-C             Quit safely from any mode                   │                   |
@@ -32,6 +33,7 @@ expression: text_of(&buffer)
 |                   │ G / End            Last row                                    │                   |
 |                   │ Enter              Inspect the selected item                   │                   |
 |                   │ /                  Edit the filter                             │                   |
+|                   │ a                  Clear the filter                            │                   |
 |                   │ n                  Next filter match                           │                   |
 |                   │ N                  Previous filter match                       │                   |
 |                   │ s                  Open the sort selector                      │                   |
@@ -40,5 +42,4 @@ expression: text_of(&buffer)
 |                   │ f                  Toggle flat and tree process views          │                   |
 |                   │ F                  Follow the selected process tree            │                   |
 |                   │Time Lens                                                       │                   |
-|                   │ [                  Step one sample back                        │                   |
 |                   └────────────────────────────────────────────────────────────────┘                   |

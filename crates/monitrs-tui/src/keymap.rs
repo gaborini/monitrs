@@ -716,6 +716,13 @@ impl Keymap {
         table.add(
             BindingSection::Navigation,
             TABLE_MODE,
+            Chord::key(KeyPress::char('a')),
+            Action::SetFilter(String::new()),
+            "Clear the filter",
+        );
+        table.add(
+            BindingSection::Navigation,
+            TABLE_MODE,
             Chord::key(KeyPress::char('n')),
             Action::NextMatch,
             "Next filter match",
@@ -1527,6 +1534,7 @@ mod tests {
             (KeyPress::plain(Key::End), Action::SelectLast),
             (KeyPress::plain(Key::Enter), Action::InspectSelected),
             (KeyPress::char('/'), Action::BeginFilterEdit),
+            (KeyPress::char('a'), Action::SetFilter(String::new())),
             (KeyPress::char('n'), Action::NextMatch),
             (KeyPress::char('N'), Action::PreviousMatch),
             (KeyPress::char('s'), Action::OpenSortSelector),

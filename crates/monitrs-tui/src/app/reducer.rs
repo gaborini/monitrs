@@ -1774,6 +1774,46 @@ mod tests {
     }
 
     #[test]
+    fn clearing_by_key_or_palette_matches_submitting_an_empty_filter() {
+        let sequences = [
+            vec![
+                KeyPress::char('/'),
+                KeyPress::ctrl('u'),
+                KeyPress::plain(Key::Enter),
+            ],
+            vec![KeyPress::char('a')],
+            vec![
+                KeyPress::char(':'),
+                KeyPress::char('a'),
+                KeyPress::char('l'),
+                KeyPress::char('l'),
+                KeyPress::plain(Key::Enter),
+            ],
+        ];
+        let mut expected_selection = None;
+        for (index, keys) in sequences.into_iter().enumerate() {
+            let mut state = running();
+            let total = state.rows().len();
+            let _ = reduce(&mut state, Action::SetFilter("postgres".to_owned()));
+            assert_eq!(state.rows().len(), 1);
+
+            for key in keys {
+                let _ = apply::<()>(&mut state, Event::key(key));
+            }
+
+            assert_eq!(state.filter_text(), "");
+            assert_eq!(state.rows().len(), total);
+            if index == 0 {
+                expected_selection = state.selected();
+            }
+            assert_eq!(state.selected(), expected_selection);
+            assert_eq!(state.input_mode(), InputMode::Normal);
+            assert!(state.overlays().is_empty());
+            assert!(press(&mut state, 'a').is_empty());
+        }
+    }
+
+    #[test]
     fn selection_movement_clamps_and_stops_redrawing_at_the_ends() {
         let mut state = running();
 
