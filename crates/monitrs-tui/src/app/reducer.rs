@@ -175,6 +175,7 @@ pub fn reduce(state: &mut AppState, action: Action) -> Effects {
 
         // --------------------------------------------------- filtering and sorting
         Action::BeginFilterEdit => {
+            state.filter_history.reset();
             let input = TextInput::seeded(&state.filter_text);
             state.overlays.push(Overlay::FilterEdit { input });
             redraw()
@@ -264,6 +265,16 @@ pub fn reduce(state: &mut AppState, action: Action) -> Effects {
         Action::DeleteForward => edit(state, TextInput::delete_forward),
         Action::DeleteWordBackward => edit(state, TextInput::delete_word_backward),
         Action::ClearInput => edit(state, TextInput::clear),
+        Action::PreviousFilterHistory | Action::NextFilterHistory => {
+            let Some(Overlay::FilterEdit { input }) = state.overlays.top_mut() else {
+                return Effects::new();
+            };
+            changed(if action == Action::PreviousFilterHistory {
+                state.filter_history.previous(input)
+            } else {
+                state.filter_history.next(input)
+            })
+        }
         Action::MoveCursorLeft => edit(state, TextInput::move_left),
         Action::MoveCursorRight => edit(state, TextInput::move_right),
         Action::MoveCursorToStart => edit(state, TextInput::move_to_start),
@@ -630,6 +641,7 @@ fn inspect_selected(state: &mut AppState) -> Effects {
 
 /// Replaces the filter (§6.2 `/`, §6.3 `filter <text>`).
 fn set_filter(state: &mut AppState, text: String) -> Effects {
+    state.filter_history.record(&text);
     if !state.set_filter_text(text) {
         return Effects::new();
     }
@@ -1671,6 +1683,8 @@ mod tests {
             Action::DeleteForward,
             Action::DeleteWordBackward,
             Action::ClearInput,
+            Action::PreviousFilterHistory,
+            Action::NextFilterHistory,
             Action::MoveCursorLeft,
             Action::MoveCursorRight,
             Action::MoveCursorToStart,
@@ -3167,6 +3181,71 @@ mod tests {
             "a half-typed filter never hides rows"
         );
         assert!(state.overlays().is_empty());
+    }
+
+    #[test]
+    fn filter_history_recalls_confirmed_searches_without_applying_them() {
+        let mut state = running();
+        let _ = run_command(&mut state, Command::Filter("rustc".to_owned()));
+        let _ = press(&mut state, '/');
+        let _ = reduce(&mut state, Action::ClearInput);
+        for character in "postgres".chars() {
+            let _ = press(&mut state, character);
+        }
+        let _ = apply::<()>(&mut state, Event::key(KeyPress::plain(Key::Enter)));
+        let _ = press(&mut state, 'a');
+        let total = state.rows().len();
+        let _ = press(&mut state, '/');
+
+        for expected in ["postgres", "rustc"] {
+            let effects = apply::<()>(&mut state, Event::key(KeyPress::plain(Key::Up)));
+            assert_eq!(effects.as_slice(), &[Effect::RequestRedraw]);
+            assert_eq!(
+                state
+                    .top_overlay()
+                    .and_then(Overlay::text_input)
+                    .map(TextInput::text),
+                Some(expected)
+            );
+            assert_eq!(state.filter_text(), "");
+            assert_eq!(state.rows().len(), total);
+        }
+        assert!(apply::<()>(&mut state, Event::key(KeyPress::plain(Key::Up))).is_empty());
+        let _ = apply::<()>(&mut state, Event::key(KeyPress::plain(Key::Enter)));
+        assert_eq!(state.filter_text(), "rustc");
+
+        let _ = press(&mut state, '/');
+        for expected in ["postgres", "postgres"] {
+            let _ = apply::<()>(&mut state, Event::key(KeyPress::plain(Key::Up)));
+            assert_eq!(
+                state
+                    .top_overlay()
+                    .and_then(Overlay::text_input)
+                    .map(TextInput::text),
+                Some(expected)
+            );
+        }
+        let _ = reduce(&mut state, Action::ClearInput);
+        let _ = press(&mut state, 'z');
+        let _ = apply::<()>(&mut state, Event::key(KeyPress::plain(Key::Escape)));
+        assert_eq!(state.filter_text(), "rustc");
+        let _ = press(&mut state, '/');
+        let _ = apply::<()>(&mut state, Event::key(KeyPress::plain(Key::Up)));
+        assert_eq!(
+            state
+                .top_overlay()
+                .and_then(Overlay::text_input)
+                .map(TextInput::text),
+            Some("postgres")
+        );
+        let _ = apply::<()>(&mut state, Event::key(KeyPress::plain(Key::Down)));
+        assert_eq!(
+            state
+                .top_overlay()
+                .and_then(Overlay::text_input)
+                .map(TextInput::text),
+            Some("rustc")
+        );
     }
 
     #[test]

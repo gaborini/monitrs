@@ -267,6 +267,11 @@ Full, always-current help is generated from the live keymap: press `?`.
 | `r` | Force refresh |
 | `Esc` | Close overlay or cancel |
 
+While editing a filter, `Up` / `Down` recall older / newer searches. Moving past the
+newest entry restores the input and cursor from before browsing. The latest 100
+nonempty searches are kept for the current session; repeating a search moves it to
+the front. `Enter` applies the recalled search, and `Esc` cancels the edit.
+
 The palette is not only a second way to press a key. Fourteen commands live there, and
 three of them have no key at all: `follow <pid>` and `unfollow` for the subtree scope, and
 `export snapshot <path>`. The others set the view, sort, filter, sample interval, history

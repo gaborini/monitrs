@@ -328,6 +328,7 @@ pub struct AppState {
 
     // ---- the process table ----
     pub(in crate::app) filter_text: String,
+    pub(in crate::app) filter_history: text::FilterHistory,
     pub(in crate::app) filter: ProcessFilter,
     pub(in crate::app) only_user: Option<u32>,
     pub(in crate::app) hide_kernel_threads: bool,
@@ -415,6 +416,7 @@ impl AppState {
             detail_request: None,
             pressure_watch: PressureWatch::new(),
             filter_text: filter,
+            filter_history: text::FilterHistory::default(),
             filter: compiled,
             only_user,
             hide_kernel_threads,
