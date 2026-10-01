@@ -296,6 +296,41 @@ mod tests {
 
     #[test]
     #[ignore = "platform smoke test: reads the live /proc"]
+    fn smoke_process_identity_survives_ticks_without_the_fast_tier() {
+        use crate::tier::{DueTiers, TierScheduler};
+        use std::time::Duration;
+
+        let mut collector = LinuxCollector::new().expect("constructs on Linux");
+        let start = Instant::now();
+        let first = SampleTick::first(start, SystemTime::now());
+        let snapshot = collector.sample(&first).expect("first sample");
+        let me = std::process::id();
+        let identity = snapshot.process_by_pid(me).expect("our process").identity;
+        let native = collector.root.read_pid(me, "stat").expect("our stat");
+        assert_eq!(
+            identity,
+            parse_pid_stat(&native).expect("valid stat").identity()
+        );
+
+        let mut scheduler = TierScheduler::new(Default::default());
+        scheduler.mark_completed(DueTiers::ALL, start);
+        scheduler.mark_completed(DueTiers::fast_only(), start + Duration::from_millis(4_010));
+        let at = start + Duration::from_secs(5);
+        let medium = scheduler.due_at(at);
+        assert!(medium.contains(Tier::Medium));
+        assert!(!medium.contains(Tier::Fast));
+        for due in [medium, DueTiers::NONE.with_sensors(), DueTiers::fast_only()] {
+            let tick = first.advance(at, SystemTime::now(), due);
+            let snapshot = collector.sample(&tick).expect("next sample");
+            assert_eq!(
+                snapshot.process_by_pid(me).expect("our process").identity,
+                identity
+            );
+        }
+    }
+
+    #[test]
+    #[ignore = "platform smoke test: reads the live /proc"]
     fn smoke_signalling_a_dead_pid_is_refused_rather_than_delivered() {
         let mut collector = LinuxCollector::new().expect("constructs on Linux");
         // PID 0 is the scheduler and is never a signallable user process.
