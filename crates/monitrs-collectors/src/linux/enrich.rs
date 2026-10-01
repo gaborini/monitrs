@@ -112,6 +112,8 @@ pub struct LinuxEnrichment {
     process_cpu: KeyedProcessCpuTrackers,
     process_read: KeyedTrackers<ProcessIdentity, CounterTracker>,
     process_write: KeyedTrackers<ProcessIdentity, CounterTracker>,
+    // Maps baseline identities to native identities until the next process refresh.
+    process_identities: HashMap<ProcessIdentity, ProcessIdentity>,
 
     // Carried between ticks for tiers that are not due (§9.1).
     cached_uptime: Option<Duration>,
@@ -178,6 +180,7 @@ impl LinuxEnrichment {
             process_cpu: KeyedProcessCpuTrackers::default(),
             process_read: KeyedTrackers::new(CounterWidth::Unknown),
             process_write: KeyedTrackers::new(CounterWidth::Unknown),
+            process_identities: HashMap::new(),
             cached_uptime: None,
             cached_boot_time_secs: None,
             cached_links: HashMap::new(),
@@ -240,8 +243,8 @@ impl LinuxEnrichment {
 
     /// Applies every source that was read to `snapshot`.
     ///
-    /// Fields whose sources were not read this tick are left exactly as the baseline
-    /// produced them (§9.1: never an all-fields refresh).
+    /// Fields whose sources were not read this tick keep the baseline values,
+    /// except process identities, which retain their native keys between fast ticks.
     pub fn apply(
         &mut self,
         snapshot: &mut SystemSnapshot,
@@ -945,6 +948,16 @@ impl LinuxEnrichment {
         snapshot: &mut SystemSnapshot,
         tick: &SampleTick,
     ) {
+        if !tick.due.contains(Tier::Fast) {
+            // CommonCollector republishes its cached sysinfo rows on every tick.
+            for process in &mut snapshot.processes {
+                if let Some(&identity) = self.process_identities.get(&process.identity) {
+                    process.identity = identity;
+                }
+            }
+            return;
+        }
+        self.process_identities.clear();
         if sources.processes.is_empty() {
             return;
         }
@@ -1062,6 +1075,7 @@ impl LinuxEnrichment {
             // start time cannot distinguish a PID reused inside one second, and every
             // downstream consumer — history attribution, pinning, the signal path —
             // keys on this value (§9.2, §26).
+            self.process_identities.insert(process.identity, identity);
             process.identity = identity;
             process.parent_pid = Some(stat.ppid);
             process.state = stat.state;
@@ -1987,6 +2001,101 @@ mod tests {
             enrichment.diagnostics().is_empty(),
             "an absent kernel feature is not a collector issue"
         );
+    }
+
+    #[test]
+    fn process_identities_survive_ticks_without_the_fast_tier() {
+        let (mut enrichment, previous) = two_ticks();
+        let start = previous.captured_at;
+        let mut scheduler = crate::tier::TierScheduler::new(Default::default());
+        scheduler.mark_completed(DueTiers::ALL, start);
+        scheduler.mark_completed(DueTiers::fast_only(), start + Duration::from_millis(4_010));
+        let medium = scheduler.due_at(start + Duration::from_secs(5));
+        assert!(medium.contains(Tier::Medium));
+        assert!(!medium.contains(Tier::Fast));
+
+        for due in [medium, DueTiers::NONE.with_sensors(), DueTiers::NONE] {
+            let at = start + Duration::from_secs(5);
+            let tick = SampleTick::first(start, SystemTime::UNIX_EPOCH).advance(
+                at,
+                SystemTime::UNIX_EPOCH,
+                due,
+            );
+            // The common collector republishes its sysinfo rows on each sample.
+            let mut snapshot = baseline(at);
+            enrichment.apply(&mut snapshot, &LinuxSources::default(), &tick);
+            for process in &snapshot.processes {
+                assert_eq!(
+                    process.identity,
+                    previous
+                        .process_by_pid(process.identity.pid)
+                        .unwrap()
+                        .identity
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn cached_native_identity_requires_the_same_baseline_identity() {
+        let (mut enrichment, previous) = two_ticks();
+        let at = previous.captured_at + Duration::from_millis(100);
+        let tick = SampleTick::first(previous.captured_at, SystemTime::UNIX_EPOCH).advance(
+            at,
+            SystemTime::UNIX_EPOCH,
+            DueTiers::NONE.with_sensors(),
+        );
+        let mut snapshot = baseline(at);
+        snapshot.processes[0].identity.start_key += 1;
+        let identity = snapshot.processes[0].identity;
+        enrichment.apply(&mut snapshot, &LinuxSources::default(), &tick);
+        assert_eq!(snapshot.processes[0].identity, identity);
+    }
+
+    #[test]
+    fn the_next_fast_tick_replaces_cached_identities_and_detects_pid_reuse() {
+        let (mut enrichment, previous) = two_ticks();
+        let start = previous.captured_at;
+        let first = SampleTick::first(start, SystemTime::UNIX_EPOCH);
+        let at = start + Duration::from_secs(1);
+        let tick = first.advance(at, SystemTime::UNIX_EPOCH, DueTiers::fast_only());
+        let mut reused = sources(true);
+        reused.processes.truncate(1);
+        reused.processes[0].stat = ok(fx::PID_STAT_REUSED_SAME_SECOND);
+        let mut snapshot = baseline(at);
+        snapshot.processes.truncate(1);
+        enrichment.apply(&mut snapshot, &reused, &tick);
+        let process = snapshot.process_by_pid(4_242).expect("reused PID");
+        assert_eq!(
+            process.identity,
+            parse_pid_stat(fx::PID_STAT_REUSED_SAME_SECOND)
+                .unwrap()
+                .identity()
+        );
+        assert_ne!(process.identity, previous.processes[0].identity);
+        assert!(process.cpu.is_warming_up());
+
+        let at = at + Duration::from_millis(100);
+        let tick = tick.advance(at, SystemTime::UNIX_EPOCH, DueTiers::NONE.with_sensors());
+        let mut carried = baseline(at);
+        enrichment.apply(&mut carried, &LinuxSources::default(), &tick);
+        assert_eq!(
+            carried.process_by_pid(4_242).unwrap().identity,
+            process.identity
+        );
+        assert_eq!(enrichment.process_identities.len(), 1);
+
+        // An empty fast-tier result must replace the cache too.
+        let at = at + Duration::from_secs(1);
+        let tick = tick.advance(at, SystemTime::UNIX_EPOCH, DueTiers::fast_only());
+        let mut empty = baseline(at);
+        empty.processes.clear();
+        enrichment.apply(&mut empty, &LinuxSources::default(), &tick);
+        let tick = tick.advance(at, SystemTime::UNIX_EPOCH, DueTiers::NONE.with_sensors());
+        let mut carried = baseline(at);
+        enrichment.apply(&mut carried, &LinuxSources::default(), &tick);
+        assert!(enrichment.process_identities.is_empty());
+        assert_eq!(carried.processes, baseline(at).processes);
     }
 
     #[test]

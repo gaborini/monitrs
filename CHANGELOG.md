@@ -10,7 +10,11 @@ work yet, regardless of what the source contains.
 
 ## [Unreleased]
 
-Nothing yet.
+### Fixed
+
+* On Linux, process identities stay stable during medium-only and sensor-only
+  updates, so selection no longer jumps to another process and the
+  descendants-only view enabled with `F` stays active.
 
 ## [1.0.1] - 2026-08-02
 
