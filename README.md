@@ -252,6 +252,7 @@ Full, always-current help is generated from the live keymap: press `?`.
 | `{` `}` | Leap back / forward through history |
 | `L` | Return to live |
 | `/` | Filter |
+| `a` | Clear the filter (`:all`) |
 | `n` `N` | Next / previous match |
 | `s` `S` | Sort selector / reverse sort |
 | `f` | Toggle flat and tree view |
@@ -266,7 +267,12 @@ Full, always-current help is generated from the live keymap: press `?`.
 | `r` | Force refresh |
 | `Esc` | Close overlay or cancel |
 
-The palette is not only a second way to press a key. Thirteen commands live there, and
+While editing a filter, `Up` / `Down` recall older / newer searches. Moving past the
+newest entry restores the input and cursor from before browsing. The latest 100
+nonempty searches are kept for the current session; repeating a search moves it to
+the front. `Enter` applies the recalled search, and `Esc` cancels the edit.
+
+The palette is not only a second way to press a key. Fourteen commands live there, and
 three of them have no key at all: `follow <pid>` and `unfollow` for the subtree scope, and
 `export snapshot <path>`. The others set the view, sort, filter, sample interval, history
 span, theme, glyphs and colour depth, show the configuration path, and reload it. Type `:`

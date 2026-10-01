@@ -10,7 +10,16 @@ work yet, regardless of what the source contains.
 
 ## [Unreleased]
 
-Nothing yet.
+### Added
+
+* `a` and `:all` clear the process filter while preserving pins and the
+  descendants-only view enabled with `F`. Search for a parent, pin it with `p`,
+  narrow the view with `F`, then press `a`
+  to show the parent and all its descendants.
+* `Up` and `Down` recall the latest 100 nonempty filter searches during the current
+  session. Repeated searches move to the front. Browsing skips the newest entry
+  when it matches the current input, and returning past the newest search restores
+  the draft and cursor.
 
 ## [1.0.1] - 2026-08-02
 

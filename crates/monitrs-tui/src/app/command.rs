@@ -39,7 +39,7 @@ pub enum Command {
     ChangeView(ViewId),
     /// `sort cpu|memory|read|write|pid|name|age|…`.
     Sort(SortField),
-    /// `filter <text>`. An empty argument clears the filter.
+    /// `filter <text>`. An empty argument clears the filter, as does `all`.
     Filter(String),
     /// `interval <duration>`.
     Interval(Duration),
@@ -145,6 +145,11 @@ pub const HINTS: &[CommandHint] = &[
         usage: "filter <text>",
         completion: "filter ",
         summary: "match name, command, PID or user; empty clears",
+    },
+    CommandHint {
+        usage: "all",
+        completion: "all",
+        summary: "clear the process filter",
     },
     CommandHint {
         usage: "interval <duration>",
@@ -253,6 +258,17 @@ pub fn parse(line: &str) -> Result<Command, CommandError> {
         // The rest of the line verbatim: a filter may contain spaces, and an empty
         // argument is meaningful — `filter` with nothing after it clears it.
         "filter" => Ok(Command::Filter(rest.trim().to_owned())),
+        "all" => {
+            if rest.is_empty() {
+                Ok(Command::Filter(String::new()))
+            } else {
+                Err(CommandError::BadArgument {
+                    command: "all",
+                    value: rest.to_owned(),
+                    expected: "no arguments",
+                })
+            }
+        }
         "interval" => {
             let argument = require(rest, "interval", "a duration such as 1s")?;
             parse_duration(argument)
@@ -405,9 +421,9 @@ const DURATION_GRAMMAR: &str = "a whole number followed by ms, s, m or h";
 /// palette that refuses `vie` without mentioning `view` is needlessly unhelpful.
 #[must_use]
 pub(super) fn closest_command(word: &str) -> Option<&'static str> {
-    const WORDS: [&str; 11] = [
+    const WORDS: [&str; 12] = [
         "view", "sort", "filter", "interval", "history", "theme", "glyphs", "color", "export",
-        "config", "reload",
+        "config", "reload", "all",
     ];
     let lower = word.to_ascii_lowercase();
     WORDS
@@ -591,6 +607,16 @@ mod tests {
     }
 
     #[test]
+    fn all_clears_the_filter_and_accepts_no_arguments() {
+        assert_eq!(parse("all"), Ok(Command::Filter(String::new())));
+        assert_eq!(parse("  ALL  "), Ok(Command::Filter(String::new())));
+        assert!(matches!(
+            parse("all rustc"),
+            Err(CommandError::BadArgument { command: "all", .. })
+        ));
+    }
+
+    #[test]
     fn an_export_path_may_contain_spaces() {
         assert_eq!(
             parse("export snapshot /tmp/my snapshot.json"),
@@ -640,12 +666,12 @@ mod tests {
 
     #[test]
     fn the_hint_list_covers_every_command_and_completes_to_something_parseable() {
-        // §6.3's eleven, plus `follow` and `unfollow`, which have no section of their
-        // own there: the specification asks for a way to watch a process tree without
-        // saying how it is reached, and the palette is where a feature goes when it does
-        // not warrant its own key. The count is asserted so a new command cannot be
-        // added without a hint, which is the discoverability surface §6.3 exists for.
-        assert_eq!(HINTS.len(), 13, "§6.3's eleven, plus follow and unfollow");
+        // Keep every command discoverable through the palette's hints.
+        assert_eq!(
+            HINTS.len(),
+            14,
+            "§6.3's eleven, plus all, follow and unfollow"
+        );
         for hint in HINTS {
             assert!(hint.usage.is_ascii(), "§5.1: hints must be ASCII-safe");
             assert!(!hint.summary.is_empty());

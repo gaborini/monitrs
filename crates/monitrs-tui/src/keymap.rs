@@ -716,6 +716,13 @@ impl Keymap {
         table.add(
             BindingSection::Navigation,
             TABLE_MODE,
+            Chord::key(KeyPress::char('a')),
+            Action::SetFilter(String::new()),
+            "Clear the filter",
+        );
+        table.add(
+            BindingSection::Navigation,
+            TABLE_MODE,
             Chord::key(KeyPress::char('n')),
             Action::NextMatch,
             "Next filter match",
@@ -995,6 +1002,20 @@ impl Keymap {
             Chord::key(KeyPress::plain(Key::Up)),
             Action::SelectPrevious,
             "Previous suggestion",
+        );
+        table.add(
+            BindingSection::TextEntry,
+            ModeSet::EMPTY.with(InputMode::FilterEdit),
+            Chord::key(KeyPress::plain(Key::Up)),
+            Action::PreviousFilterHistory,
+            "Previous filter in history",
+        );
+        table.add(
+            BindingSection::TextEntry,
+            ModeSet::EMPTY.with(InputMode::FilterEdit),
+            Chord::key(KeyPress::plain(Key::Down)),
+            Action::NextFilterHistory,
+            "Next filter in history or restore draft",
         );
 
         Self {
@@ -1527,6 +1548,7 @@ mod tests {
             (KeyPress::plain(Key::End), Action::SelectLast),
             (KeyPress::plain(Key::Enter), Action::InspectSelected),
             (KeyPress::char('/'), Action::BeginFilterEdit),
+            (KeyPress::char('a'), Action::SetFilter(String::new())),
             (KeyPress::char('n'), Action::NextMatch),
             (KeyPress::char('N'), Action::PreviousMatch),
             (KeyPress::char('s'), Action::OpenSortSelector),
@@ -1753,6 +1775,31 @@ mod tests {
             Some(Action::SelectPageUp),
             "the same chord pages up in a list"
         );
+    }
+
+    #[test]
+    fn arrows_browse_history_only_in_the_filter_editor() {
+        for (key, filter, palette) in [
+            (
+                Key::Up,
+                Action::PreviousFilterHistory,
+                Action::SelectPrevious,
+            ),
+            (Key::Down, Action::NextFilterHistory, Action::SelectNext),
+        ] {
+            assert_eq!(
+                action_of(InputMode::FilterEdit, KeyPress::plain(key)),
+                Some(filter)
+            );
+            assert_eq!(
+                action_of(InputMode::CommandPalette, KeyPress::plain(key)),
+                Some(palette.clone())
+            );
+            assert_eq!(
+                action_of(InputMode::Normal, KeyPress::plain(key)),
+                Some(palette)
+            );
+        }
     }
 
     #[test]

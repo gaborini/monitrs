@@ -175,6 +175,7 @@ pub fn reduce(state: &mut AppState, action: Action) -> Effects {
 
         // --------------------------------------------------- filtering and sorting
         Action::BeginFilterEdit => {
+            state.filter_history.reset();
             let input = TextInput::seeded(&state.filter_text);
             state.overlays.push(Overlay::FilterEdit { input });
             redraw()
@@ -264,6 +265,16 @@ pub fn reduce(state: &mut AppState, action: Action) -> Effects {
         Action::DeleteForward => edit(state, TextInput::delete_forward),
         Action::DeleteWordBackward => edit(state, TextInput::delete_word_backward),
         Action::ClearInput => edit(state, TextInput::clear),
+        Action::PreviousFilterHistory | Action::NextFilterHistory => {
+            let Some(Overlay::FilterEdit { input }) = state.overlays.top_mut() else {
+                return Effects::new();
+            };
+            changed(if action == Action::PreviousFilterHistory {
+                state.filter_history.previous(input)
+            } else {
+                state.filter_history.next(input)
+            })
+        }
         Action::MoveCursorLeft => edit(state, TextInput::move_left),
         Action::MoveCursorRight => edit(state, TextInput::move_right),
         Action::MoveCursorToStart => edit(state, TextInput::move_to_start),
@@ -630,6 +641,7 @@ fn inspect_selected(state: &mut AppState) -> Effects {
 
 /// Replaces the filter (§6.2 `/`, §6.3 `filter <text>`).
 fn set_filter(state: &mut AppState, text: String) -> Effects {
+    state.filter_history.record(&text);
     if !state.set_filter_text(text) {
         return Effects::new();
     }
@@ -1671,6 +1683,8 @@ mod tests {
             Action::DeleteForward,
             Action::DeleteWordBackward,
             Action::ClearInput,
+            Action::PreviousFilterHistory,
+            Action::NextFilterHistory,
             Action::MoveCursorLeft,
             Action::MoveCursorRight,
             Action::MoveCursorToStart,
@@ -1771,6 +1785,46 @@ mod tests {
         assert_eq!(effects.as_slice(), &[Effect::RequestRedraw]);
         assert_eq!(state.rows().len(), 1);
         assert_eq!(state.selected(), Some(identity(1_221, 700_050)));
+    }
+
+    #[test]
+    fn clearing_by_key_or_palette_matches_submitting_an_empty_filter() {
+        let sequences = [
+            vec![
+                KeyPress::char('/'),
+                KeyPress::ctrl('u'),
+                KeyPress::plain(Key::Enter),
+            ],
+            vec![KeyPress::char('a')],
+            vec![
+                KeyPress::char(':'),
+                KeyPress::char('a'),
+                KeyPress::char('l'),
+                KeyPress::char('l'),
+                KeyPress::plain(Key::Enter),
+            ],
+        ];
+        let mut expected_selection = None;
+        for (index, keys) in sequences.into_iter().enumerate() {
+            let mut state = running();
+            let total = state.rows().len();
+            let _ = reduce(&mut state, Action::SetFilter("postgres".to_owned()));
+            assert_eq!(state.rows().len(), 1);
+
+            for key in keys {
+                let _ = apply::<()>(&mut state, Event::key(key));
+            }
+
+            assert_eq!(state.filter_text(), "");
+            assert_eq!(state.rows().len(), total);
+            if index == 0 {
+                expected_selection = state.selected();
+            }
+            assert_eq!(state.selected(), expected_selection);
+            assert_eq!(state.input_mode(), InputMode::Normal);
+            assert!(state.overlays().is_empty());
+            assert!(press(&mut state, 'a').is_empty());
+        }
     }
 
     #[test]
@@ -2063,6 +2117,40 @@ mod tests {
             vec![411, 412],
             "both scopes apply, not whichever was set last"
         );
+    }
+
+    #[test]
+    fn finding_pinning_and_following_a_parent_then_clearing_shows_its_whole_tree() {
+        let mut state = state();
+        deliver(&mut state, 1, &family());
+        let _ = press(&mut state, 'f');
+        let _ = press(&mut state, '/');
+        for character in "make".chars() {
+            let _ = press(&mut state, character);
+        }
+        let _ = apply::<()>(&mut state, Event::key(KeyPress::plain(Key::Enter)));
+        assert_eq!(visible_pids(&state), vec![410]);
+        let parent = state.selected().expect("the matching parent is selected");
+        let _ = press(&mut state, 'p');
+        let _ = press(&mut state, 'F');
+        assert_eq!(visible_pids(&state), vec![410]);
+
+        let _ = press(&mut state, 'a');
+
+        assert_eq!(state.filter_text(), "");
+        assert_eq!(visible_pids(&state), vec![410, 411, 412, 413]);
+        assert_eq!(state.followed(), Some(parent));
+        assert_eq!(state.pins(), &[parent]);
+        assert!(state.rows().is_tree());
+        assert_eq!(state.selected(), Some(parent));
+
+        for sequence in 2..=4 {
+            let mut processes = family();
+            processes.reverse();
+            deliver(&mut state, sequence, &processes);
+            assert_eq!(state.selected(), Some(parent));
+            assert_eq!(state.pins(), &[parent]);
+        }
     }
 
     #[test]
@@ -3127,6 +3215,71 @@ mod tests {
             "a half-typed filter never hides rows"
         );
         assert!(state.overlays().is_empty());
+    }
+
+    #[test]
+    fn filter_history_recalls_confirmed_searches_without_applying_them() {
+        let mut state = running();
+        let _ = run_command(&mut state, Command::Filter("rustc".to_owned()));
+        let _ = press(&mut state, '/');
+        let _ = reduce(&mut state, Action::ClearInput);
+        for character in "postgres".chars() {
+            let _ = press(&mut state, character);
+        }
+        let _ = apply::<()>(&mut state, Event::key(KeyPress::plain(Key::Enter)));
+        let _ = press(&mut state, 'a');
+        let total = state.rows().len();
+        let _ = press(&mut state, '/');
+
+        for expected in ["postgres", "rustc"] {
+            let effects = apply::<()>(&mut state, Event::key(KeyPress::plain(Key::Up)));
+            assert_eq!(effects.as_slice(), &[Effect::RequestRedraw]);
+            assert_eq!(
+                state
+                    .top_overlay()
+                    .and_then(Overlay::text_input)
+                    .map(TextInput::text),
+                Some(expected)
+            );
+            assert_eq!(state.filter_text(), "");
+            assert_eq!(state.rows().len(), total);
+        }
+        assert!(apply::<()>(&mut state, Event::key(KeyPress::plain(Key::Up))).is_empty());
+        let _ = apply::<()>(&mut state, Event::key(KeyPress::plain(Key::Enter)));
+        assert_eq!(state.filter_text(), "rustc");
+
+        let _ = press(&mut state, '/');
+        for expected in ["postgres", "postgres"] {
+            let _ = apply::<()>(&mut state, Event::key(KeyPress::plain(Key::Up)));
+            assert_eq!(
+                state
+                    .top_overlay()
+                    .and_then(Overlay::text_input)
+                    .map(TextInput::text),
+                Some(expected)
+            );
+        }
+        let _ = reduce(&mut state, Action::ClearInput);
+        let _ = press(&mut state, 'z');
+        let _ = apply::<()>(&mut state, Event::key(KeyPress::plain(Key::Escape)));
+        assert_eq!(state.filter_text(), "rustc");
+        let _ = press(&mut state, '/');
+        let _ = apply::<()>(&mut state, Event::key(KeyPress::plain(Key::Up)));
+        assert_eq!(
+            state
+                .top_overlay()
+                .and_then(Overlay::text_input)
+                .map(TextInput::text),
+            Some("postgres")
+        );
+        let _ = apply::<()>(&mut state, Event::key(KeyPress::plain(Key::Down)));
+        assert_eq!(
+            state
+                .top_overlay()
+                .and_then(Overlay::text_input)
+                .map(TextInput::text),
+            Some("rustc")
+        );
     }
 
     #[test]

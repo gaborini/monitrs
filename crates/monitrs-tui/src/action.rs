@@ -553,6 +553,10 @@ pub enum Action {
     DeleteWordBackward,
     /// Clear the whole input.
     ClearInput,
+    /// Recall an older filter from the search history.
+    PreviousFilterHistory,
+    /// Recall a newer filter, or restore the input before browsing history.
+    NextFilterHistory,
     /// Move the cursor one character left.
     MoveCursorLeft,
     /// Move the cursor one character right.
@@ -609,6 +613,8 @@ impl Action {
                 | Self::DeleteForward
                 | Self::DeleteWordBackward
                 | Self::ClearInput
+                | Self::PreviousFilterHistory
+                | Self::NextFilterHistory
                 | Self::MoveCursorLeft
                 | Self::MoveCursorRight
                 | Self::MoveCursorToStart

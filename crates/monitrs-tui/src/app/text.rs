@@ -19,6 +19,76 @@ use monitrs_core::units::display_width;
 /// that needs more than this is a mistake rather than a use case.
 pub const MAX_INPUT_CHARS: usize = 256;
 
+const MAX_HISTORY_ENTRIES: usize = 100;
+
+/// Session-local filter history, ordered from newest to oldest.
+#[derive(Debug, Default)]
+pub(super) struct FilterHistory {
+    entries: Vec<String>,
+    position: Option<usize>,
+    draft: Option<TextInput>,
+}
+
+impl FilterHistory {
+    pub(super) fn record(&mut self, text: &str) {
+        let text = TextInput::seeded(text).text;
+        if text.is_empty() {
+            return;
+        }
+        self.entries.retain(|entry| *entry != text);
+        self.entries.insert(0, text);
+        self.entries.truncate(MAX_HISTORY_ENTRIES);
+    }
+
+    pub(super) fn reset(&mut self) {
+        self.position = None;
+        self.draft = None;
+    }
+
+    pub(super) fn previous(&mut self, input: &mut TextInput) -> bool {
+        let position = self.position.map_or_else(
+            || usize::from(self.entries.first() == Some(&input.text)),
+            |position| position + 1,
+        );
+        let Some(text) = self.entries.get(position) else {
+            return false;
+        };
+        if self.position.is_none() {
+            self.draft = Some(input.clone());
+        }
+        self.position = Some(position);
+        input.set(text)
+    }
+
+    pub(super) fn next(&mut self, input: &mut TextInput) -> bool {
+        match self.position {
+            None => false,
+            Some(position)
+                if position == 0
+                    || (position == 1
+                        && self
+                            .draft
+                            .as_ref()
+                            .is_some_and(|draft| self.entries.first() == Some(&draft.text))) =>
+            {
+                self.position = None;
+                let Some(draft) = self.draft.take() else {
+                    return false;
+                };
+                let changed = *input != draft;
+                *input = draft;
+                changed
+            }
+            Some(position) => {
+                self.position = Some(position - 1);
+                self.entries
+                    .get(position - 1)
+                    .is_some_and(|text| input.set(text))
+            }
+        }
+    }
+}
+
 /// A single-line editable buffer with a cursor.
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
 pub struct TextInput {
@@ -217,6 +287,98 @@ impl TextInput {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn filter_history_moves_duplicates_to_the_front_and_ignores_empty_input() {
+        let mut history = FilterHistory::default();
+        for text in ["rustc", "postgres", "node", "rustc", ""] {
+            history.record(text);
+        }
+        assert_eq!(history.entries, ["rustc", "node", "postgres"]);
+    }
+
+    #[test]
+    fn filter_history_restores_the_draft_and_cursor_at_the_newest_end() {
+        let mut history = FilterHistory::default();
+        history.record("old");
+        history.record("日本語");
+        let mut input = TextInput::seeded("編集中");
+        assert!(input.move_left());
+        let draft = input.clone();
+
+        assert!(!history.next(&mut input));
+        assert!(history.previous(&mut input));
+        assert_eq!(input.text(), "日本語");
+        assert_eq!(input.cursor(), "日本語".len());
+        assert!(history.previous(&mut input));
+        assert_eq!(input.text(), "old");
+        assert!(!history.previous(&mut input));
+        assert!(input.insert('!'));
+        assert!(history.next(&mut input));
+        assert_eq!(input.text(), "日本語");
+        assert!(history.next(&mut input));
+        assert_eq!(input, draft);
+        assert!(!history.next(&mut input));
+        assert_eq!(history.entries, ["日本語", "old"]);
+    }
+
+    #[test]
+    fn filter_history_is_bounded_and_reset_starts_a_new_browse() {
+        let mut history = FilterHistory::default();
+        let mut input = TextInput::new();
+        assert!(!history.previous(&mut input));
+        assert!(!history.next(&mut input));
+        for number in 0..=MAX_HISTORY_ENTRIES {
+            history.record(&number.to_string());
+        }
+        assert_eq!(history.entries.len(), MAX_HISTORY_ENTRIES);
+        assert_eq!(history.entries.last().map(String::as_str), Some("1"));
+        assert!(history.previous(&mut input));
+        assert!(history.previous(&mut input));
+        history.reset();
+        input.set("new draft");
+        assert!(!history.next(&mut input));
+        assert!(history.previous(&mut input));
+        assert_eq!(input.text(), MAX_HISTORY_ENTRIES.to_string());
+        assert!(history.next(&mut input));
+        assert_eq!(input.text(), "new draft");
+    }
+
+    #[test]
+    fn filter_history_skips_the_current_search_and_restores_its_cursor() {
+        let mut history = FilterHistory::default();
+        history.record("older");
+        history.record("current");
+        let mut input = TextInput::seeded("current");
+        assert!(input.move_left());
+        let draft = input.clone();
+
+        assert!(history.previous(&mut input));
+        assert_eq!(input.text(), "older");
+        assert!(history.next(&mut input));
+        assert_eq!(input, draft);
+        assert!(!history.next(&mut input));
+        assert!(history.previous(&mut input));
+        assert_eq!(input.text(), "older");
+    }
+
+    #[test]
+    fn filter_history_with_only_the_current_search_leaves_the_input_untouched() {
+        let mut history = FilterHistory::default();
+        history.record("current");
+        let mut input = TextInput::seeded("current");
+        assert!(input.move_left());
+        let draft = input.clone();
+        assert!(!history.previous(&mut input));
+        assert!(!history.next(&mut input));
+        assert_eq!(input, draft);
+
+        input.clear();
+        assert!(history.previous(&mut input));
+        assert_eq!(input.text(), "current");
+        assert!(history.next(&mut input));
+        assert!(input.is_empty());
+    }
 
     #[test]
     fn typing_and_deleting_track_the_cursor() {

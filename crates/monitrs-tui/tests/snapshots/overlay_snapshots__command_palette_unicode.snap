@@ -1,16 +1,17 @@
 ---
 source: crates/monitrs-tui/tests/overlay_snapshots.rs
+assertion_line: 731
 expression: text_of(&buffer)
 ---
 |                                                                                                        |
 |                                                                                                        |
-|                                                                                                        |
-|┌ COMMAND ───────────────────────────────────────────────────────────────────────────── 13 commands ───┐|
+|┌ COMMAND ───────────────────────────────────────────────────────────────────────────── 14 commands ───┐|
 |│:                                                                                                     │|
 |│──────────────────────────────────────────────────────────────────────────────────────────────────────│|
 |│  view <overview|processes|cpu|...>                 switch to a main view                             │|
 |│  sort <cpu|memory|read|write|pid|name|age>         order the process table by a column               │|
 |│▸ filter <text>                                     match name, command, PID or user; empty clears    │|
+|│  all                                               clear the process filter                          │|
 |│  interval <duration>                               set the sample interval, such as 500ms or 2s      │|
 |│  history <duration>                                set the retained history span, such as 5m         │|
 |│  theme <default-dark|default-light|high-contrast>  select a built-in theme                           │|
