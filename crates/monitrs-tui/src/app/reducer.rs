@@ -2120,6 +2120,40 @@ mod tests {
     }
 
     #[test]
+    fn finding_pinning_and_following_a_parent_then_clearing_shows_its_whole_tree() {
+        let mut state = state();
+        deliver(&mut state, 1, &family());
+        let _ = press(&mut state, 'f');
+        let _ = press(&mut state, '/');
+        for character in "make".chars() {
+            let _ = press(&mut state, character);
+        }
+        let _ = apply::<()>(&mut state, Event::key(KeyPress::plain(Key::Enter)));
+        assert_eq!(visible_pids(&state), vec![410]);
+        let parent = state.selected().expect("the matching parent is selected");
+        let _ = press(&mut state, 'p');
+        let _ = press(&mut state, 'F');
+        assert_eq!(visible_pids(&state), vec![410]);
+
+        let _ = press(&mut state, 'a');
+
+        assert_eq!(state.filter_text(), "");
+        assert_eq!(visible_pids(&state), vec![410, 411, 412, 413]);
+        assert_eq!(state.followed(), Some(parent));
+        assert_eq!(state.pins(), &[parent]);
+        assert!(state.rows().is_tree());
+        assert_eq!(state.selected(), Some(parent));
+
+        for sequence in 2..=4 {
+            let mut processes = family();
+            processes.reverse();
+            deliver(&mut state, sequence, &processes);
+            assert_eq!(state.selected(), Some(parent));
+            assert_eq!(state.pins(), &[parent]);
+        }
+    }
+
+    #[test]
     fn pinning_with_nothing_selected_does_nothing() {
         let mut state = state();
         assert!(reduce(&mut state, Action::PinSelected).is_empty());
